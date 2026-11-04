@@ -1,0 +1,22 @@
+[package]
+name = "openpbr_tests"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+simple_engine = { workspace = true, features = ["gpu_test", "openpbr_gpu"] }
+serde_json.workspace = true
+blake3.workspace = true
+
+[[bench]]
+name = "flow"
+harness = false
+
+[build-dependencies]
+simple_engine = { workspace = true, features = ["shader_build", "shader_library"] }
+
+[lints]
+workspace = true

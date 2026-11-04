@@ -1,0 +1,596 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 linlin
+# SPDX-License-Identifier: GPL-3.0-only
+"""CPU 行为与字节布局夹具；不提交私有capture/descriptor，现场结果另存temp。"""
+
+import json
+import io
+import os
+from contextlib import redirect_stdout
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+try:
+    import lz4.block
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+except ModuleNotFoundError as error:
+    raise unittest.SkipTest("Optional Nsight reader dependencies missing; install scripts/nsight-requirements.txt: " + str(error))
+
+from nsight_diagnostics import FormatError
+from nsight_diagnostics.analysis import aggregate, gpu_windows, metric_unit
+from nsight_diagnostics.format import PROFILE, brief, descriptor_at, schema_class, sha256, unpack_chunks, varint
+from nsight_diagnostics.shaders import (decode_blob, elf_functions, normalize_elf, pc_samples,
+                                        range_index, run_tool, shader_objects, source_identity, validate_spirv)
+
+
+def container(chunks):
+    result = bytearray(struct.pack("<4sI", b"WRPV", 10))
+    for identifier, flags, blocks in chunks:
+        encoded = [lz4.block.compress(block, store_size=False) for block in blocks]
+        result += struct.pack("<3Q", (identifier << 32) | (flags << 16) | 0x1234, len(blocks), sum(map(len, blocks)))
+        for plain, compressed in zip(blocks, encoded):
+            result += struct.pack("<3Q", 0x14321, len(compressed), len(plain)) + compressed
+    return bytes(result)
+
+
+def elf_fixture(value=0x200000000, address=0, symbol_size=16):
+    # 标准 ELF64 与 text/shstrtab/strtab/symtab，包含一个函数。
+    names = b"\0.text.kernel\0.shstrtab\0.strtab\0.symtab\0"
+    strings = b"\0kernel\0"
+    text = bytes(range(16))
+    symbols = bytes(24) + struct.pack("<IBBHQQ", 1, 0x12, 0, 1, value, symbol_size)
+    result = bytearray(64)
+    result[:7] = b"\x7fELF\x02\x01\x01"
+    pieces = [(text, 1, 0, address, 86 << 24, 0), (names, 3, 0, 0, 0, 0),
+              (strings, 3, 0, 0, 0, 0), (symbols, 2, 3, 0, 0, 24)]
+    sections = [bytes(64)]
+    for name, (data, kind, link, va, info, size) in zip((1, 14, 24, 32), pieces):
+        offset = len(result)
+        result += data
+        sections.append(struct.pack("<IIQQQQIIQQ", name, kind, 0, va, offset, len(data), link, info, 1, size))
+    shoff = len(result)
+    result += b"".join(sections)
+    struct.pack_into("<Q", result, 40, shoff)
+    struct.pack_into("<3H", result, 58, 64, 5, 2)
+    return bytes(result)
+
+
+class Message(SimpleNamespace):
+    def HasField(self, name):
+        return hasattr(self, name)
+
+
+def fixture_call(name):
+    descriptor = descriptor_pb2.FileDescriptorProto(name="fixture-call.proto", package="fixture")
+    call = descriptor.message_type.add(name="Call")
+    call.field.add(name="functionName", number=1, type=9, label=1)
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(descriptor)
+    cls = message_factory.GetMessageClass(pool.FindMessageTypeByName("fixture.Call"))
+    return cls(functionName=name)
+
+
+def rt_tool_fixture():
+    data = elf_fixture()
+    blob = Message(data=data, compression=1, obfuscation=1, uncompressedSize=len(data))
+    module = Message(rtCoreUserCubin=Message(cubin=Message(ref=Message(idx=0))))
+    session = Message(modules=[module], codeBlocks=[])
+    device = Message(ShaderProfilerReport=Message(
+        blobTable=Message(blobs=[blob]), pcCountersInfo=Message(pcSamplingSession=session)))
+    return Message(devices=[device], gpus=[Message(SamplingData=Message(PcSamplingPerSM=[]))])
+
+
+def fixture_pc_sm(fields):
+    # 独立构造已审查的 PerSM wire 字段，不含厂商 descriptor。
+    descriptor = descriptor_pb2.FileDescriptorProto(name="fixture-pc.proto", package="fixture", syntax="proto2")
+    item = descriptor.message_type.add(name="PcPerSM")
+    for name, number, kind in (("vsmid", 1, 13), ("version", 2, 4),
+                               ("timestampsStorage", 3, 12), ("pcSamplesStorage", 4, 12)):
+        item.field.add(name=name, number=number, type=kind, label=2)
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(descriptor)
+    cls = message_factory.GetMessageClass(pool.FindMessageTypeByName("fixture.PcPerSM"))
+    sm = cls(vsmid=0, pcSamplesStorage=struct.pack("<QQ", 100, 0),
+             timestampsStorage=struct.pack("<QQ", 10, 1), **fields)
+    return cls.FromString(sm.SerializePartialToString())
+
+
+def fixture_metadata_class():
+    descriptor = descriptor_pb2.FileDescriptorProto(name="fixture-metadata.proto", package="fixture", syntax="proto2")
+    descriptor.message_type.add(name="Trace").field.add(name="marker", number=1, type=13, label=2)
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(descriptor)
+    return message_factory.GetMessageClass(pool.FindMessageTypeByName("fixture.Trace"))
+
+
+def fixture_tool_result(executable, arguments, output, failed_argument=None, exit_code=1):
+    failed = failed_argument in arguments if failed_argument is not None else False
+    stdout = b"" if failed and exit_code == 0 else b"Function kernel: REG:86 STACK:0 SHARED:0 LOCAL:0\n"
+    stderr = b"fixture failure" if failed else b""
+    Path(str(output) + ".stdout.txt").write_bytes(stdout)
+    Path(str(output) + ".stderr.txt").write_bytes(stderr)
+    return {"executable": str(executable), "arguments": arguments, "exitCode": exit_code if failed else 0,
+            "stdoutBytes": len(stdout), "stderrBytes": len(stderr), "success": not failed,
+            "unavailableReason": "nonzero exit or empty stdout" if failed else None}
+
+
+class ContainerTest(unittest.TestCase):
+    def test_actual_header_layout_both_flags_multiblock(self):
+        # chunk0 包含真实 FileDescriptorProto wire message。
+        desc = descriptor_pb2.FileDescriptorProto(name="WarpViz.proto", package="fixture")
+        desc.message_type.add(name="Trace")
+        wire = desc.SerializeToString()
+        data = container([(0, 1, [wire]), (1, 0, [b"LOPDATA", b"\0" * 2048])])
+        chunks = unpack_chunks(data)
+        self.assertEqual([row["privateFlags"] for row, _ in chunks], [1, 0])
+        self.assertEqual(chunks[0][1], wire)
+        self.assertEqual(chunks[1][1], b"LOPDATA" + b"\0" * 2048)
+        self.assertEqual(chunks[1][0]["sha256"], sha256(chunks[1][1]))
+
+    def test_bad_version_flags_and_duplicate_ids(self):
+        data = container([(0, 1, [b"hello"])])
+        bad = bytearray(data)
+        struct.pack_into("<I", bad, 4, 11)
+        for value in (bytes(bad), container([(0, 2, [b"hello"])]),
+                      container([(0, 1, [b"a"]), (0, 0, [b"b"])])):
+            with self.assertRaises(FormatError):
+                unpack_chunks(value)
+
+    def test_truncation_and_corrupt_size_limits(self):
+        data = container([(0, 1, [b"hello" * 100])])
+        for stop in (0, 7, 15, 31, 40, len(data) - 1):
+            with self.assertRaises(FormatError):
+                unpack_chunks(data[:stop])
+        with self.assertRaises(FormatError):
+            unpack_chunks(data, max_chunk_bytes=100)
+        bad = bytearray(data)
+        struct.pack_into("<Q", bad, 48, 10000)
+        with self.assertRaises(FormatError):
+            unpack_chunks(bytes(bad))
+
+    def test_descriptor_scanner_and_varint_bounds(self):
+        descriptor = descriptor_pb2.FileDescriptorProto(name="WarpViz.proto", package="fixture")
+        descriptor.message_type.add(name="Trace")
+        wire = descriptor.SerializeToString()
+        found, encoded = descriptor_at(wire + b"\0not-protobuf", 0)
+        self.assertEqual(found.name, "WarpViz.proto")
+        self.assertEqual(encoded, wire)
+        for wire in (b"\x80", b"\xff" * 10):
+            with self.assertRaises(FormatError):
+                varint(wire, 0)
+
+    def test_unreviewed_descriptor_cache_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in PROFILE:
+                descriptor = descriptor_pb2.FileDescriptorProto(name=name)
+                descriptor.message_type.add(name="FutureUnknownMessage")
+                (root / (name.replace("/", "__") + ".pb")).write_bytes(descriptor.SerializeToString())
+            with self.assertRaisesRegex(FormatError, "unreviewed descriptor"):
+                schema_class(None, root, root)
+
+    def test_cli_failure_writes_integrity_and_rejects_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, out = root / "bad.ngfx-gputrace", root / "analysis"
+            source.write_bytes(b"not-a-trace")
+            command = [sys.executable, str(Path(__file__).with_name("nsight-trace.py")), str(source), "--out", str(out)]
+            proc = subprocess.run(command, capture_output=True)
+            self.assertEqual(proc.returncode, 2)
+            summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "failed")
+            self.assertTrue(summary["provenance"]["inputUnchanged"])
+            before = (out / "summary.json").read_bytes()
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            self.assertEqual((out / "summary.json").read_bytes(), before)
+
+    def test_known_schema_corrupt_metadata_is_fatal_and_keeps_chunks(self):
+        from nsight_diagnostics.cli import main
+        for metadata in (None, b"\x08", b""):
+            with self.subTest(metadata=metadata), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                capture, out = root / "fixture.ngfx-gputrace", root / "out"
+                chunk_id, data = (1, b"counter") if metadata is None else (0, metadata)
+                capture.write_bytes(container([(chunk_id, 1, [data])]))
+                with mock.patch("nsight_diagnostics.cli.schema_class", return_value=(fixture_metadata_class(), {})), \
+                        redirect_stdout(io.StringIO()):
+                    code = main([str(capture), "--out", str(out)])
+                summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(code, 2)
+                self.assertEqual(summary["status"], "failed")
+                self.assertTrue(summary["provenance"]["inputUnchanged"])
+                self.assertEqual((out / f"chunks/chunk-{chunk_id}.bin").read_bytes(), data)
+
+    def test_unreviewed_schema_or_wire_fields_remain_partial(self):
+        from nsight_diagnostics.cli import main
+        for schema_unknown in (True, False):
+            with self.subTest(schema_unknown=schema_unknown), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                capture, out = root / "fixture.ngfx-gputrace", root / "out"
+                capture.write_bytes(container([(0, 1, [b"\x08\x01\x10\x01"])]))
+                schema = mock.Mock(side_effect=FormatError("unreviewed descriptor")) if schema_unknown else \
+                    mock.Mock(return_value=(fixture_metadata_class(), {}))
+                with mock.patch("nsight_diagnostics.cli.schema_class", schema), redirect_stdout(io.StringIO()):
+                    code = main([str(capture), "--out", str(out)])
+                summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(code, 3)
+                self.assertEqual(summary["status"], "partial")
+                self.assertTrue(summary["errors"])
+                self.assertFalse((out / "metadata.json").exists())
+
+    def test_cli_help_is_utf8_even_with_a_different_io_encoding(self):
+        command = [sys.executable, str(Path(__file__).with_name("nsight-trace.py")), "--help"]
+        process = subprocess.run(command, capture_output=True, env={**os.environ, "PYTHONIOENCODING": "ascii"})
+        self.assertEqual(process.returncode, 0)
+        self.assertIn("仅用 CPU", process.stdout.decode("utf-8"))
+        self.assertEqual(process.stderr, b"")
+
+
+class AggregateTest(unittest.TestCase):
+    def test_weighted_mean_prorated_sum_and_missing(self):
+        rows = [{"start": 0, "end": 10, "load.pct": 10, "bytes.sum": 100},
+                {"start": 10, "end": 30, "load.pct": 40, "bytes.sum": 400}]
+        result = aggregate(rows, 5, 20, ["load.pct", "bytes.sum", "missing.sum"])
+        self.assertEqual(result["coverage"], 1)
+        self.assertEqual(result["metrics"]["load.pct"]["durationWeightedMean"], 30)
+        self.assertEqual(result["metrics"]["bytes.sum"]["overlapProratedSum"], 250)
+        self.assertIsNone(result["metrics"]["missing.sum"]["durationWeightedMean"])
+        self.assertIsNone(result["metrics"]["missing.sum"]["overlapProratedSum"])
+
+    def test_gap_nan_and_overlap_fail(self):
+        result = aggregate([{"start": 0, "end": 5, "x.pct": float("nan")},
+                            {"start": 10, "end": 20, "x.pct": 0}], 0, 20, ["x.pct"])
+        self.assertEqual(result["coverage"], .75)
+        self.assertEqual(result["metrics"]["x.pct"]["validDurationNs"], 10)
+        self.assertEqual(result["metrics"]["x.pct"]["durationWeightedMean"], 0)
+        with self.assertRaises(FormatError):
+            aggregate([{"start": 0, "end": 10}, {"start": 5, "end": 15}], 0, 20, [])
+
+    def test_ratio_uses_paired_samples_not_equal_disjoint_duration(self):
+        warp, thread = "smsp__inst_executed.sum", "smsp__thread_inst_executed.sum"
+        rows = [{"start": 0, "end": 10, warp: 100, thread: None},
+                {"start": 10, "end": 20, warp: None, thread: 3200}]
+        result = aggregate(rows, 0, 20, [warp, thread])
+        self.assertIsNone(result["threadInstOver32WarpInst"])
+        self.assertEqual(result["threadWarpPairedCoverage"]["validDurationNs"], 0)
+        rows.append({"start": 20, "end": 30, warp: 10, thread: 160})
+        result = aggregate(rows, 0, 30, [warp, thread])
+        self.assertEqual(result["threadInstOver32WarpInst"], .5)
+        self.assertEqual(result["threadWarpPairedCoverage"]["validDurationNs"], 10)
+
+    def test_units_do_not_guess_unknown(self):
+        self.assertEqual(metric_unit("gpu__time_duration.sum"), "nanoseconds")
+        self.assertEqual(metric_unit("rtcore__cycles_executed.sum"), "cycles")
+        self.assertEqual(metric_unit("sm__foo.avg.pct_of_peak_sustained_elapsed"), "percent")
+        self.assertIn("unknown", metric_unit("new.private.metric"))
+
+    def test_timestamp_call_index_anomaly_does_not_repair_raw_capture(self):
+        # NextCallIndex 指向下一调用，len 可作结束时间；越界索引不能生成虚假耗时。
+        stream = Message(Calls=[fixture_call("vkCmdDispatch")], Timestamps=[
+            Message(NextCallIndex=240, Values=[Message(PtimerValue=1)]),
+            Message(NextCallIndex=0, Values=[Message(PtimerValue=100)]),
+            Message(NextCallIndex=1, Values=[Message(PtimerValue=200)])])
+        trace = Message(devices=[Message(swapchains=[Message(Frames=[Message(Start=80, End=220)])],
+                                        CommandQueues=[Message(CommandStreams=[stream])])])
+        result = gpu_windows(trace)
+        self.assertEqual(result["dispatches"][0]["durationNs"], 100)
+        self.assertEqual(result["streams"][0]["outOfRangeTimestampCallIndices"], [240])
+
+
+class ShaderTest(unittest.TestCase):
+    def test_requested_source_directory_must_exist_and_contain_spirv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for expected in (root / "missing", root):
+                with self.subTest(expected=expected), self.assertRaisesRegex(FormatError, "requested SPIR-V directory"):
+                    shader_objects(rt_tool_fixture(), {"frames": [], "dispatches": []}, root, expected_dir=expected)
+
+    def test_requested_missing_tool_propagates_partial_and_preserves_objects(self):
+        for missing in ("nvdisasm", "cuobjdump"):
+            with self.subTest(tool=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                out = root / "out"
+                out.mkdir()
+                for name in ("nvdisasm", "cuobjdump"):
+                    if name != missing:
+                        (root / (name + ".exe")).write_bytes(b"not executed")
+                with mock.patch("nsight_diagnostics.shaders.brief", return_value={}), \
+                        mock.patch("nsight_diagnostics.shaders.run_tool", side_effect=fixture_tool_result):
+                    result = shader_objects(rt_tool_fixture(), {"frames": [], "dispatches": []}, out, cuda_bin=root)
+                self.assertEqual(result["status"], "partial")
+                self.assertTrue(result["requestedToolFailures"])
+                self.assertEqual(result["unavailableObjects"], [])
+                self.assertEqual((out / result["objects"][0]["path"]).read_bytes(), elf_fixture())
+                self.assertTrue(any(missing in failure["executable"] for failure in result["requestedToolFailures"]))
+
+    def test_requested_tool_output_and_process_failures_propagate_partial(self):
+        for argument, exit_code in (("-gi", 1), ("-gi", 0), ("--version", 1), ("--version", 0),
+                                    ("--dump-resource-usage", 1), ("--dump-resource-usage", 0)):
+            with self.subTest(argument=argument, exit_code=exit_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                out = root / "out"
+                out.mkdir()
+                for name in ("nvdisasm", "cuobjdump"):
+                    (root / (name + ".exe")).write_bytes(b"not executed")
+                def run(executable, arguments, output):
+                    return fixture_tool_result(executable, arguments, output, argument, exit_code)
+                with mock.patch("nsight_diagnostics.shaders.brief", return_value={}), \
+                        mock.patch("nsight_diagnostics.shaders.run_tool", side_effect=run):
+                    result = shader_objects(rt_tool_fixture(), {"frames": [], "dispatches": []}, out, cuda_bin=root)
+                self.assertEqual(result["status"], "partial")
+                self.assertTrue(result["requestedToolFailures"])
+                self.assertEqual(result["unavailableObjects"], [])
+                self.assertEqual(len(result["objects"]), 1)
+                if argument == "--dump-resource-usage":
+                    self.assertNotIn("cudaResourceMetadata", result["functions"][0])
+
+    def test_tools_optional_and_successful_requests_stay_decoded(self):
+        for requested in (False, True):
+            with self.subTest(requested=requested), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                out = root / "out"
+                out.mkdir()
+                for name in ("nvdisasm", "cuobjdump"):
+                    (root / (name + ".exe")).write_bytes(b"not executed")
+                with mock.patch("nsight_diagnostics.shaders.brief", return_value={}), \
+                        mock.patch("nsight_diagnostics.shaders.run_tool", side_effect=fixture_tool_result) as tool:
+                    result = shader_objects(rt_tool_fixture(), {"frames": [], "dispatches": []}, out,
+                                            cuda_bin=root if requested else None)
+                self.assertEqual(result["status"], "decoded")
+                self.assertEqual(result["requestedToolFailures"], [])
+                if requested:
+                    self.assertEqual(tool.call_count, 4)
+                    self.assertEqual(result["functions"][0]["cudaResourceMetadata"]["REG"], 86)
+                else:
+                    tool.assert_not_called()
+
+    def test_cli_requested_tool_failure_exits_partial_optional_path_exits_zero(self):
+        from nsight_diagnostics.cli import main
+        for requested, failure, exit_code in ((False, None, 0), (True, "missing", 0),
+                                              (True, "-gi", 1), (True, "-gi", 0),
+                                              (False, "workerTimeout", 0), (False, "workerStart", 0),
+                                              (False, "workerExit", 1)):
+            with self.subTest(requested=requested, failure=failure, exit_code=exit_code), \
+                    tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                capture = root / "fixture.ngfx-gputrace"
+                capture.write_bytes(b"fixture")
+                out = root / "out"
+                trace = rt_tool_fixture()
+                trace.InfoTables = []
+                trace.IsInitialized = lambda: True
+                trace.ByteSize = lambda: 0
+                cls = mock.Mock()
+                cls.FromString.return_value = trace
+                cls.return_value.ByteSize.return_value = 0
+                def counter_worker(*args, **kwargs):
+                    if failure == "workerTimeout":
+                        raise subprocess.TimeoutExpired("fixture-worker", 300, output=b"partial output", stderr=b"timeout fixture")
+                    if failure == "workerStart":
+                        raise OSError("fixture worker could not start")
+                    (out / "counters.json").write_text('{"status":"decoded"}', encoding="utf-8")
+                    return Message(returncode=exit_code if failure == "workerExit" else 0, stdout=b"", stderr=b"")
+                arguments = [str(capture), "--out", str(out), "--nsight-host", str(root)]
+                if requested:
+                    arguments += ["--cuda-bin", str(root)]
+                    if failure != "missing":
+                        for name in ("nvdisasm", "cuobjdump"):
+                            (root / (name + ".exe")).write_bytes(b"not executed")
+                def run(executable, arguments, output):
+                    return fixture_tool_result(executable, arguments, output, failure, exit_code)
+                with mock.patch("nsight_diagnostics.cli.schema_class", return_value=(cls, {})), \
+                        mock.patch("nsight_diagnostics.cli.unpack_chunks", return_value=[
+                            ({"id": 0}, b"fixture"), ({"id": 1}, b"fixture")]), \
+                        mock.patch("nsight_diagnostics.cli.gpu_windows", return_value={"frames": [], "dispatches": []}), \
+                        mock.patch("nsight_diagnostics.cli.subprocess.run", side_effect=counter_worker), \
+                        mock.patch("nsight_diagnostics.shaders.run_tool", side_effect=run), \
+                        mock.patch("nsight_diagnostics.shaders.brief", return_value={}), \
+                        redirect_stdout(io.StringIO()):
+                    code = main(arguments)
+                partial = requested or failure is not None
+                self.assertEqual(code, 3 if partial else 0)
+                summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(summary["status"], "partial" if partial else "decoded")
+                self.assertTrue(summary["provenance"]["inputUnchanged"])
+                if failure in ("workerTimeout", "workerStart"):
+                    counters = json.loads((out / "counters.json").read_text(encoding="utf-8"))
+                    self.assertEqual(counters["status"], "unavailable")
+                    self.assertEqual(summary["errors"], [])
+                if failure == "workerTimeout":
+                    self.assertEqual((out / "counter-worker.stdout.txt").read_bytes(), b"partial output")
+                    self.assertEqual((out / "counter-worker.stderr.txt").read_bytes(), b"timeout fixture")
+
+    def test_empty_disassembler_stdout_is_not_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_tool(Path(sys.executable), ["-c", "pass"], Path(directory) / "empty-tool")
+            self.assertEqual(result["exitCode"], 0)
+            self.assertFalse(result["success"])
+
+    def test_xor_no_mapping_unknown_encoding_and_long_blob(self):
+        blob = Message(data=b"abcdefgh", compression=1, obfuscation=2, uncompressedSize=8)
+        for mapping in (None, b"tiny"):
+            with self.assertRaises(FormatError):
+                decode_blob(blob, mapping)
+        self.assertEqual(decode_blob(blob, bytes(8)), b"abcdefgh")
+        blob.obfuscation = 3
+        with self.assertRaises(FormatError):
+            decode_blob(blob, bytes(8))
+
+    def test_self_reference_is_not_independent_identity(self):
+        row = {"decodedSha256": "plain", "encodedSha256": "encoded"}
+        expected = {"plain": [{"path": "frozen.spv"}]}
+        reference = {"sourceSha256": "plain", "encodedSha256": "encoded"}
+        self.assertIn("NotIndependentlyVerified", source_identity(row, expected, reference)[1])
+        row["encodedSha256"] = "independent-other-blob"
+        self.assertEqual(source_identity(row, expected, reference)[1], "independentFullShaMatch")
+
+    def test_spirv_header_and_instruction_bounds(self):
+        good = struct.pack("<6I", 0x07230203, 0x00010600, 0, 1, 0, 1 << 16)
+        validate_spirv(good)
+        for data in (good[:-1], good[:20] + bytes(4), good[:20] + struct.pack("<I", 100 << 16)):
+            with self.assertRaises(FormatError):
+                validate_spirv(data)
+
+    def test_actual_rt_absolute_zero_section_address_normalization(self):
+        data = elf_fixture()
+        symbols, _ = elf_functions(data)
+        symbol = symbols[0]
+        self.assertEqual(symbol["gpuVA"], 0x200000000)
+        self.assertEqual(symbol["relativeOffset"], 0)
+        self.assertEqual(symbol["registersSectionInfo"], 86)
+        derived = normalize_elf(data, symbols)
+        self.assertEqual(struct.unpack_from("<Q", derived, symbol["symbolValueOffset"])[0], 0)
+        begin = symbol["sectionOffset"]
+        self.assertEqual(data[begin:begin + 16], derived[begin:begin + 16])
+        self.assertNotEqual(sha256(data), sha256(derived))
+
+    def test_standard_absolute_and_relative_address_modes(self):
+        data = elf_fixture(value=0x1000, address=0x1000)
+        self.assertEqual(elf_functions(data)[0][0]["relativeOffset"], 0)
+        self.assertEqual(elf_functions(elf_fixture(value=0))[0][0]["gpuVA"], None)
+        with self.assertRaises(FormatError):
+            elf_functions(elf_fixture(symbol_size=32))
+        with self.assertRaises(FormatError):
+            elf_functions(data[:-1])
+
+    def test_pc_window_end_exclusive_and_unmapped(self):
+        functions = [{"gpuVA": 100, "bytes": 10}]
+        sampling = Message(PcSamplingPerSM=[Message(version=1,
+            pcSamplesStorage=b"".join(struct.pack("<QQ", pc, 0) for pc in (100, 109, 110, 105)),
+            timestampsStorage=struct.pack("<QQQQ", 10, 3, 20, 4))])
+        windows = {"frames": [{"id": "frame", "startNs": 10, "endNs": 20, "durationNs": 10}], "dispatches": []}
+        row = pc_samples(sampling, functions, windows)[0]
+        self.assertEqual(row["totalSamples"], 3)
+        self.assertEqual(row["unmappedSamples"], 1)
+        self.assertEqual(row["activeFunctions"], [{"functionIndex": 0, "samples": 2}])
+        with self.assertRaises(FormatError):
+            range_index([{"gpuVA": 100, "bytes": 20}, {"gpuVA": 110, "bytes": 20}])
+        sampling.PcSamplingPerSM[0].timestampsStorage = struct.pack("<QQ", 10, 99)
+        with self.assertRaises(FormatError):
+            pc_samples(sampling, functions, windows)
+
+    def test_pc_record_unknown_or_missing_version_is_unavailable_empty_data_is_valid(self):
+        functions = [{"gpuVA": 100, "bytes": 10}]
+        windows = {"frames": [{"id": "frame", "startNs": 10, "endNs": 20, "durationNs": 10}], "dispatches": []}
+        self.assertEqual(pc_samples(Message(PcSamplingPerSM=[fixture_pc_sm({"version": 1})]),
+                                    functions, windows)[0]["totalSamples"], 1)
+        for fields in ({"version": 2}, {}):
+            with self.subTest(fields=fields):
+                sm = fixture_pc_sm(fields)
+                with self.assertRaisesRegex(FormatError, "version"):
+                    pc_samples(Message(PcSamplingPerSM=[sm]), functions, windows)
+                sm.pcSamplesStorage, sm.timestampsStorage = b"", b""
+                row = pc_samples(Message(PcSamplingPerSM=[sm]), functions, windows)[0]
+                self.assertEqual(row["totalSamples"], 0)
+        trace = rt_tool_fixture()
+        trace.gpus[0].SamplingData.PcSamplingPerSM = [Message(version=2,
+            pcSamplesStorage=struct.pack("<QQ", 0x200000000, 0), timestampsStorage=struct.pack("<QQ", 10, 1))]
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch("nsight_diagnostics.shaders.brief", return_value={}):
+            result = shader_objects(trace, windows, Path(directory))
+        self.assertEqual(result["status"], "partial")
+        self.assertIn("version", result["pcAttributionUnavailableReason"])
+        self.assertEqual(len(result["objects"]), 1)
+
+
+def brief_fixture():
+    descriptor = descriptor_pb2.FileDescriptorProto(name="brief-fixture.proto", package="brief", syntax="proto3")
+    color = descriptor.enum_type.add(name="Color")
+    color.value.add(name="NONE", number=0)
+    color.value.add(name="GREEN", number=7)
+    node = descriptor.message_type.add(name="Node")
+    for name, number, kind, label, type_name in [
+        ("child", 1, 11, 1, ".brief.Node"), ("value", 2, 5, 1, None),
+        ("data", 3, 12, 1, None), ("known", 4, 14, 1, ".brief.Color"),
+        ("unknown", 5, 14, 1, ".brief.Color"), ("tags", 6, 5, 3, None),
+        ("children", 7, 11, 3, ".brief.Node"),
+    ]:
+        field = node.field.add(name=name, number=number, type=kind, label=label)
+        if type_name:
+            field.type_name = type_name
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(descriptor)
+    return message_factory.GetMessageClass(pool.FindMessageTypeByName("brief.Node"))
+
+
+class BriefTest(unittest.TestCase):
+    def test_deep_messages_do_not_use_the_python_call_stack(self):
+        cls = brief_fixture()
+        root = cls(value=1)
+        depth = sys.getrecursionlimit() + 32
+        current = root
+        for index in range(depth):
+            current = current.child
+            current.value = index + 2
+        summary = brief(root)
+        for index in range(depth):
+            self.assertEqual(summary["value"], index + 1)
+            summary = summary["child"]
+        self.assertEqual(summary, {"value": depth + 1})
+
+    def test_bytes_and_enum_values_keep_their_typed_summary(self):
+        summary = brief(brief_fixture()(data=b"abc", known=7, unknown=1234))
+        self.assertEqual(summary, {
+            "data": {"bytes": 3, "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+            "known": "GREEN", "unknown": {"unknownEnumNumber": 1234},
+        })
+
+    def test_repeated_summary_keeps_count_and_first_five_in_order(self):
+        message = brief_fixture()()
+        message.tags.extend(range(7))
+        for index in range(7):
+            message.children.add(value=index + 1)
+        summary = brief(message, limit=2)
+        self.assertEqual(summary["tags"], {"count": 7, "first": [0, 1, 2, 3, 4]})
+        self.assertEqual(summary["children"], {"count": 7, "first": [{"value": index + 1} for index in range(5)]})
+
+
+class PcHistogramTest(unittest.TestCase):
+    def test_histogram_preserves_raw_pairs_and_the_half_open_window(self):
+        functions = [{"gpuVA": 0x100, "bytes": 16}]
+        records = [(0x101, 0xffffffffffffffff), (0x101, 0xffffffffffffffff),
+                   (0x101, 7), (0x200, 1), (0x102, 123)]
+        sampling = Message(PcSamplingPerSM=[Message(version=1,
+            pcSamplesStorage=b"".join(struct.pack("<QQ", *record) for record in records),
+            timestampsStorage=struct.pack("<QQQQ", 10, 4, 20, 5))])
+        windows = {"frames": [{"id": "frame", "startNs": 10, "endNs": 20, "durationNs": 10}], "dispatches": []}
+        row = pc_samples(sampling, functions, windows, pc_top=2)[0]
+        self.assertEqual(row["totalSamples"], 4)
+        self.assertEqual(row["pcHistogram"]["uniquePairs"], 3)
+        self.assertEqual(row["pcHistogram"]["top"], [
+            {"pc": "0x0000000000000101", "rawSecondU64": "0xffffffffffffffff", "samples": 2,
+             "functionIndex": 0, "functionOffset": 1},
+            {"pc": "0x0000000000000101", "rawSecondU64": "0x0000000000000007", "samples": 1,
+             "functionIndex": 0, "functionOffset": 1},
+        ])
+        self.assertEqual(row["pcHistogram"]["topPcs"], [
+            {"pc": "0x0000000000000101", "samples": 3, "functionIndex": 0, "functionOffset": 1},
+            {"pc": "0x0000000000000200", "samples": 1, "functionIndex": None, "functionOffset": None},
+        ])
+        self.assertNotIn("pcHistogram", pc_samples(sampling, functions, windows)[0])
+
+    def test_global_key_budget_preserves_original_attribution_and_marks_partial(self):
+        trace = rt_tool_fixture()
+        trace.gpus[0].SamplingData.PcSamplingPerSM = [Message(version=1,
+            pcSamplesStorage=struct.pack("<QQ", 0x200000000, 0), timestampsStorage=struct.pack("<QQ", 10, 1))]
+        windows = {"frames": [{"id": "frame", "startNs": 10, "endNs": 20, "durationNs": 10}],
+                   "dispatches": [{"id": "dispatch", "startNs": 10, "endNs": 20, "durationNs": 10}]}
+        with tempfile.TemporaryDirectory() as directory, mock.patch("nsight_diagnostics.shaders.brief", return_value={}):
+            result = shader_objects(trace, windows, Path(directory), pc_top=1, max_pc_keys=1)
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(len(result["objects"]), 1)
+            for row in result["pcWindows"]:
+                self.assertEqual(row["totalSamples"], 1)
+                self.assertEqual(row["activeFunctions"], [{"functionIndex": 0, "samples": 1}])
+                self.assertEqual(row["pcHistogram"]["status"], "unavailable")
+                self.assertNotIn("top", row["pcHistogram"])
+                self.assertNotIn("topPcs", row["pcHistogram"])
+
+
+if __name__ == "__main__":
+    unittest.main()

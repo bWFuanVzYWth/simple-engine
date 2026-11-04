@@ -1,0 +1,30 @@
+[package]
+name = "vulkan"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+dlss_rr = ["dep:cc"]
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[dependencies]
+blake3.workspace = true
+thiserror.workspace = true
+# KHR OMM 尚未发布到 crates.io；固定官方绑定，旧绑定仅用于 wgpu HAL 交接。
+ash = { git = "https://github.com/ash-rs/ash.git", rev = "8844f6b4eefb16d08cd73c8f3d340e1ac12deb16" }
+ash_wgpu = { package = "ash", version = "0.38.0" }
+wgpu = { workspace = true, features = ["vulkan"] }
+log.workspace = true
+pollster.workspace = true
+vstd = "=0.0.0-2026-10-25-0158"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_system_properties = "0.1"
+
+[lints]
+workspace = true

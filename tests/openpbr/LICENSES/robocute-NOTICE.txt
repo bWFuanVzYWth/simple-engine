@@ -1,0 +1,14 @@
+The supported-domain OpenPBR kernels are derived from RoboCute reference
+0d982c77b3fd26c2c5a3c0852be3bd05e5860bd8:
+
+https://github.com/RoboCute/RoboCute
+
+Copyright RoboCute contributors. Licensed under the Apache License, Version
+2.0. The unmodified license is included in robocute-Apache-2.0.txt.
+
+The incorporated scope includes supported opaque/conductor and solid/thin
+dielectric mathematics, event/frame/volume utilities, exact Fresnel, complete
+sampling/evaluation PDFs and directional-energy compensation. The independently
+locked author 2026-07-24 dielectric-highlight overlay and HALF4 transmission
+energy data have their hashes and attribution in the OpenPBR asset lock and
+author notice. Original reference files are retained without modification.

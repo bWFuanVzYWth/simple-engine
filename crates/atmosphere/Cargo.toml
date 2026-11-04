@@ -1,0 +1,39 @@
+[package]
+name = "atmosphere"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = ["gpu"]
+gpu = ["dep:wgpu", "dep:shader_build"]
+native = ["dep:vulkan", "dep:shader_build"]
+
+[dependencies]
+thiserror.workspace = true
+bytemuck = { workspace = true, features = ["derive", "min_const_generics"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+wgpu = { workspace = true, optional = true }
+vulkan = { path = "../vulkan", optional = true }
+
+[build-dependencies]
+shader_build = { path = "../shader_build", optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+vulkan = { path = "../vulkan" }
+gpu_log = { path = "../gpu_log" }
+pollster.workspace = true
+half = "2.7.1"
+
+[[bench]]
+name = "runtime"
+harness = false
+required-features = ["gpu"]
+
+[lints]
+workspace = true

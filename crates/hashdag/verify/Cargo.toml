@@ -1,0 +1,15 @@
+[package]
+name = "hash_dag_verification"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+path = "deps.rs"
+
+[dependencies]
+hashbrown = "=0.17.1"
+bytemuck = { version = "=1.25.2", features = ["derive"] }
+allocator-api2 = "=0.2.21"

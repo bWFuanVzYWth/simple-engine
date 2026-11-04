@@ -1,0 +1,147 @@
+[package]
+name = "simple_engine"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+include = ["/src/**", "/shaders/**", "/LICENSES/**", "/LICENSE", "/NOTICE", "/THIRD_PARTY_NOTICES.md", "/README.md"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+color = ["dep:color"]
+camera = ["dep:camera"]
+display = ["dep:thiserror"]
+openpbr = ["dep:openpbr"]
+openpbr_gpu = ["openpbr", "openpbr/gpu", "wgpu"]
+pt = ["dep:pt"]
+pt_gpu = ["pt", "pt/vulkan", "vulkan"]
+restir_pt = ["dep:restir_pt"]
+restir_pt_gpu = ["restir_pt", "restir_pt/vulkan", "vulkan"]
+atmosphere = ["dep:atmosphere"]
+atmosphere_gpu = ["atmosphere", "atmosphere/gpu", "wgpu"]
+atmosphere_native = ["atmosphere", "atmosphere/native", "vulkan"]
+rectangle_decomposition = ["dep:rectangle_decomposition"]
+voxel_mesh = ["dep:voxel_mesh", "rectangle_decomposition"]
+chunk_manager = ["dep:chunk_manager"]
+light_bvh = ["dep:light_bvh"]
+light_sampling = ["dep:light_sampling"]
+hash_dag = ["dep:hash_dag"]
+sip_hash = ["dep:sip_hash"]
+perlin_noise = ["dep:perlin_noise", "sip_hash"]
+input = ["dep:input"]
+input_recording = ["input", "input/serde"]
+frame_loop = ["dep:frame_loop"]
+render2d = ["dep:render2d"]
+render2d_text = ["render2d", "render2d/text"]
+render2d_gpu = ["render2d", "render2d/gpu", "wgpu"]
+ui = ["dep:ui", "input", "render2d", "render2d/text"]
+gpu_log = ["dep:gpu_log"]
+wgpu = ["dep:wgpu"]
+vulkan = ["dep:vulkan", "wgpu"]
+dlss_rr = ["vulkan", "vulkan/dlss_rr"]
+webgpu = ["wgpu", "wgpu/webgpu", "wgpu/wgsl"]
+shader_build = ["dep:shader_build"]
+shader_library = []
+gpu_test = ["dep:gpu_test", "vulkan", "gpu_log"]
+
+[dependencies]
+thiserror = { workspace = true, optional = true }
+openpbr = { path = "crates/openpbr", optional = true }
+pt = { path = "crates/pt", optional = true }
+restir_pt = { path = "crates/restir_pt", optional = true }
+atmosphere = { path = "crates/atmosphere", optional = true, default-features = false }
+light_bvh = { path = "crates/light_bvh", optional = true }
+light_sampling = { path = "crates/light_sampling", optional = true }
+color = { path = "crates/color", optional = true }
+camera = { path = "crates/camera", optional = true }
+rectangle_decomposition = { path = "crates/rectangle_decomposition", optional = true }
+voxel_mesh = { path = "crates/voxel_mesh", optional = true }
+chunk_manager = { path = "crates/chunk_manager", optional = true }
+hash_dag = { path = "crates/hashdag", optional = true }
+sip_hash = { path = "crates/sip_hash", optional = true }
+perlin_noise = { path = "crates/perlin_noise", optional = true }
+input = { path = "crates/input", optional = true }
+frame_loop = { path = "crates/frame_loop", optional = true }
+render2d = { path = "crates/render2d", optional = true }
+ui = { path = "crates/ui", optional = true }
+gpu_log = { path = "crates/gpu_log", optional = true }
+wgpu = { workspace = true, optional = true }
+shader_build = { path = "crates/shader_build", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vulkan = { path = "crates/vulkan", optional = true }
+gpu_test = { path = "crates/gpu_test", optional = true }
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/openpbr",
+    "crates/pt",
+    "crates/restir_pt",
+    "crates/atmosphere",
+    "crates/light_bvh",
+    "crates/light_sampling",
+    "crates/scene_cache",
+    "crates/color",
+    "crates/camera",
+    "crates/hashdag",
+    "crates/sip_hash",
+    "crates/perlin_noise",
+    "crates/ui",
+    "crates/input",
+    "crates/frame_loop",
+    "crates/render2d",
+    "crates/voxel_mesh",
+    "crates/chunk_manager",
+    "crates/rectangle_decomposition",
+    "crates/vulkan",
+    "crates/gpu_test",
+    "crates/gpu_log",
+    "crates/shader_build",
+    "examples/cornell_box",
+    "examples/hello_triangle",
+    "tests/wgpu_vulkan",
+    "tests/render2d",
+    "tests/shaders",
+    "tests/openpbr",
+]
+
+[workspace.package]
+authors = ["linlin"]
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+simple_engine = { path = ".", default-features = false }
+thiserror = "2.0.21"
+wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
+criterion = "0.8.2"
+mimalloc = "0.1.52"
+bytemuck = "1.25.2"
+serde = "1.0.229"
+serde_json = "1.0.154"
+proptest = "1.12.0"
+pollster = "1.0.1"
+log = "0.4.35"
+winit = "0.30.13"
+clap = "4.6.7"
+png = "0.18.1"
+blake3 = "1.8.7"
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_only)', 'cfg(verus_keep_ghost)'] }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug = 0
+strip = "symbols"

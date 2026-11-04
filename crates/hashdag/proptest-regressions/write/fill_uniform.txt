@@ -1,0 +1,2 @@
+# 来源 SVDAG 已有失败种子；由 proptest 自动重放。
+cc 6185a22668326cadf56bdfc308166c66230ecdd7b31018dc42fbc7904c3b8665

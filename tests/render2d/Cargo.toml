@@ -1,0 +1,24 @@
+[package]
+name = "render2d_tests"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[test]]
+name = "render"
+harness = false
+
+[[bench]]
+name = "prepare"
+harness = false
+
+[dev-dependencies]
+simple_engine = { workspace = true, features = ["render2d_gpu", "render2d_text", "vulkan", "gpu_test"] }
+criterion.workspace = true
+pollster.workspace = true
+wgpu = { workspace = true, features = ["wgsl"] }
+
+[lints]
+workspace = true

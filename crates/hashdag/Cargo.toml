@@ -1,0 +1,35 @@
+[package]
+name = "hash_dag"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
+hashbrown = "0.17.1"
+thiserror.workspace = true
+vstd = "=0.0.0-2026-10-25-0158"
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "dag"
+harness = false
+
+[[bench]]
+name = "coverage"
+harness = false
+
+[[bench]]
+name = "diff"
+harness = false
+
+[[bench]]
+name = "built"
+harness = false
+
+[lints]
+workspace = true

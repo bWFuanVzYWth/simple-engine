@@ -1,0 +1,22 @@
+[package]
+name = "gpu_test"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+wgpu = { workspace = true, features = ["vulkan"] }
+vulkan = { path = "../vulkan" }
+pollster.workspace = true
+gpu_log = { path = "../gpu_log" }
+blake3.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+rand_chacha = "=0.10.0"
+rand_core = "0.10.1"
+libtest-mimic = "0.8.2"
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+/.vscode/
+/.agent/
+/.agents/
+/app/
+/experiments/
+/local/
+/target/
+/target-ra/
+/temp/
+__pycache__/

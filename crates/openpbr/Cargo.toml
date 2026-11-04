@@ -1,0 +1,22 @@
+[package]
+name = "openpbr"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+gpu = ["dep:wgpu"]
+program = ["dep:shader_build"]
+
+[dependencies]
+thiserror.workspace = true
+wgpu = { workspace = true, optional = true }
+shader_build = { path = "../shader_build", optional = true }
+
+[dev-dependencies]
+sha2 = "0.11.1"
+
+[lints]
+workspace = true

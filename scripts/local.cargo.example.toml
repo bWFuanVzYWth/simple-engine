@@ -1,0 +1,8 @@
+# 复制到 local/cargo.toml，用 cargo --config local/cargo.toml <command> 显式加载。
+# 保留需要的配置，路径和凭据只放在 local/。
+
+[env]
+# SLANGC = { value = "<slangc-path>", force = true }
+
+[build]
+# target-dir = "<build-cache-directory>"

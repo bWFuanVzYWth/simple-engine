@@ -1,0 +1,17 @@
+[package]
+name = "sip_hash"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "hash"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+[package]
+name = "wgpu_vulkan_tests"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "window_probe"
+test = false
+bench = false
+
+[[test]]
+name = "interop"
+harness = false
+
+[dependencies]
+simple_engine = { workspace = true, features = ["vulkan", "gpu_log"] }
+thiserror.workspace = true
+pollster.workspace = true
+log = { workspace = true, features = ["std"] }
+winit.workspace = true
+
+[build-dependencies]
+simple_engine = { workspace = true, features = ["shader_build"] }
+
+[dev-dependencies]
+simple_engine = { workspace = true, features = ["gpu_test"] }
+
+[lints]
+workspace = true

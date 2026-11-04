@@ -1,0 +1,24 @@
+[package]
+name = "shader_tests"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[test]]
+name = "shaders"
+path = "tests/shaders.rs"
+harness = false
+
+[dependencies]
+simple_engine = { workspace = true, features = ["gpu_test", "light_bvh", "display"] }
+thiserror.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+
+[build-dependencies]
+simple_engine = { workspace = true, features = ["shader_build", "shader_library"] }
+
+[lints]
+workspace = true

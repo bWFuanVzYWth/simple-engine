@@ -1,0 +1,127 @@
+//! 由资源能力生成排序的受控 callable 集合；不持有纹理、设备或宿主状态。
+//!
+//! 模板通过 `OPENPBR_FLOW` 消费控制流键，不得在源文件中重定义该宏。所有场景适配、
+//! payload／descriptor ABI 和设备变体参数须进入模板源码或 args；编译器将它们纳入
+//! 内容身份。准备失败不修改旧 [`ProgramSet`]，资源所有者须在整代资源与管线成功后发布。
+//! 本模块沿用 shader_build 的有效性验证，不代替应用维护的物理特化／ABI 审计。
+
+use crate::{FlowError, FlowKey, FlowPlan};
+use shader_build::{Artifact, Recipe, RuntimeCompiler, Target};
+
+/// 能力计划或 Slang 编译失败；保留精确底层来源。
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// callable 数量或能力计划不满足公共约定。
+    #[error(transparent)]
+    Flow(#[from] FlowError),
+    /// 源码、缓存、工具链或编译器诊断失败。
+    #[error(transparent)]
+    Shader(#[from] shader_build::Error),
+}
+
+/// 同一个场景／算法的受控 callable 模板；只在准备程序时借用。
+pub struct Template<'a> {
+    /// 受控 Slang 主文件路径；导入闭包由 RuntimeCompiler 的源码根声明覆盖。
+    pub source: &'a str,
+    /// callable 导出入口名。
+    pub entry: &'a str,
+    /// 内容缓存使用的逻辑输出名；不作为宿主目的目录。
+    pub output: &'a str,
+    /// 原生 SPIR-V profile 或其他由受控编译器支持的目标。
+    pub target: Target<'a>,
+    /// precise 模式、设备能力和其他实际变体参数；全部参与缓存身份。
+    pub args: &'a [&'a str],
+}
+
+/// 一代绑定的能力计划与自有编译产物；键和 artifacts 保持相同排序。
+pub struct ProgramSet<Key = FlowKey> {
+    plan: FlowPlan<Key>,
+    artifacts: Vec<Artifact>,
+}
+
+impl ProgramSet<FlowKey> {
+    /// 从真实绑定顺序去重并编译每个控制流；不更改旧程序或创建 GPU 资源。
+    ///
+    /// 每个唯一键追加 `-DOPENPBR_FLOW=bits`，其余模板参数按原序交给编译器。
+    /// PT／ReSTIR 可用各自的受控入口调用同一方法；本模块不猜测应用 shader ABI。
+    /// # Errors
+    /// 计划构造失败或任一入口无法编译时保留 [`Error`] 来源，不返回部分程序集。
+    pub fn compile(
+        compiler: &RuntimeCompiler,
+        bindings: impl IntoIterator<Item = FlowKey>,
+        template: Template<'_>,
+    ) -> Result<Self, Error> {
+        Self::compile_inner(compiler, bindings, template, |flow| (flow, None))
+    }
+}
+
+impl ProgramSet<(FlowKey, u32)> {
+    /// 按 OpenPBR 控制流和调用方的离散材质能力共同去重；模板消费 `OPENPBR_VARIANT`。
+    /// 变体位由场景适配定义，不参与引擎物理能力的推导。
+    /// # Errors
+    /// 键数量超限或任何入口编译失败时返回 [`Error`]，不发布部分程序。
+    pub fn compile_variants(
+        compiler: &RuntimeCompiler,
+        bindings: impl IntoIterator<Item = (FlowKey, u32)>,
+        template: Template<'_>,
+    ) -> Result<Self, Error> {
+        Self::compile_inner(compiler, bindings, template, |(flow, variant)| {
+            (flow, Some(variant))
+        })
+    }
+}
+
+impl<Key: Copy + Ord> ProgramSet<Key> {
+    fn compile_inner(
+        compiler: &RuntimeCompiler,
+        bindings: impl IntoIterator<Item = Key>,
+        template: Template<'_>,
+        definitions: impl Fn(Key) -> (FlowKey, Option<u32>),
+    ) -> Result<Self, Error> {
+        let plan = FlowPlan::new(bindings)?;
+        let mut artifacts = Vec::with_capacity(plan.keys().len());
+        for &key in plan.keys() {
+            let (flow, variant) = definitions(key);
+            let definition = format!("-DOPENPBR_FLOW={}", flow.bits());
+            let variant = variant.map(|bits| format!("-DOPENPBR_VARIANT={bits}"));
+            let mut args = template.args.to_vec();
+            args.push(&definition);
+            if let Some(variant) = &variant {
+                args.push(variant);
+            }
+            artifacts.push(compiler.compile(&Recipe {
+                source: template.source,
+                entry: template.entry,
+                stage: "callable",
+                output: template.output,
+                target: template.target,
+                args: &args,
+            })?);
+        }
+        Ok(Self { plan, artifacts })
+    }
+
+    /// 输入绑定到排序 callable 表的映射；shader 索引和 SBT 须消费同一份计划。
+    pub const fn plan(&self) -> &FlowPlan<Key> {
+        &self.plan
+    }
+
+    /// 按 [`FlowPlan::keys`] 顺序排列的自有产物；创建管线时只需短期借用字节。
+    pub fn artifacts(&self) -> &[Artifact] {
+        &self.artifacts
+    }
+
+    /// 键和全部代码身份是否相同；绑定映射变化仍须由资源所有者重新上传或重绑。
+    pub fn same_code(&self, previous: &Self) -> bool {
+        self.plan.keys() == previous.plan.keys()
+            && self
+                .artifacts
+                .iter()
+                .zip(&previous.artifacts)
+                .all(|(a, b)| a.fingerprint() == b.fingerprint())
+    }
+}
+
+#[cfg(test)]
+#[path = "program_tests.rs"]
+mod tests;

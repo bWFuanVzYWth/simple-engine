@@ -1,0 +1,21 @@
+[package]
+name = "perlin_noise"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+sip_hash = { path = "../sip_hash" }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "noise"
+harness = false
+
+[lints]
+workspace = true

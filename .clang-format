@@ -1,0 +1,3 @@
+BasedOnStyle: Microsoft
+Language: CSharp
+ColumnLimit: 100

@@ -1,0 +1,73 @@
+name: 检查
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    name: CPU、格式与 feature
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.12'
+      - name: 安装格式工具
+        shell: pwsh
+        run: |
+          $tools = Get-Content scripts/tools.json -Raw | ConvertFrom-Json
+          python -m pip install "clang-format==$($tools.clang_format)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 检查
+        shell: pwsh
+        run: ./scripts/check.ps1 -Suite cpu
+      - name: 检查 feature 裁剪
+        shell: pwsh
+        run: |
+          ./scripts/install_slang.ps1
+          ./scripts/check.ps1 -Suite features
+      - uses: actions/upload-artifact@v7.0.2
+        if: failure()
+        with:
+          name: cpu-logs
+          path: |
+            temp/check/cpu
+            temp/check/features
+          retention-days: 7
+
+  build:
+    name: Native 与 Web 构建
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: 安装 Slang 基线
+        shell: pwsh
+        run: |
+          ./scripts/install_slang.ps1
+          "SLANGC=$env:SLANGC" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: 检查
+        shell: pwsh
+        run: |
+          ./scripts/install_streamline.ps1
+          ./scripts/check.ps1 -Suite build
+      - name: 检查文档
+        shell: pwsh
+        run: |
+          ./scripts/install_streamline.ps1
+          ./scripts/check.ps1 -Suite docs
+      - uses: actions/upload-artifact@v7.0.2
+        if: failure()
+        with:
+          name: build-logs
+          path: |
+            temp/check/build
+            temp/check/docs
+            target/doc-coverage.json
+          retention-days: 7

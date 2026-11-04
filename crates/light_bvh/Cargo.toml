@@ -1,0 +1,19 @@
+[package]
+name = "light_bvh"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "build"
+harness = false
+
+[lints]
+workspace = true
