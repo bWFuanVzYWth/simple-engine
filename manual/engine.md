@@ -1,6 +1,15 @@
 # 引擎接入与功能裁剪
 
-应用可通过 `simple_engine` 选择组件，也可直接依赖底层 crate；默认不启用功能。workspace 内使用根目录依赖声明：
+Cargo 用项目根目录的 `Cargo.toml` 记录依赖和功能开关。如果还没有 Rust 项目，可先从引擎根目录运行 `Set-Location ..`，再运行 `cargo new my_engine_app` 创建一个同级目录。打开自己项目里的 `Cargo.toml`，在 `[dependencies]` 下面添加引擎。下面假设你的项目目录和 `simple_engine/` 是同级目录。把 `path` 换成你实际的引擎路径。
+
+```toml
+[dependencies]
+simple_engine = { path = "../simple_engine", features = ["color", "voxel_mesh"] }
+```
+
+若已有 `[dependencies]`，把依赖行放进去即可。用 PowerShell 进入你自己的项目目录并运行 `cargo +nightly-2026-10-31 check`。这里的版本与引擎的 [rust-toolchain.toml](../rust-toolchain.toml) 一致。出现 `Finished` 表示依赖通过编译检查。
+
+若在引擎自己的 workspace（一组共同构建的 Rust 包）里添加项目，可从根目录继承依赖声明：
 
 ```toml
 [dependencies]
@@ -17,9 +26,7 @@ simple_engine = { workspace = true, features = ["vulkan", "gpu_log"] }
 simple_engine = { workspace = true, features = ["shader_build", "shader_library"] }
 ```
 
-仓库外将 `workspace = true` 替换为实际依赖路径。Web 选择 `webgpu`；纯图形和图片选择 `render2d_gpu`，文字另选 `render2d_text`；GUI 选择 `ui` 与 `render2d_gpu`，例如 `features = ["webgpu", "ui", "render2d_gpu"]`。完整 feature 清单及依赖关系见[引擎 API](../target/doc/simple_engine/index.html)。
-
-`restir_pt` 可独立使用CPU布局与历史事务，`restir_pt_gpu` 录制默认完整point profile；场景及材质程序由应用注入，见[API](../target/doc/restir_pt/index.html)。
+仓库外沿用前面示例的 `path` 写法。Web 选择 `webgpu`；纯图形和图片选择 `render2d_gpu`，文字另选 `render2d_text`；GUI 选择 `ui` 与 `render2d_gpu`，例如 `features = ["webgpu", "ui", "render2d_gpu"]`。完整 feature 清单及依赖关系见[引擎 API](../target/doc/simple_engine/index.html)。
 
 Cargo feature 会叠加。检查裁剪效果时独立检查根包，避免 workspace 其他消费者启用额外功能：
 
@@ -29,7 +36,7 @@ cargo check --locked -p simple_engine --no-default-features --features color,vox
 powershell -NoProfile -File scripts/check.ps1 -Suite features
 ```
 
-完整构建与平台检查见[开发脚本](../scripts/README.md)。API 使用示例：
+完整构建与平台检查见[开发脚本](development.md)。API 使用示例：
 
 - [输入与录制重放](../target/doc/input/index.html)
 - [即时 GUI 的构建与发布](../target/doc/ui/index.html)

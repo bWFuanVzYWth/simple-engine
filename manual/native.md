@@ -12,16 +12,7 @@ ReSTIR workload 显式请求 32-lane subgroup，设备默认 64 也可使用；�
 
 外部宿主设备通过 [`native::Context`](../target/doc/vulkan/native/struct.Context.html) 借入；资源、能力和完成租约契约见 [native API](../target/doc/vulkan/native/index.html)。通用 PT 的三阶段录制入口见 [`pt::gpu::Renderer`](../target/doc/pt/gpu/struct.Renderer.html)。
 
-可选 Windows Streamline／DLSS RR 构建须先在同一 PowerShell 进程安装并设置 SDK：
-
-```powershell
-.\scripts\install_streamline.ps1
-cargo check -p simple_engine --no-default-features --features dlss_rr
-.\scripts\gpu\test_streamline.ps1 -InitializationOnly
-.\scripts\gpu\test_streamline.ps1
-```
-
-安装器校验锁定的 SHA256 与 NVIDIA 签名，设置当前进程 `STREAMLINE_SDK`；引擎的 CPU／普通 Vulkan 构建不需要 SDK。`docs` 的全 feature 检查须设置同一路径。API、初始化时序、图像格式和完成边界见 [`streamline`](../target/doc/vulkan/streamline/index.html)及 [`WgpuContext`](../target/doc/vulkan/interop/struct.WgpuContext.html#method.configure_streamline)。无窗口通过不代替窗口与交互验收。
+Windows 上启用 DLSS RR 或执行全 feature 文档检查前，按 [Streamline 手册](streamline.md) 安装并在当前进程设置 SDK。普通 Vulkan 和 CPU 构建可直接运行。
 
 Debug 默认启用 validation，Release 默认关闭。诊断 release 程序时显式开启：
 

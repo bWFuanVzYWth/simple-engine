@@ -7,7 +7,7 @@ powershell -NoProfile -File scripts/check.ps1 -Suite compute
 powershell -NoProfile -File scripts/check.ps1 -Suite rt
 ```
 
-检查档内容与依赖见[开发脚本](../scripts/README.md)。以下底层命令方便筛选，不提供外层进程超时。设备初始化失败算失败，未运行项不能算通过。
+检查档内容与依赖见[开发脚本](development.md)。以下底层命令方便筛选，不提供外层进程超时。设备初始化失败算失败，未运行项不能算通过。
 
 ## 运行与筛选
 

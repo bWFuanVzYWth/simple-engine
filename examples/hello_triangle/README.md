@@ -1,6 +1,6 @@
 # hello_triangle
 
-winit + wgpu 窗口三角形，Slang SPIR-V 直通；无需硬件光追。工具链见 [仓库说明](../../README.md)。
+winit + wgpu 窗口三角形，Slang SPIR-V 直通；无需硬件光追。工具链见 [快速开始](../../manual/getting-started.md)。
 
 ```sh
 cargo run -p hello_triangle

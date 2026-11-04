@@ -9,4 +9,4 @@
 
 测试通过 `simple_engine` 选择组件；GPU 验证日志使用引擎 `gpu_log`，见 [入口与功能裁剪](../manual/engine.md)。
 
-GPU 用例默认 ignored；按设备能力显式运行，初始化失败和未执行均不算通过。统一检查入口见 [开发脚本](../scripts/README.md)。
+GPU 用例默认 ignored；按设备能力显式运行，初始化失败和未执行均不算通过。统一检查入口见 [开发脚本](../manual/development.md)。
