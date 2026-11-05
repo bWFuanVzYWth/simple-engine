@@ -47,7 +47,7 @@ public struct LambertScene : IRestirScene
     }
     public float3 normal()
     {
-        float a = finiteLight() || cavity() || variant == 0 ? 0.0 : angle;
+        float a = finiteLight() || cavity() || mode == 9 || variant == 0 ? 0.0 : angle;
         return float3(sin(a), 0.0, cos(a));
     }
     public float3 position()
@@ -141,12 +141,13 @@ public struct LambertScene : IRestirScene
         return result;
     }
     public InitialShading shadeInitial(Surface surface, float3 u, float3 direction,
-                                       bool sampleContinuation)
+                                       float3 secondDirection, bool sampleContinuation)
     {
         BsdfSample sample = {};
         if (sampleContinuation)
             sample = sampleBsdf(surface, u);
-        return { sample, evaluateBsdf(surface, direction, -1), surface.emission };
+        return { sample, evaluateBsdf(surface, direction, -1), surface.emission,
+                 evaluateBsdf(surface, secondDirection, -1) };
     }
     public BsdfEvaluation evaluateBsdf(Surface surface, float3 direction, int component)
     {
@@ -176,11 +177,13 @@ public struct LambertScene : IRestirScene
             float cosine = u.x;
             float sine = sqrt(1.0 - cosine * cosine);
             float phi = 2.0 * PI * u.y;
+            if (mode == 9)
+                phi = PI * (u.y + float(u.z >= 0.5));
             float3 n = surface.point.normal;
             result.direction = float3(n.z, 0.0, -n.x) * (sine * cos(phi)) +
                                float3(0.0, sine * sin(phi), 0.0) + n * cosine;
             result.distance = environmentDistance();
-            result.pdf = 0.5 / PI;
+            result.pdf = (mode == 9 ? 1.0 : 0.5) / PI;
             result.lightType = LIGHT_ENV;
             result.radiance = environment(result.direction, surface.point.position, false);
         }
@@ -192,7 +195,7 @@ public struct LambertScene : IRestirScene
         if (cavity())
             return 0.0;
         if (!finiteLight())
-            return dot(surface.point.normal, direction) > 0.0 ? 0.5 / PI : 0.0;
+            return dot(surface.point.normal, direction) > 0.0 ? (mode == 9 ? 1.0 : 0.5) / PI : 0.0;
         float3 point = asfloat(light.data.yzw);
         if (any(abs(point.xy) > 2.0) || direction.z <= 0.0)
             return 0.0;
@@ -277,12 +280,21 @@ void restir_mean_main(uint3 id: SV_DispatchThreadID)
     TinyUniformSampleGenerator neighborRng = rng_for_pixel(uint2(id.x, 1), 1);
     TinyUniformSampleGenerator reuseRng = rng_for_pixel(uint2(id.x, 2), 1);
     uint bounces = canonicalScene.cavity() ? 10u : 1u;
-    InitialResult canonical = sampleInitialPath(
+    InitialResult canonical = sampleInitialPath<LambertScene, 1>(
         canonicalScene, uint2(0), canonicalScene.primaryHit(), canonicalRng.state, bounces,
         settings, true, canonicalScene.useNEE(), canonicalScene.useMIS());
     InitialResult neighbor =
         sampleInitialPath(neighborScene, uint2(0), neighborScene.primaryHit(), neighborRng.state,
                           bounces, settings, true, neighborScene.useNEE(), neighborScene.useMIS());
+    if (canonicalScene.mode == 9)
+    {
+        canonical = sampleInitialPath<LambertScene, 2>(
+            canonicalScene, uint2(0), canonicalScene.primaryHit(), canonicalRng.state, bounces,
+            settings, true, true, true);
+        neighbor = sampleInitialPath<LambertScene, 2>(neighborScene, uint2(0),
+                                                      neighborScene.primaryHit(), neighborRng.state,
+                                                      bounces, settings, true, true, true);
+    }
     neighbor.reservoir.M = 7.0;
     float3 initialEstimate =
         canonical.residual + canonical.reservoir.weight * canonical.reservoir.integrand;

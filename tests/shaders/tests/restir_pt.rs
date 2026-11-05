@@ -119,6 +119,19 @@ fn lambert_environment_reuse_preserves_integral() -> Result {
 
 #[test]
 #[ignore = "需要真实 Vulkan compute GPU"]
+fn additive_light_families_preserve_the_environment_integral() -> Result {
+    // 两个不重叠半球方位区各采一次；条件PDF不含1/2，积分仍为rho*Le。
+    let samples = run(9, 0.2, 0.0002, 0.0)?;
+    mean_matches(
+        &samples,
+        ALBEDO.map(|value| value * RADIANCE),
+        "twoFamilies",
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
 fn no_reconnection_replays_full_selected_path() -> Result {
     let samples = run(1, 2.0, 1e20, 0.0)?;
     mean_matches(&samples, ALBEDO.map(|value| value * RADIANCE), "noRC");

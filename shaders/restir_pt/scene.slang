@@ -56,12 +56,13 @@ public struct BsdfSample
     public bool rough;
 };
 
-/// 初采单次专用材质调用的输出；sample 与 nee 共享已加载的同一闭包。
+/// 初采单次专用材质调用的输出；sample 与至多两个加性NEE共享同一闭包。
 public struct InitialShading
 {
     public BsdfSample sample;
     public BsdfEvaluation nee;
     public float3 emission;
+    public BsdfEvaluation secondNEE;
 };
 
 /// 光源样本；hit 保存可重建的几何光源身份，环境或方向光由 lightType 区分。
@@ -98,11 +99,13 @@ public interface IRestirScene
     /// sampleContinuation=false只求相同NEE与emission，不计算之后必被RR丢弃的散射。
     /// NEE响应/PDF与emission不得依赖bsdfU或采样结果；该标记不改变路径随机域。
     InitialShading shadeInitial(Surface surface, float3 bsdfU, float3 neeDirection,
-                                bool sampleContinuation);
+                                float3 secondNEEDirection, bool sampleContinuation);
     BsdfEvaluation evaluateBsdf(Surface surface, float3 wi, int component);
     bool isSampleRough(Surface surface, uint component, float pdf, float threshold);
     /// 同一场景世代、完整surface与u须返回相同结果；允许在shadeInitial前后重算。
     /// 不消费隐含随机流，不依赖调用次数或着色反馈；不能修改当前场景的采样分布。
+    /// 初采双族模式把u.z分别限制在[0,0.5)和[0.5,1)，各返回该族条件PDF；
+    /// 缺失族返回零，不能改投其他族。lightPdf必须返回同一条件密度。
     LightSample sampleLight(Surface surface, float3 u);
     float lightPdf(Surface source, HitInfo light, float3 lightDirection, uint lightType,
                    bool previous);

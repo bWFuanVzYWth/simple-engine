@@ -64,10 +64,22 @@ float initialRandomValue<let Dimension : uint>(uint seed)
     return float(initialRandomState<Dimension>(seed) >> 8) * 0x1p-24f;
 }
 
-float3 initialLightRandom(uint seed)
+float3 initialLightRandom<let LightSamples : uint>(uint seed, uint index)
 {
+    if (LightSamples == 2)
+        return float3(index == 0 ? initialRandomValue<4>(seed) : initialRandomValue<6>(seed),
+                      index == 0 ? initialRandomValue<5>(seed) : initialRandomValue<7>(seed),
+                      min((float(index) + initialRandomValue<3>(seed)) * 0.5, 0x1.fffffep-1f));
     return float3(initialRandomValue<4>(seed), initialRandomValue<5>(seed),
                   initialRandomValue<3>(seed));
+}
+
+// 第二族的RIS选择使用独立播种，不推进供BSDF重放使用的bounce随机状态。
+float initialLightRISRandom(uint seed, uint index)
+{
+    if (index == 0)
+        return initialRandomValue<2>(seed);
+    return float(block_cipher_tea(seed, 0x6e656532u).x >> 8) * 0x1p-24f;
 }
 
 float3 initialBsdfRandom(uint seed, bool useRussianRoulette)
@@ -102,11 +114,15 @@ bool initialCanConnect(ShiftSettings settings, uint depth, uint rcLength, Replay
 /// 使用已保存 primaryHit；maxSurfaceBounces 须不超过254，与8bit路径长度保持一致。
 /// primaryHit、初始相机/介质与当前scene须属于同一代；所有材质和求交均为实际场景操作。
 /// sample/eval/发光在非末端顶点合并为一次 shadeInitial，重放只调用独立 sample 窄入口。
-/// 本实验要求sampleLight对相同Surface/u为纯函数，shadeInitial不改变灯采样状态。
-public InitialResult sampleInitialPath<Scene : IRestirScene>(
+/// LightSamples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
+/// PDF不含族选择概率。第二族使用原padding维，不改变散射/RR及重放的随机身份。
+/// sampleLight对相同Surface/u为纯函数，shadeInitial不改变灯采样状态。
+public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : uint = 1>(
     inout Scene scene, uint2 pixel, HitInfo primaryHit, uint initialSeed, uint maxSurfaceBounces,
     ShiftSettings settings, bool useRussianRoulette, bool useNEE, bool useMIS)
 {
+    static_assert(LightSamples == 1 || LightSamples == 2,
+                  "initial NEE supports one or two families");
     InitialResult result = {};
     result.reservoir.init();
     if (!primaryHit.isValid())
@@ -152,21 +168,24 @@ public InitialResult sampleInitialPath<Scene : IRestirScene>(
                                    initialRandomValue<8>(bounceSeed) >= rouletteProbability);
         bool sampleNEE = depth < maxSurfaceBounces && useNEE && surface.hasNonDeltaLobes;
         float3 neeDirection = surface.wo;
+        float3 secondNEEDirection = surface.wo;
         if (sampleNEE)
         {
-            LightSample light = scene.sampleLight(surface, initialLightRandom(bounceSeed));
+            LightSample light =
+                scene.sampleLight(surface, initialLightRandom<LightSamples>(bounceSeed, 0));
             neeDirection = light.pdf > 0.0 ? light.direction : surface.wo;
+            if (LightSamples == 2)
+            {
+                light = scene.sampleLight(surface, initialLightRandom<LightSamples>(bounceSeed, 1));
+                secondNEEDirection = light.pdf > 0.0 ? light.direction : surface.wo;
+            }
         }
         InitialShading shading = {};
         if (depth < maxSurfaceBounces)
             shading = scene.shadeInitial(
                 surface,
                 rouletteKilled ? float3(0.0) : initialBsdfRandom(bounceSeed, useRussianRoulette),
-                neeDirection, !rouletteKilled);
-        // sampleLight为当前scene的纯函数；同seed/同完整Surface重算，结束前不覆盖emission。
-        LightSample light = {};
-        if (sampleNEE)
-            light = scene.sampleLight(surface, initialLightRandom(bounceSeed));
+                neeDirection, secondNEEDirection, !rouletteKilled);
         if (depth < maxSurfaceBounces)
             surface.emission = shading.emission;
 
@@ -211,15 +230,24 @@ public InitialResult sampleInitialPath<Scene : IRestirScene>(
         if (depth == maxSurfaceBounces)
             break;
 
-        if (light.pdf > 0.0 && any(light.radiance > 0.0))
+        [unroll]
+        for (uint lightIndex = 0; lightIndex < LightSamples; ++lightIndex)
         {
+            // 材质调用结束后按同一身份重建灯样本，不让灯载荷跨SER/callable存活。
+            LightSample light = {};
+            if (sampleNEE)
+                light = scene.sampleLight(surface,
+                                          initialLightRandom<LightSamples>(bounceSeed, lightIndex));
+            if (!(light.pdf > 0.0) || !any(light.radiance > 0.0))
+                continue;
+            BsdfEvaluation nee = lightIndex == 0 ? shading.nee : shading.secondNEE;
             float lightMis = useMIS && light.lightType != LIGHT_ANALYTIC
-                                 ? lightMisWeight(1.0, light.pdf, 1.0, shading.nee.pdf)
+                                 ? lightMisWeight(1.0, light.pdf, 1.0, nee.pdf)
                                  : 1.0;
             float3 lightTransmittance =
                 scene.transmittance(surface, light.direction, light.distance);
             float3 reflected =
-                shading.nee.value * light.radiance * lightTransmittance * (lightMis / light.pdf);
+                nee.value * light.radiance * lightTransmittance * (lightMis / light.pdf);
             Surface target = {};
             if (light.hit.isValid())
                 target = scene.loadSurfaceFromOrigin(light.hit, surface.point.position, false);
@@ -230,15 +258,15 @@ public InitialResult sampleInitialPath<Scene : IRestirScene>(
                               : scene.visibleDirection(surface, light.direction, false);
             if (visible)
             {
-                bool canConnect = initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(),
-                                                    segment, shading.nee.pdf, previousRough,
-                                                    primaryFootprint, distanceThreshold);
+                bool canConnect =
+                    initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(), segment,
+                                      nee.pdf, previousRough, primaryFootprint, distanceThreshold);
                 float3 cachedRadiance =
                     canConnect ? light.radiance * lightTransmittance : light.radiance;
-                bool selected =
-                    ris.addNEECandidate(initialRandomValue<2>(bounceSeed), rc, canConnect, depth,
-                                        throughput * reflected, light.direction, cachedRadiance,
-                                        reflected, sourcePdf, light.pdf, light.lightType);
+                bool selected = ris.addNEECandidate(initialLightRISRandom(bounceSeed, lightIndex),
+                                                    rc, canConnect, depth, throughput * reflected,
+                                                    light.direction, cachedRadiance, reflected,
+                                                    sourcePdf, light.pdf, light.lightType);
                 if (selected && canConnect)
                 {
                     ris.reconnectionHit = surface.hit;
