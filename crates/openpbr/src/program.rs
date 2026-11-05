@@ -1,4 +1,4 @@
-//! 由资源能力生成排序的受控 callable 集合；不持有纹理、设备或宿主状态。
+//! 由资源能力生成排序的材质程序集合；支持 callable 和 closest-hit，不持有纹理或设备。
 //!
 //! 模板通过 `OPENPBR_FLOW` 消费控制流键，不得在源文件中重定义该宏。所有场景适配、
 //! payload／descriptor ABI 和设备变体参数须进入模板源码或 args；编译器将它们纳入
@@ -19,11 +19,11 @@ pub enum Error {
     Shader(#[from] shader_build::Error),
 }
 
-/// 同一个场景／算法的受控 callable 模板；只在准备程序时借用。
+/// 同一个场景／算法的受控材质模板；阶段由编译入口指定，只在准备程序时借用。
 pub struct Template<'a> {
     /// 受控 Slang 主文件路径；导入闭包由 RuntimeCompiler 的源码根声明覆盖。
     pub source: &'a str,
-    /// callable 导出入口名。
+    /// 与所选编译阶段对应的导出入口名。
     pub entry: &'a str,
     /// 内容缓存使用的逻辑输出名；不作为宿主目的目录。
     pub output: &'a str,
@@ -51,7 +51,9 @@ impl ProgramSet<FlowKey> {
         bindings: impl IntoIterator<Item = FlowKey>,
         template: Template<'_>,
     ) -> Result<Self, Error> {
-        Self::compile_inner(compiler, bindings, template, |flow| (flow, None))
+        Self::compile_inner(compiler, bindings, template, "callable", |flow| {
+            (flow, None)
+        })
     }
 }
 
@@ -65,9 +67,33 @@ impl ProgramSet<(FlowKey, u32)> {
         bindings: impl IntoIterator<Item = (FlowKey, u32)>,
         template: Template<'_>,
     ) -> Result<Self, Error> {
-        Self::compile_inner(compiler, bindings, template, |(flow, variant)| {
-            (flow, Some(variant))
-        })
+        Self::compile_inner(
+            compiler,
+            bindings,
+            template,
+            "callable",
+            |(flow, variant)| (flow, Some(variant)),
+        )
+    }
+
+    /// 按相同材质键编译closest-hit叶子；仅阶段不同，不改变排序和绑定映射。
+    ///
+    /// 模板须提供closest-hit入口及相应payload契约。调用方在资源准备边界建立
+    /// SBT并按计划索引分派，不为单个几何元素复制程序。
+    /// # Errors
+    /// 与[`Self::compile_variants`]相同。
+    pub fn compile_hit_variants(
+        compiler: &RuntimeCompiler,
+        bindings: impl IntoIterator<Item = (FlowKey, u32)>,
+        template: Template<'_>,
+    ) -> Result<Self, Error> {
+        Self::compile_inner(
+            compiler,
+            bindings,
+            template,
+            "closesthit",
+            |(flow, variant)| (flow, Some(variant)),
+        )
     }
 }
 
@@ -76,6 +102,7 @@ impl<Key: Copy + Ord> ProgramSet<Key> {
         compiler: &RuntimeCompiler,
         bindings: impl IntoIterator<Item = Key>,
         template: Template<'_>,
+        stage: &str,
         definitions: impl Fn(Key) -> (FlowKey, Option<u32>),
     ) -> Result<Self, Error> {
         let plan = FlowPlan::new(bindings)?;
@@ -92,7 +119,7 @@ impl<Key: Copy + Ord> ProgramSet<Key> {
             artifacts.push(compiler.compile(&Recipe {
                 source: template.source,
                 entry: template.entry,
-                stage: "callable",
+                stage,
                 output: template.output,
                 target: template.target,
                 args: &args,

@@ -59,6 +59,7 @@ pub(crate) struct Device {
     pub(crate) position_fetch: bool,
     pub(crate) opacity_micromap: bool,
     pub(crate) invocation_reorder: bool,
+    pub(crate) pipeline_statistics: bool,
 }
 
 impl Device {

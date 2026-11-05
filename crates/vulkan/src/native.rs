@@ -37,6 +37,10 @@ use wgpu::hal::api::Vulkan;
 mod timestamp;
 pub use timestamp::TimestampQueries;
 
+#[path = "pipeline_statistics.rs"]
+mod pipeline_statistics;
+pub use pipeline_statistics::{ExecutableStatistic, ExecutableStatistics, StatisticValue};
+
 /// 宿主创建设备时实际启用的能力。
 #[derive(Clone, Copy, Default)]
 pub struct Capabilities {
@@ -48,6 +52,9 @@ pub struct Capabilities {
     pub opacity_micromap: bool,
     /// EXT invocation reorder 扩展及 feature；shader 须使用相同扩展。
     pub invocation_reorder: bool,
+    /// KHR pipeline executable properties 扩展及 pipelineExecutableInfo feature。
+    /// 启用后 RT 管线捕获统计；仅用于独立分析，不与正常计时混用。
+    pub pipeline_statistics: bool,
 }
 
 /// 设备默认 subgroup 规模、compute 操作与可请求的规模范围。
@@ -73,9 +80,12 @@ pub struct SubgroupProperties {
 impl Capabilities {
     pub(crate) const fn validate(self) -> Result<(), Error> {
         if !self.ray_tracing
-            && (self.position_fetch || self.opacity_micromap || self.invocation_reorder)
+            && (self.position_fetch
+                || self.opacity_micromap
+                || self.invocation_reorder
+                || self.pipeline_statistics)
         {
-            return Err(Error::InvalidArgument("position fetch、OMM 和 SER 依赖 RT"));
+            return Err(Error::InvalidArgument("附加光追能力依赖 RT"));
         }
         Ok(())
     }
@@ -313,6 +323,7 @@ impl Context {
             position_fetch: raw.capabilities.position_fetch,
             opacity_micromap: raw.capabilities.opacity_micromap,
             invocation_reorder: raw.capabilities.invocation_reorder,
+            pipeline_statistics: raw.capabilities.pipeline_statistics,
         }))
     }
     /// 实际启用能力。
@@ -322,6 +333,7 @@ impl Context {
             position_fetch: self.device.position_fetch,
             opacity_micromap: self.device.opacity_micromap,
             invocation_reorder: self.device.invocation_reorder,
+            pipeline_statistics: self.device.pipeline_statistics,
         }
     }
     /// native backing allocation 字节数，包含 AS 分配池闲置显存。
@@ -2276,7 +2288,7 @@ pub struct RayStackSizes {
     pub raygen: u64,
     /// Miss general shader的驱动栈需求。
     pub miss: u64,
-    /// 三角形hit group中closest-hit shader的驱动栈需求。
+    /// 所有三角形hit group中closest-hit shader的最大驱动栈需求。
     pub closest_hit: u64,
     /// 存在any-hit shader时的驱动栈需求；None表示未链接该阶段。
     pub any_hit: Option<u64>,
@@ -2306,6 +2318,19 @@ impl Destroy for RawRayProgram {
     }
 }
 impl RayTracingPipeline {
+    /// 查询驱动公开的可执行统计；字段和执行单元划分由驱动定义，可能为空。
+    ///
+    /// 创建 Context 时须显式启用 [`Capabilities::pipeline_statistics`]；重绑定复用
+    /// 同一已捕获 program。不会执行或等待 GPU；返回值不借用管线。
+    /// # Errors
+    /// 未启用能力、标识已回收或不属于此 Context、Vulkan 查询失败时返回错误。
+    pub fn executable_statistics(
+        &self,
+        context: &Context,
+    ) -> Result<Vec<ExecutableStatistics>, Error> {
+        let program = self.data(context)?.program();
+        pipeline_statistics::query(context, context.ray_program(program)?.raw().pipeline)
+    }
     /// 返回创建program时缓存的驱动栈需求；descriptor重绑定复用同一份数值。
     /// 标识不属于此Context或资源已回收时返回错误；此查询不录制命令，也不设置dynamic stack。
     pub fn stack_sizes(&self, context: &Context) -> Result<RayStackSizes, Error> {
@@ -2332,8 +2357,45 @@ impl RayTracingPipeline {
         any_hit: Option<RayShader<'_>>,
         callables: &[RayShader<'_>],
     ) -> Result<Self, Error> {
+        let [raygen, miss, closest_hit] = shaders;
+        Self::with_hit_groups(
+            context,
+            bindings,
+            raygen,
+            miss,
+            &[closest_hit],
+            any_hit,
+            callables,
+        )
+    }
+
+    /// 创建单层 RT pipeline，按切片顺序建立三角形 Hit Group 的 SBT 记录。
+    ///
+    /// `closest_hits` 至少含一项；所有记录共享可选覆盖率过滤。普通追踪及
+    /// HitObject 的表索引均相对此切片，callable 索引独立从零开始。
+    /// shader 的 payload、索引范围及无环调用图由受控构建保证；本函数不保留借用。
+    ///
+    /// # Errors
+    /// 空命中表、数量或布局溢出、设备不支持及 Vulkan 创建失败时返回错误。
+    pub fn with_hit_groups(
+        context: &mut Context,
+        bindings: Bindings,
+        raygen: RayShader<'_>,
+        miss: RayShader<'_>,
+        closest_hits: &[RayShader<'_>],
+        any_hit: Option<RayShader<'_>>,
+        callables: &[RayShader<'_>],
+    ) -> Result<Self, Error> {
         context.active(bindings.key)?;
-        let data = create_ray_program(context, bindings, shaders, any_hit, callables)?;
+        let data = create_ray_program(
+            context,
+            bindings,
+            raygen,
+            miss,
+            closest_hits,
+            any_hit,
+            callables,
+        )?;
         let program = context.insert(Data::RayProgram(data))?;
         match context.insert(Data::Ray(RayVersion::new(bindings, program))) {
             Ok(key) => Ok(Self { key }),
@@ -2453,15 +2515,25 @@ impl ComputePipeline {
 fn create_ray_program(
     context: &Context,
     bindings: Bindings,
-    shaders: [RayShader<'_>; 3],
+    raygen: RayShader<'_>,
+    miss: RayShader<'_>,
+    closest_hits: &[RayShader<'_>],
     any_hit: Option<RayShader<'_>>,
     callables: &[RayShader<'_>],
 ) -> Result<RayProgram, Error> {
     let bindings = bindings.data(context)?;
     let set_layout = bindings.layout();
+    if closest_hits.is_empty() {
+        return Err(Error::InvalidArgument("RT 命中表不能为空"));
+    }
+    let callable_group_base = closest_hits
+        .len()
+        .checked_add(2)
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or(Error::InvalidArgument("RT hit group 数量溢出"))?;
     let group_count = callables
         .len()
-        .checked_add(3)
+        .checked_add(callable_group_base as usize)
         .and_then(|count| u32::try_from(count).ok())
         .ok_or(Error::InvalidArgument("RT shader group 数量溢出"))?;
     if any_hit.is_some() && group_count == u32::MAX {
@@ -2496,9 +2568,14 @@ fn create_ray_program(
     let mut kinds = vec![
         vk::ShaderStageFlags::RAYGEN_KHR,
         vk::ShaderStageFlags::MISS_KHR,
-        vk::ShaderStageFlags::CLOSEST_HIT_KHR,
     ];
-    let mut sources: Vec<_> = shaders.iter().collect();
+    kinds.extend(std::iter::repeat_n(
+        vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        closest_hits.len(),
+    ));
+    let mut sources = vec![&raygen, &miss];
+    sources.extend(closest_hits);
+    let any_hit_stage = any_hit.as_ref().map(|_| sources.len() as u32);
     if let Some(ref shader) = any_hit {
         sources.push(shader);
         kinds.push(vk::ShaderStageFlags::ANY_HIT_KHR);
@@ -2536,25 +2613,26 @@ fn create_ray_program(
         blank
             .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
             .general_shader(1),
+    ];
+    groups.extend((0..closest_hits.len()).map(|i| {
         blank
             .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-            .closest_hit_shader(2)
-            .any_hit_shader(if any_hit.is_some() {
-                3
-            } else {
-                vk::SHADER_UNUSED_KHR
-            }),
-    ];
+            .closest_hit_shader(2 + i as u32)
+            .any_hit_shader(any_hit_stage.unwrap_or(vk::SHADER_UNUSED_KHR))
+    }));
     groups.extend((0..callables.len()).map(|i| {
         blank
             .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
             .general_shader(callable_base + i as u32)
     }));
-    let flags = if context.device.opacity_micromap {
+    let mut flags = if context.device.opacity_micromap {
         vk::PipelineCreateFlags::RAY_TRACING_OPACITY_MICROMAP_KHR
     } else {
         vk::PipelineCreateFlags::empty()
     };
+    if context.device.pipeline_statistics {
+        flags |= vk::PipelineCreateFlags::CAPTURE_STATISTICS_KHR;
+    }
     let mut robustness = vk::PipelineRobustnessCreateInfo::default()
         .storage_buffers(vk::PipelineRobustnessBufferBehavior::DISABLED)
         .uniform_buffers(vk::PipelineRobustnessBufferBehavior::DISABLED)
@@ -2587,8 +2665,8 @@ fn create_ray_program(
             return Err(error.into());
         }
     };
-    // SAFETY: pipeline已在同一Device成功创建；group0/1为general，group2含closest-hit，
-    // any-hit仅在实际链接时查询。callable group固定从3开始，独立于shader stage编号。
+    // SAFETY: 同一Device成功创建的pipeline；group0/1为general，其后三角形组均含
+    // closest-hit及同一个可选any-hit。callable区间独立于shader stage编号。
     result.stack_sizes = unsafe {
         let stack = |group, shader| {
             result
@@ -2598,15 +2676,18 @@ fn create_ray_program(
         RayStackSizes {
             raygen: stack(0, vk::ShaderGroupShaderKHR::GENERAL),
             miss: stack(1, vk::ShaderGroupShaderKHR::GENERAL),
-            closest_hit: stack(2, vk::ShaderGroupShaderKHR::CLOSEST_HIT),
+            closest_hit: (2..callable_group_base)
+                .map(|group| stack(group, vk::ShaderGroupShaderKHR::CLOSEST_HIT))
+                .max()
+                .unwrap_or(0),
             any_hit: any_hit
                 .is_some()
                 .then(|| stack(2, vk::ShaderGroupShaderKHR::ANY_HIT)),
-            callable_max: (3..group_count)
+            callable_max: (callable_group_base..group_count)
                 .map(|group| stack(group, vk::ShaderGroupShaderKHR::GENERAL))
                 .max()
                 .unwrap_or(0),
-            callable_count: group_count - 3,
+            callable_count: group_count - callable_group_base,
         }
     };
     drop(modules);
@@ -2634,9 +2715,18 @@ fn create_ray_program(
     let callable_size = stride
         .checked_mul(callables.len())
         .ok_or(Error::InvalidArgument("callable SBT 大小溢出"))?;
-    let byte_count = spacing
-        .checked_mul(3)
-        .and_then(|n| n.checked_add(callable_size))
+    let hit_size = stride
+        .checked_mul(closest_hits.len())
+        .ok_or(Error::InvalidArgument("hit SBT 大小溢出"))?;
+    let callable_offset = spacing
+        .checked_mul(2)
+        .and_then(|offset| offset.checked_add(hit_size))
+        .and_then(|offset| {
+            offset.checked_next_multiple_of(properties.shader_group_base_alignment as usize)
+        })
+        .ok_or(Error::InvalidArgument("SBT 对齐溢出"))?;
+    let byte_count = callable_offset
+        .checked_add(callable_size)
         .ok_or(Error::InvalidArgument("SBT 大小溢出"))?;
     let handles = unsafe {
         result.loader.get_ray_tracing_shader_group_handles(
@@ -2652,10 +2742,12 @@ fn create_ray_program(
     bytes.try_reserve_exact(byte_count)?;
     bytes.resize(byte_count, 0);
     for i in 0..groups.len() {
-        let offset = if i < 3 {
+        let offset = if i < 2 {
             i * spacing
+        } else if i < callable_group_base as usize {
+            spacing * 2 + (i - 2) * stride
         } else {
-            spacing * 3 + (i - 3) * stride
+            callable_offset + (i - callable_group_base as usize) * stride
         };
         bytes[offset..offset + handle_size]
             .copy_from_slice(&handles[i * handle_size..(i + 1) * handle_size]);
@@ -2672,9 +2764,13 @@ fn create_ray_program(
             Default::default()
         } else {
             vk::StridedDeviceAddressRegionKHR {
-                device_address: address + (i * spacing) as u64,
+                device_address: address + if i == 3 { callable_offset } else { i * spacing } as u64,
                 stride: stride as u64,
-                size: if i == 3 { callable_size } else { stride } as u64,
+                size: match i {
+                    2 => hit_size,
+                    3 => callable_size,
+                    _ => stride,
+                } as u64,
             }
         }
     });

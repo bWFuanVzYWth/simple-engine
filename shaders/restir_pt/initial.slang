@@ -45,6 +45,43 @@ public struct InitialResult
     public float3 residual;
 };
 
+/// 初采追踪上下文只属于当前raygen；trace发布的新命中供下一次shade消费。
+/// 已知表面的shift/sample/evaluate不经过此入口，继续由IRestirScene管理。
+public interface IInitialTrace<Scene : IRestirScene, State>
+{
+    [mutating]
+    bool trace(inout Scene scene, inout State state, float3 origin, float3 direction,
+               out HitInfo hit, out float distance);
+    /// 当前新命中的表面；fromOrigin区分观察位置和已知wo，不能用于历史或光端点。
+    Surface load(inout Scene scene, inout State state, HitInfo hit, float3 view, bool fromOrigin);
+    [mutating]
+    InitialShading shade(inout Scene scene, inout State state, Surface surface, float3 u,
+                         float3 direction, float3 secondDirection, bool continuation);
+};
+
+/// 兼容原始TraceRay/callable实现；无额外状态或运行时分支。
+public struct InitialTrace<Scene : IRestirScene> : IInitialTrace<Scene, uint>
+{
+    [mutating]
+    public bool trace(inout Scene scene, inout uint state, float3 origin, float3 direction,
+                      out HitInfo hit, out float distance)
+    {
+        return scene.trace(origin, direction, false, hit, distance);
+    }
+    public Surface load(inout Scene scene, inout uint state, HitInfo hit, float3 view,
+                        bool fromOrigin)
+    {
+        return fromOrigin ? scene.loadSurfaceFromOrigin(hit, view, false)
+                          : scene.loadSurface(hit, view, false);
+    }
+    [mutating]
+    public InitialShading shade(inout Scene scene, inout uint state, Surface surface, float3 u,
+                                float3 direction, float3 secondDirection, bool continuation)
+    {
+        return scene.shadeInitial(surface, u, direction, secondDirection, continuation);
+    }
+};
+
 // 只保留bounce起点；LCG跳跃在模2^32上与逐维next完全相同。
 uint initialRandomState<let Dimension : uint>(uint seed)
 {
@@ -121,6 +158,21 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
     inout Scene scene, uint2 pixel, HitInfo primaryHit, uint initialSeed, uint maxSurfaceBounces,
     ShiftSettings settings, bool useRussianRoulette, bool useNEE, bool useMIS)
 {
+    InitialTrace<Scene> tracer;
+    uint state = 0;
+    return sampleInitialPathTraced<Scene, uint, InitialTrace<Scene>, LightSamples>(
+        scene, tracer, state, pixel, primaryHit, initialSeed, maxSurfaceBounces, settings,
+        useRussianRoulette, useNEE, useMIS);
+}
+
+/// primaryHit须由同一个tracer.trace产生；每次新命中仅在下一顶点着色前有效。
+/// tracer拥有硬件命中状态，算法不复制或持久化它；其余随机域、RIS及可见性不变。
+public InitialResult sampleInitialPathTraced<
+    Scene : IRestirScene, State, Trace : IInitialTrace<Scene, State>, let LightSamples : uint = 1>(
+    inout Scene scene, inout Trace tracer, inout State state, uint2 pixel, HitInfo primaryHit,
+    uint initialSeed, uint maxSurfaceBounces, ShiftSettings settings, bool useRussianRoulette,
+    bool useNEE, bool useMIS)
+{
     static_assert(LightSamples == 1 || LightSamples == 2,
                   "initial NEE supports one or two families");
     InitialResult result = {};
@@ -132,7 +184,7 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
             exp(-scene.initialMedium(pixel).yzw * scene.environmentDistance());
         return result;
     }
-    Surface surface = scene.loadSurfaceFromOrigin(primaryHit, scene.initialOrigin(pixel), false);
+    Surface surface = tracer.load(scene, state, primaryHit, scene.initialOrigin(pixel), true);
     // primary 的物理生产者是实际相机射线；不从有限精度重建点重新推导另一条方向。
     surface.wo = -scene.initialDirection(pixel);
     scene.setIncident(surface, scene.initialMedium(pixel));
@@ -182,8 +234,8 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
         }
         InitialShading shading = {};
         if (depth < maxSurfaceBounces)
-            shading = scene.shadeInitial(
-                surface,
+            shading = tracer.shade(
+                scene, state, surface,
                 rouletteKilled ? float3(0.0) : initialBsdfRandom(bounceSeed, useRussianRoulette),
                 neeDirection, secondNEEDirection, !rouletteKilled);
         if (depth < maxSurfaceBounces)
@@ -349,7 +401,7 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
         float3 origin = geometry::offset_origin(surface.point, scatter.direction);
         HitInfo hit = {};
         float distance;
-        bool found = scene.trace(origin, scatter.direction, false, hit, distance);
+        bool found = tracer.trace(scene, state, origin, scatter.direction, hit, distance);
         if (!found)
         {
             float uBSDFRIS = sampler.next1D();
@@ -383,7 +435,7 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
         throughput *= attenuation;
         rc.rcThroughput *= attenuation;
         previousSegmentTransmittance = attenuation;
-        Surface next = scene.loadSurface(hit, -scatter.direction, false);
+        Surface next = tracer.load(scene, state, hit, -scatter.direction, false);
         scene.setIncident(next, scatter.medium);
         segment = replaySegment(surface, next, scatterPdf);
         previousSurface = surface;

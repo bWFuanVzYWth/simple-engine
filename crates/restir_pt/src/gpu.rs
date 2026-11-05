@@ -326,9 +326,13 @@ pub struct Programs<'a> {
     pub miss: RayShader<'a>,
     /// 场景紧凑命中重建。
     pub closest_hit: RayShader<'a>,
+    /// 初采新命中的材质closest-hit；追加在几何命中记录之后。
+    /// 已知表面的重放和求值继续使用独立callable表，不链接这些命中程序。
+    pub initial_hits: &'a [RayShader<'a>],
     /// 可选主查询alpha过滤；RayQuery覆盖规则仍由场景维护。
     pub any_hit: Option<RayShader<'a>>,
     /// 初采控制流叶子；数量可独立于重放/求值，索引及类型由对应raygen的构建契约保证。
+    /// 使用非空 initial_hits 时允许为空，避免链接不会调用的初采 callable。
     pub initial_callables: &'a [RayShader<'a>],
     /// 两个replay阶段共用的Flow叶子。
     pub replay_callables: &'a [RayShader<'a>],
@@ -415,23 +419,27 @@ impl TemporalPipeline {
 }
 
 impl Pipelines {
-    fn program_stack_sizes(
-        &self,
-        context: &Context,
-    ) -> Result<Vec<(Stage, RayStackSizes)>, vulkan::Error> {
+    fn ray_programs(&self) -> [(Stage, Option<RayTracingPipeline>); 6] {
         let temporal_merge = match &self.temporal_merge {
             TemporalPipeline::Ray(pipeline) => Some(*pipeline),
             TemporalPipeline::Compute(_) => None,
         };
-        let mut sizes = Vec::with_capacity(6);
-        for (stage, pipeline) in [
+        [
             (Stage::Primary, self.primary),
             (Stage::Initial, Some(self.initial)),
             (Stage::TemporalReplay, self.temporal_replay),
             (Stage::TemporalMerge, temporal_merge),
             (Stage::SpatialReplay, self.spatial_replay),
             (Stage::SpatialPrecompute, Some(self.spatial_precompute)),
-        ] {
+        ]
+    }
+
+    fn program_stack_sizes(
+        &self,
+        context: &Context,
+    ) -> Result<Vec<(Stage, RayStackSizes)>, vulkan::Error> {
+        let mut sizes = Vec::with_capacity(6);
+        for (stage, pipeline) in self.ray_programs() {
             if let Some(pipeline) = pipeline {
                 sizes.push((stage, pipeline.stack_sizes(context)?));
             }
@@ -488,13 +496,13 @@ impl Pipelines {
         };
         let fused = if fusion != Fusion::NONE {
             let count = programs.replay_callables.len();
-            if programs.initial_callables.is_empty()
+            if (programs.initial_callables.is_empty() && programs.initial_hits.is_empty())
                 || count == 0
                 || count > u32::MAX as usize / 2
                 || programs.evaluate_callables.len() != count
             {
                 return Err(vulkan::Error::InvalidArgument(
-                    "融合SBT须含初采叶子和两组非空等长、合计可由u32索引的重放/求值叶子",
+                    "融合SBT须含初采命中或callable叶子，以及两组非空等长、合计可由u32索引的重放/求值叶子",
                 )
                 .into());
             }
@@ -527,6 +535,9 @@ impl Pipelines {
             .chain(shift_callables)
             .copied()
             .collect();
+        let initial_hits: Vec<_> = std::iter::once(programs.closest_hit)
+            .chain(programs.initial_hits.iter().copied())
+            .collect();
         Ok(Self {
             ray_launch: programs.ray_launch,
             primary: if fusion.primary_initial {
@@ -534,15 +545,19 @@ impl Pipelines {
             } else {
                 Some(ray(context, programs.primary, &[])?)
             },
-            initial: if fusion.primary_initial {
-                ray(
-                    context,
-                    fused.expect("融合程序已验证").initial,
-                    programs.initial_callables,
-                )?
-            } else {
-                ray(context, programs.initial, programs.initial_callables)?
-            },
+            initial: RayTracingPipeline::with_hit_groups(
+                context,
+                bindings,
+                if fusion.primary_initial {
+                    fused.expect("融合程序已验证").initial
+                } else {
+                    programs.initial
+                },
+                programs.miss,
+                &initial_hits,
+                programs.any_hit,
+                programs.initial_callables,
+            )?,
             temporal_work: if fusion.temporal || fusion.temporal_split {
                 None
             } else {
@@ -793,6 +808,21 @@ impl Renderer<SharedBuffer> {
 }
 
 impl<B> Renderer<B> {
+    /// 按逻辑 RT 阶段查询链接后的驱动统计；须显式启用 native 统计能力。
+    /// compute 阶段不出现；不执行 GPU，查询或资源错误保留底层来源。
+    pub fn executable_statistics(
+        &self,
+        context: &Context,
+    ) -> Result<Vec<(Stage, Vec<vulkan::native::ExecutableStatistics>)>, Error> {
+        let mut result = Vec::with_capacity(6);
+        for (stage, pipeline) in self.pipelines.ray_programs() {
+            if let Some(pipeline) = pipeline {
+                result.push((stage, pipeline.executable_statistics(context)?));
+            }
+        }
+        Ok(result)
+    }
+
     /// 按逻辑阶段顺序返回实际RT program缓存的驱动栈需求；compute阶段不出现在结果中。
     /// 每次调用分配至多六项的Vec，不查询驱动或录制命令；配置的temporal RT在冷帧仍可查询。
     /// 标识已回收或Context不匹配时保留底层错误；返回值不是寄存器数或实际每ray分配。

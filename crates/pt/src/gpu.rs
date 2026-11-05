@@ -31,6 +31,9 @@ pub struct Programs<'a> {
     pub miss: RayShader<'a>,
     /// 场景几何命中重建。
     pub closest_hit: RayShader<'a>,
+    /// 可选材质 closest-hit；追加在几何命中记录之后，仅链接到K2。
+    /// 非空时K2须使用同一资源计划的相对索引加一，不执行嵌套追踪。
+    pub material_hits: &'a [RayShader<'a>],
     /// 可选 alpha 覆盖率过滤；callable 内的 RayQuery 仍由适配器自行确认候选。
     pub any_hit: Option<RayShader<'a>>,
     /// 资源世代去重的控制流程序，顺序与适配器的紧凑 SBT 索引一致。
@@ -70,10 +73,15 @@ impl Renderer {
             programs.any_hit,
             &[],
         )?;
-        let transport = RayTracingPipeline::new(
+        let hits: Vec<_> = std::iter::once(programs.closest_hit)
+            .chain(programs.material_hits.iter().copied())
+            .collect();
+        let transport = RayTracingPipeline::with_hit_groups(
             context,
             trace,
-            [programs.transport, programs.miss, programs.closest_hit],
+            programs.transport,
+            programs.miss,
+            &hits,
             programs.any_hit,
             programs.callables,
         )?;
@@ -115,6 +123,18 @@ impl Renderer {
     /// 当前发布的三阶段版本；供唯一 owner 的资源回收使用。
     pub fn roots(&self) -> [Resource; 3] {
         [self.prefix.into(), self.transport.into(), self.post.into()]
+    }
+
+    /// 按 K1、K2 顺序返回链接后驱动可执行统计；须显式启用 native 统计能力。
+    /// 不执行 GPU，不含 compute K3；资源或查询错误原样返回。
+    pub fn executable_statistics(
+        &self,
+        context: &Context,
+    ) -> Result<[Vec<vulkan::native::ExecutableStatistics>; 2], Error> {
+        Ok([
+            self.prefix.executable_statistics(context)?,
+            self.transport.executable_statistics(context)?,
+        ])
     }
 
     /// 目标宽高；公共 HDR 按左上原点解释，宿主呈现转换单独执行。

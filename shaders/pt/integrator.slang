@@ -203,14 +203,35 @@ public void process_material<let Capability : uint, let Emissive : bool = false,
     data.path = path;
 }
 
-bool visible_flow<let Flow : uint, Scene>(Scene scene, Hit hit, SurfaceMaterial material,
-                                          float3 view, LightSample light, float4 medium)
+bool visible_flow<let Flow : uint, Scene, let Deferred : bool = false>(
+    Scene scene, Hit hit, SurfaceMaterial material, float3 view, LightSample light, float4 medium)
     where Scene : IFlowScene
 {
     return light.pdf > 0 &&
            openpbr::may_evaluate_flow<Flow>(material.pbr, shading_normal(hit, material), view,
                                             light.direction, medium, material.transmitted) &&
-           !scene.occluded(light.visibility);
+           (Deferred || !scene.occluded(light.visibility));
+}
+
+/// 不含光源辐射的两族贡献；材质阶段已折叠BSDF、MIS、介质和路径吞吐量。
+/// raygen按相同采样身份重建光样本并查询可见性后消费，不持久化射线或材质闭包。
+public struct DirectWeights
+{
+    public float3 sun;
+    public float3 lamp;
+};
+
+float3 direct_weight<let Flow : uint>(geometry::SurfacePoint point, float3 view, float4 incident,
+                                      float4 transmitted, LightSample light, float4 evaluated,
+                                      float3 throughput)
+{
+    float3 extinction = incident.yzw;
+    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
+        dot(view, point.normal) * dot(light.direction, point.normal) < 0)
+        extinction = transmitted.yzw;
+    return throughput * triple_product(evaluated.xyz,
+                                       segment_transmittance(extinction, light.distance),
+                                       evaluated.w);
 }
 
 float4 direct_evaluation(openpbr::Evaluation evaluated, float light_pdf, bool continuation)
@@ -237,7 +258,8 @@ float3 direct_contribution<let Flow : uint, Scene>(Scene scene, geometry::Surfac
 }
 
 // 太阳只折叠 MIS，面灯立即形成最终贡献；大气求值始终在共享 BSDF 状态结束之后。
-struct FlowLighting<let Flow : uint, Scene> : openpbr::IFlowEvaluationConsumer
+struct FlowLighting<let Flow : uint, Scene, let Deferred : bool = false>
+    : openpbr::IFlowEvaluationConsumer
     where Scene : IFlowScene
 {
     Scene scene;
@@ -252,6 +274,7 @@ struct FlowLighting<let Flow : uint, Scene> : openpbr::IFlowEvaluationConsumer
     float4 sun_evaluated;
     float3 lamp_radiance;
     bool lamp_valid;
+    float3 lamp_weight;
 
     [mutating]
     void consume(uint direction, openpbr::Evaluation evaluated)
@@ -263,8 +286,13 @@ struct FlowLighting<let Flow : uint, Scene> : openpbr::IFlowEvaluationConsumer
             float4 response = direct_evaluation(evaluated, light.pdf, continuation);
             if (any(response.xyz > 0))
             {
-                lamp_radiance = direct_contribution<Flow>(scene, point, view, incident, transmitted,
-                                                          light, response, false, throughput);
+                if (Deferred)
+                    lamp_weight = direct_weight<Flow>(point, view, incident, transmitted, light,
+                                                      response, throughput);
+                else
+                    lamp_radiance =
+                        direct_contribution<Flow>(scene, point, view, incident, transmitted, light,
+                                                  response, false, throughput);
                 lamp_valid = true;
             }
         }
@@ -280,6 +308,18 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
                                                               Settings settings)
     where Scene : IFlowScene
 {
+    DirectWeights unused;
+    process_flow_vertex<Flow, Scene, LightMask, CompleteTransport, false>(scene, data, settings,
+                                                                          unused);
+}
+
+/// Deferred=true时不在材质叶子中追踪阴影或读取光源辐射；调用者消费weights。
+public void process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3,
+                                let CompleteTransport : bool = true, let Deferred : bool = true>(
+    Scene scene, inout TransportCall data, Settings settings, out DirectWeights weights)
+    where Scene : IFlowScene
+{
+    weights = {};
     static_assert((LightMask & ~3u) == 0u, "unknown light strategy mask");
     PathState path = {};
     path.direction = data.path.direction;
@@ -312,13 +352,13 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
         if ((LightMask & 1u) != 0u)
         {
             sun = scene.sample_sun(hit.surface, sampler.sun(path.depth));
-            if (visible_flow<Flow>(scene, hit, material, view, sun, path.medium))
+            if (visible_flow<Flow, Scene, Deferred>(scene, hit, material, view, sun, path.medium))
                 evaluation_mask |= 1u;
         }
         if ((LightMask & 2u) != 0u)
         {
             light = scene.sample_light(hit.surface, sampler.light(path.depth));
-            if (visible_flow<Flow>(scene, hit, material, view, light, path.medium))
+            if (visible_flow<Flow, Scene, Deferred>(scene, hit, material, view, light, path.medium))
                 evaluation_mask |= 2u;
         }
     }
@@ -330,7 +370,7 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
                  openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0u &&
         continuation && !limited)
         bsdf_sample = sampler.bsdf(path.depth);
-    FlowLighting<Flow, Scene> lighting = {};
+    FlowLighting<Flow, Scene, Deferred> lighting = {};
     lighting.scene = scene;
     lighting.point = hit.surface;
     lighting.view = view;
@@ -341,7 +381,8 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
     lighting.throughput = path.throughput;
     lighting.continuation = continuation;
     openpbr::Sample scattered =
-        openpbr::shade_flow_consume<Flow, openpbr::Energy, FlowLighting<Flow, Scene>, LightMask>(
+        openpbr::shade_flow_consume<Flow, openpbr::Energy, FlowLighting<Flow, Scene, Deferred>,
+                                    LightMask>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             light.direction, evaluation_mask, bsdf_sample, continuation && !limited, path.medium,
             material.transmitted, lighting);
@@ -350,10 +391,19 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
          0u))
     {
         if ((LightMask & 1u) != 0u && any(lighting.sun_evaluated.xyz > 0))
-            path.radiance += direct_contribution<Flow>(
-                scene, hit.surface, view, path.medium, material.transmitted, sun,
-                lighting.sun_evaluated, true, path.throughput);
-        if ((LightMask & 2u) != 0u && lighting.lamp_valid)
+        {
+            if (Deferred)
+                weights.sun =
+                    direct_weight<Flow>(hit.surface, view, path.medium, material.transmitted, sun,
+                                        lighting.sun_evaluated, path.throughput);
+            else
+                path.radiance += direct_contribution<Flow>(
+                    scene, hit.surface, view, path.medium, material.transmitted, sun,
+                    lighting.sun_evaluated, true, path.throughput);
+        }
+        if (Deferred)
+            weights.lamp = lighting.lamp_weight;
+        else if ((LightMask & 2u) != 0u && lighting.lamp_valid)
             path.radiance += lighting.lamp_radiance;
     }
     if (!continuation)

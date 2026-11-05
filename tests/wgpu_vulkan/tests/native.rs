@@ -13,6 +13,66 @@ use simple_engine::{
 use std::{error::Error, sync::mpsc};
 
 #[test]
+#[ignore = "需要真实Vulkan EXT SER设备；独占GPU"]
+fn hit_object_dispatch_keeps_hit_and_callable_indices_independent() -> Result<(), Box<dyn Error>> {
+    gpu_log::checked(|| {
+        let mut context = pollster::block_on(WgpuContext::new())?;
+        let geometry = context
+            .native()
+            .triangle_blas(&[[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]], true)?;
+        let scene = context.native().acceleration_instances(&[
+            simple_engine::vulkan::TriangleInstance {
+                geometry,
+                transform: [[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
+                custom_index: 17,
+            },
+        ])?;
+        let output = native::Buffer::new(context.native(), 64 * 16, true)?;
+        let bindings = native::Bindings::new(
+            context.native(),
+            &[Binding::Acceleration(scene), Binding::StorageBuffer(output)],
+        )?;
+        macro_rules! shader {
+            ($name:literal) => {
+                RayShader {
+                    spirv: include_bytes!(concat!(env!("OUT_DIR"), "/", $name, ".spv")),
+                    entry: std::ffi::CStr::from_bytes_with_nul(concat!($name, "\0").as_bytes())
+                        .unwrap(),
+                }
+            };
+        }
+        let program = native::RayTracingPipeline::with_hit_groups(
+            context.native(),
+            bindings,
+            shader!("hit_groups_raygen"),
+            shader!("hit_groups_miss"),
+            &[
+                shader!("hit_groups_first"),
+                shader!("hit_groups_second"),
+                shader!("hit_groups_third"),
+            ],
+            None,
+            &[shader!("hit_groups_add"), shader!("hit_groups_scale")],
+        )?;
+        let mut commands = native::Commands::new(context.native())?;
+        commands.trace(program, [64, 1])?;
+        commands
+            .finish(context.native())?
+            .submit_and_wait(context.native())?;
+        let mut bytes = vec![0; 64 * 16];
+        output.read(context.native(), 0, &mut bytes)?;
+        for (index, record) in bytes.as_chunks::<16>().0.iter().enumerate() {
+            let value = (index as u32 % 3 + 1) * 10;
+            let expected = if index % 2 == 0 { value + 3 } else { value * 2 };
+            let words: [u32; 4] =
+                std::array::from_fn(|i| u32::from_le_bytes(record.as_chunks::<4>().0[i]));
+            assert_eq!(words, [expected, 1f32.to_bits(), 17, 0], "lane {index}");
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn reorder_shader_uses_ext_contract() {
     let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/reorder_raygen.spv"));
     let words: Vec<_> = bytes

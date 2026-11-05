@@ -118,6 +118,7 @@ impl WgpuContext {
                 position_fetch: ray_tracing,
                 opacity_micromap: false,
                 invocation_reorder: false,
+                pipeline_statistics: false,
             },
             features,
             ray_tracing,
@@ -191,6 +192,7 @@ impl WgpuContext {
                 position_fetch: ray_tracing,
                 opacity_micromap: false,
                 invocation_reorder: false,
+                pipeline_statistics: false,
             },
             features,
             ray_tracing,
@@ -306,6 +308,15 @@ impl WgpuContext {
         let mut invocation_reorder =
             vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT::default();
         let mut pipeline_robustness = false;
+        let mut pipeline_statistics =
+            vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default();
+        if capabilities.pipeline_statistics
+            && !physical.supports_extensions(&[khr::pipeline_executable_properties::NAME])?
+        {
+            return Err(Error::Unsupported(
+                "设备不支持 VK_KHR_pipeline_executable_properties",
+            ));
+        }
         if ray_tracing {
             if !physical.supports_extensions(&[khr::ray_query::NAME])? {
                 return Err(Error::Unsupported("设备不支持 VK_KHR_ray_query"));
@@ -338,6 +349,9 @@ impl WgpuContext {
                 .push(&mut query)
                 .push(&mut robustness)
                 .push(&mut synchronization2);
+            if capabilities.pipeline_statistics {
+                supported = supported.push(&mut pipeline_statistics);
+            }
             if position_fetch_enabled {
                 supported = supported.push(&mut position_fetch);
             }
@@ -354,6 +368,10 @@ impl WgpuContext {
                     .get_physical_device_features2(physical.raw, &mut supported)
             };
             pipeline_robustness = robustness.pipeline_robustness != 0;
+            if capabilities.pipeline_statistics && pipeline_statistics.pipeline_executable_info == 0
+            {
+                return Err(Error::Unsupported("设备不支持 pipelineExecutableInfo"));
+            }
             if !physical.supports_extensions(&extensions)?
                 || address.buffer_device_address == 0
                 || address_commands.device_address_commands == 0
@@ -414,6 +432,9 @@ impl WgpuContext {
             .pipeline_robustness(pipeline_robustness);
         invocation_reorder = vk::PhysicalDeviceRayTracingInvocationReorderFeaturesEXT::default()
             .ray_tracing_invocation_reorder(invocation_reorder_enabled);
+        pipeline_statistics = vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR::default()
+            .pipeline_executable_info(capabilities.pipeline_statistics);
+        let pipeline_statistics = &mut pipeline_statistics;
         let address = &mut address;
         let address_commands = &mut address_commands;
         let acceleration = &mut acceleration;
@@ -460,6 +481,11 @@ impl WgpuContext {
                         if !args.extensions.contains(&extension) {
                             args.extensions.push(extension);
                         }
+                    }
+                    if capabilities.pipeline_statistics {
+                        args.extensions
+                            .push(khr::pipeline_executable_properties::NAME);
+                        *create_info = (*create_info).push(pipeline_statistics);
                     }
                     if micromap_enabled {
                         args.extensions.push(khr::opacity_micromap::NAME);
@@ -565,6 +591,7 @@ impl WgpuContext {
             position_fetch: position_fetch_enabled,
             opacity_micromap: micromap_enabled,
             invocation_reorder: invocation_reorder_enabled,
+            pipeline_statistics: capabilities.pipeline_statistics,
         });
         drop(hal_device);
         let (completed_tx, completed_rx) = mpsc::channel();

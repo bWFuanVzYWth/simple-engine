@@ -99,6 +99,34 @@ fn main() -> Result<(), shader_build::Error> {
     })
     .into_iter()
     .collect::<Vec<_>>();
+    recipes.extend(
+        [
+            ("hit_groups_raygen", "raygeneration"),
+            ("hit_groups_miss", "miss"),
+            ("hit_groups_first", "closesthit"),
+            ("hit_groups_second", "closesthit"),
+            ("hit_groups_third", "closesthit"),
+            ("hit_groups_add", "callable"),
+            ("hit_groups_scale", "callable"),
+        ]
+        .into_iter()
+        .map(|(entry, stage)| Recipe {
+            source: "shaders/hit_groups.slang",
+            entry,
+            stage,
+            output: match entry {
+                "hit_groups_raygen" => "hit_groups_raygen.spv",
+                "hit_groups_miss" => "hit_groups_miss.spv",
+                "hit_groups_first" => "hit_groups_first.spv",
+                "hit_groups_second" => "hit_groups_second.spv",
+                "hit_groups_third" => "hit_groups_third.spv",
+                "hit_groups_add" => "hit_groups_add.spv",
+                _ => "hit_groups_scale.spv",
+            },
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-capability", "spvShaderInvocationReorderEXT"],
+        }),
+    );
     recipes.extend([
         Recipe {
             source: "shaders/sampled.slang",
