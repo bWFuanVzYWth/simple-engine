@@ -58,3 +58,9 @@
 pub const fn root() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/shaders")
 }
+
+/// Falcor point profile 的原始三组 paired 邻居表；每组 65536 个 little-endian u32。
+/// 与 `restir_pt.paired` 的尺寸和变换共同使用，不依赖工作目录或运行时源码路径。
+pub const fn restir_paired_neighbors() -> &'static [u8] {
+    include_bytes!("../shaders/restir_pt/paired.bin")
+}

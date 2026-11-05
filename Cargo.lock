@@ -2631,6 +2631,7 @@ dependencies = [
  "rectangle_decomposition",
  "render2d",
  "restir_pt",
+ "scene_cache",
  "shader_build",
  "sip_hash",
  "thiserror 2.0.21",

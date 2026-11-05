@@ -70,6 +70,11 @@ impl Timeline {
         self.compensation > 0.0
     }
 
+    /// 当前自动调节强度；供宿主在冻结画面时构造独立的即时测光参数。
+    pub const fn compensation(&self) -> f32 {
+        self.compensation
+    }
+
     /// 选择完整或零自动调节强度。启用或停用测光时重置适应历史。
     pub fn set_enabled(&mut self, enabled: bool) {
         self.set_compensation(if enabled { 1.0 } else { 0.0 })

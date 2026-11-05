@@ -17,7 +17,7 @@
 //! | `color` | 线性与编码色彩转换 |
 //! | `camera` | 正交 pinhole 相机、锚点相对坐标、无 jitter 矩阵与 Halton 偏移 |
 //! | `display` | Prime DRT 参数与自动曝光帧校验；叠加 `vulkan` 提供 GPU 直方图与时域适应 |
-//! | `openpbr` / `openpbr_gpu` | OpenPBR 能力子集材料与介质；后者增加原作者 HALF4 能量纹理 |
+//! | `openpbr` / `openpbr_program` / `openpbr_gpu` | OpenPBR 能力子集材料与介质；后两者分别增加 Slang 程序准备与原作者 HALF4 能量纹理 |
 //! | `pt` / `pt_gpu` | 场景无关的路径预算、样本事务；后者增加 Vulkan 三阶段录制 |
 //! | `restir_pt` / `restir_pt_gpu` | ReSTIR PT 默认point profile、Morton工作集与历史事务；后者增加十阶段Vulkan录制 |
 //! | `atmosphere` / `atmosphere_gpu` / `atmosphere_native` | 四波长球层大气参数；后两者提供 wgpu／native 多重散射、SkyView 与 Aerial owner |
@@ -29,6 +29,7 @@
 //! | `ui` | CPU GUI，包含 input 与 render2d/text |
 //! | `rectangle_decomposition` / `voxel_mesh` | 最少矩形划分、分层稀疏体素表面；后者包含前者 |
 //! | `chunk_manager` | 预算驱动的 3D LOD 区块规划、异步状态与资源所有权 |
+//! | `scene_cache` | 场景资源目录、属性槽与增量发布事务 |
 //! | `hash_dag` | 64 叉体素 DAG、批量读写、区域展开与 CPU 射线 |
 //! | `light_bvh` | quad 光源的空间功率树、选择及反向 PMF |
 //! | `light_sampling` | 任意quad面积采样及资源期发光纹理alias |
@@ -95,6 +96,8 @@ pub use perlin_noise;
 pub use rectangle_decomposition;
 #[cfg(feature = "render2d")]
 pub use render2d;
+#[cfg(feature = "scene_cache")]
+pub use scene_cache;
 #[cfg(feature = "shader_build")]
 pub use shader_build;
 #[cfg(feature = "sip_hash")]

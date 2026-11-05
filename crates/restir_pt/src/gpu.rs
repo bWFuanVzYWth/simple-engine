@@ -42,26 +42,28 @@ pub enum Error {
     UnsupportedSubgroup(SubgroupProperties),
 }
 
-/// 算法工作集；共享 handle 由本对象与 Context 内 descriptor/在途记录保活。
-/// 不得显式 destroy 借出的 wgpu buffer。大小按 padded N，两个 primary buffer 也各为16N。
-pub struct Buffers {
+/// 算法工作集；默认使用 wgpu SharedBuffer，原生入口使用 Context 拥有的 Buffer 标识。
+/// 两类存储复用相同布局与阶段；不得显式 destroy 借出的 wgpu buffer。
+/// 大小按 padded N，两个 primary buffer 也各为16N；发布绑定前保留原生 [`Self::roots`]。
+pub struct Buffers<B = SharedBuffer> {
     layout: Layout,
-    reservoirs: [SharedBuffer; 2],
-    primary_hits: [SharedBuffer; 2],
-    color_estimates: Option<[SharedBuffer; 2]>,
-    replay: Option<ReplayBuffers>,
-    neighbor_mask: SharedBuffer,
-    precomputed: SharedBuffer,
+    reservoirs: [B; 2],
+    primary_hits: [B; 2],
+    color_estimates: Option<[B; 2]>,
+    replay: Option<ReplayBuffers<B>>,
+    neighbor_mask: B,
+    precomputed: B,
+    native_roots: Vec<Buffer>,
 }
 
-struct ReplayBuffers {
-    reconnection: SharedBuffer,
-    offsets: SharedBuffer,
-    items: SharedBuffer,
+struct ReplayBuffers<B> {
+    reconnection: B,
+    offsets: B,
+    items: B,
     counter: Buffer,
 }
 
-impl Buffers {
+impl Buffers<SharedBuffer> {
     /// 创建完整工作集；SharedBuffer 初始化由同队列清零，不产生等长CPU零数组或host wait。
     /// 分配初始化可以提交清零，逐帧 Renderer::record 不提交。native counter 在每次生成队列前 GPU 清零。
     /// 分配失败时已创建共享 handle 自动释放；native 资源仍按 Context collect 契约管理。
@@ -137,57 +139,146 @@ impl Buffers {
             replay,
             neighbor_mask,
             precomputed,
+            native_roots: Vec::new(),
         })
     }
+}
 
+impl<B> Buffers<B> {
     /// 唯一已校验布局。
     pub const fn layout(&self) -> Layout {
         self.layout
     }
     /// A为initial/temporal结果，B为空间输出与下一帧历史。
-    pub const fn reservoirs(&self) -> &[SharedBuffer; 2] {
+    pub const fn reservoirs(&self) -> &[B; 2] {
         &self.reservoirs
     }
     /// current/history primary HitInfo，各按 padded N 分配。
-    pub const fn primary_hits(&self) -> &[SharedBuffer; 2] {
+    pub const fn primary_hits(&self) -> &[B; 2] {
         &self.primary_hits
     }
     /// 可选独立RGB估计，各为12N字节；A为initial/temporal，B为空间输出与历史。
     /// 清零只初始化资源，不代表颜色历史有效；宿主须独立维护其有效性。
-    pub const fn color_estimates(&self) -> Option<&[SharedBuffer; 2]> {
+    pub const fn color_estimates(&self) -> Option<&[B; 2]> {
         self.color_estimates.as_ref()
     }
     /// 分阶段重放的44B记录；两类重放均融合时不存在。
-    pub fn reconnection(&self) -> Option<&SharedBuffer> {
+    pub fn reconnection(&self) -> Option<&B> {
         self.replay.as_ref().map(|replay| &replay.reconnection)
     }
     /// Q个u32重放结果索引。
-    pub fn reconnection_offsets(&self) -> Option<&SharedBuffer> {
+    pub fn reconnection_offsets(&self) -> Option<&B> {
         self.replay.as_ref().map(|replay| &replay.offsets)
     }
     /// N个8B neighbor mask/cSum。
-    pub const fn neighbor_mask(&self) -> &SharedBuffer {
+    pub const fn neighbor_mask(&self) -> &B {
         &self.neighbor_mask
     }
     /// Q个12+12+8编码工作项。
-    pub fn work_items(&self) -> Option<&SharedBuffer> {
+    pub fn work_items(&self) -> Option<&B> {
         self.replay.as_ref().map(|replay| &replay.items)
     }
     /// 3N个20B paired shift结果。
-    pub const fn precomputed(&self) -> &SharedBuffer {
+    pub const fn precomputed(&self) -> &B {
         &self.precomputed
     }
-    /// 唯一原生4B counter，需用 Binding::StorageBuffer 绑定；其余使用 SharedBuffer。
+    /// Compact 工作集的原生4B counter，需用 Binding::StorageBuffer 绑定。
     pub fn counter(&self) -> Option<Buffer> {
         self.replay.as_ref().map(|replay| replay.counter)
     }
-    /// 额外原生资源根；共享 handles 的寿命不依赖此数组。
+    /// 保留全部原生工作集；默认共享存储只需额外保留 counter。
+    /// SharedBuffer 自身的有效期由其所有者维护，不由此迭代器延长。
     pub fn roots(&self) -> impl Iterator<Item = Resource> {
-        self.counter().map(Resource::from).into_iter()
+        self.native_roots
+            .iter()
+            .copied()
+            .map(Resource::from)
+            .chain(self.counter().map(Resource::from))
     }
     /// 本对象请求的全部算法字节，不含分配对齐、LUT、场景或旧在途资源。
     pub const fn requested_bytes(&self) -> u64 {
         self.layout.memory().total
+    }
+}
+
+impl Buffers<Buffer> {
+    /// 为外部原生设备分配同一算法工作集；全部资源归 Context，按已有完成证明回收。
+    /// 在准备边界用一次 GPU 清零提交初始化；不创建等长 CPU 快照，调用期间独占队列。
+    pub fn new_native(context: &mut Context, layout: Layout) -> Result<Self, Error> {
+        let memory = layout.memory();
+        let reservoirs = [
+            Buffer::new(context, memory.reservoir, false)?,
+            Buffer::new(context, memory.reservoir, false)?,
+        ];
+        let primary_hits = [
+            Buffer::new(context, memory.primary_hit, false)?,
+            Buffer::new(context, memory.primary_hit, false)?,
+        ];
+        let color_estimates = if layout.has_color_estimates() {
+            Some([
+                Buffer::new(context, memory.color_estimate, false)?,
+                Buffer::new(context, memory.color_estimate, false)?,
+            ])
+        } else {
+            None
+        };
+        let replay = if layout.fusion().needs_replay_storage() {
+            Some(ReplayBuffers {
+                reconnection: Buffer::new(context, memory.reconnection, false)?,
+                offsets: Buffer::new(context, memory.reconnection_offsets, false)?,
+                items: Buffer::new(context, memory.work_items, false)?,
+                counter: Buffer::new(context, memory.counter, false)?,
+            })
+        } else {
+            None
+        };
+        let mut result = Self {
+            layout,
+            reservoirs,
+            primary_hits,
+            color_estimates,
+            replay,
+            neighbor_mask: Buffer::new(context, memory.neighbor_mask, false)?,
+            precomputed: Buffer::new(context, memory.precomputed, false)?,
+            native_roots: Vec::new(),
+        };
+        result.native_roots.extend(
+            result
+                .reservoirs
+                .iter()
+                .chain(&result.primary_hits)
+                .chain(result.color_estimates.iter().flatten())
+                .chain([&result.neighbor_mask, &result.precomputed])
+                .copied(),
+        );
+        if let Some(replay) = &result.replay {
+            result
+                .native_roots
+                .extend([replay.reconnection, replay.offsets, replay.items]);
+        }
+        let mut initialize = Commands::new(context)?;
+        for buffer in result
+            .reservoirs
+            .iter()
+            .chain(&result.primary_hits)
+            .chain(result.color_estimates.iter().flatten())
+            .chain([&result.neighbor_mask, &result.precomputed])
+        {
+            initialize.clear_buffer(*buffer)?;
+        }
+        if let Some(replay) = &result.replay {
+            for buffer in [
+                replay.reconnection,
+                replay.offsets,
+                replay.items,
+                replay.counter,
+            ] {
+                initialize.clear_buffer(buffer)?;
+            }
+        }
+        initialize.barrier();
+        initialize.finish(context)?.submit_and_wait(context)?;
+        Ok(result)
     }
 }
 
@@ -399,17 +490,20 @@ impl Pipelines {
             let count = programs.replay_callables.len();
             if programs.initial_callables.is_empty()
                 || count == 0
-                || count > 8
+                || count > u32::MAX as usize / 2
                 || programs.evaluate_callables.len() != count
             {
                 return Err(vulkan::Error::InvalidArgument(
-                    "融合SBT须含初采叶子和两组等长的1..=8个重放/求值叶子",
+                    "融合SBT须含初采叶子和两组非空等长、合计可由u32索引的重放/求值叶子",
                 )
                 .into());
             }
             let fused = programs.fused.ok_or(Error::MissingFusionPrograms)?;
             if !fused.reconnection_callables.is_empty()
-                && fused.reconnection_callables.len() != count * (count + 1)
+                && count
+                    .checked_add(1)
+                    .and_then(|next| count.checked_mul(next))
+                    != Some(fused.reconnection_callables.len())
             {
                 return Err(vulkan::Error::InvalidArgument(
                     "完整重连SBT须按F个单侧、F×F个双侧叶子排列",
@@ -677,15 +771,28 @@ pub struct PreparedFrame {
 }
 
 /// 唯一算法工作集和帧状态；GPU真实版本仍由Context独占。
-pub struct Renderer {
-    buffers: Buffers,
+pub struct Renderer<B = SharedBuffer> {
+    buffers: Buffers<B>,
     pipelines: Pipelines,
     settings: Settings,
     frames: FrameState,
     binding_generation: u64,
 }
 
-impl Renderer {
+impl Renderer<SharedBuffer> {
+    /// 使用 wgpu 共享工作集；资源和绑定须属于该 Context，具体契约同原生构造入口。
+    pub fn new(
+        context: &mut WgpuContext,
+        programs: Programs<'_>,
+        bindings: Bindings,
+        buffers: Buffers,
+        settings: Settings,
+    ) -> Result<Self, Error> {
+        Self::new_native(context.native(), programs, bindings, buffers, settings)
+    }
+}
+
+impl<B> Renderer<B> {
     /// 按逻辑阶段顺序返回实际RT program缓存的驱动栈需求；compute阶段不出现在结果中。
     /// 每次调用分配至多六项的Vec，不查询驱动或录制命令；配置的temporal RT在冷帧仍可查询。
     /// 标识已回收或Context不匹配时保留底层错误；返回值不是寄存器数或实际每ray分配。
@@ -702,29 +809,22 @@ impl Renderer {
         Ok(self.pipelines.program_roots(context)?)
     }
 
-    /// 按工作集融合边界创建已启用程序；资源与绑定须来自同一Context，shader ABI由受控构建验证。
+    /// 按工作集融合边界创建已启用的原生程序；B 可为 Buffer 或 SharedBuffer。
+    /// 资源与绑定须来自同一Context，shader ABI由受控构建验证。
     /// 启用workload时显式请求subgroup32，并要求compute BASIC/BALLOT/ARITHMETIC；不满足时失败。
     /// temporal与空间像素融合均启用时不创建workload，不要求这些能力。
     /// 任一准备失败不返回半个renderer；Context按现有collect契约回收未发布原生版本。
-    pub fn new(
-        context: &mut WgpuContext,
+    pub fn new_native(
+        context: &mut Context,
         programs: Programs<'_>,
         bindings: Bindings,
-        buffers: Buffers,
+        buffers: Buffers<B>,
         settings: Settings,
     ) -> Result<Self, Error> {
         let settings = settings.validate()?;
-        validate_subgroup(
-            buffers.layout.fusion(),
-            context.native_ref().subgroup_properties(),
-        )?;
+        validate_subgroup(buffers.layout.fusion(), context.subgroup_properties())?;
         let frames = FrameState::new()?;
-        let pipelines = Pipelines::new(
-            context.native(),
-            programs,
-            bindings,
-            buffers.layout.fusion(),
-        )?;
+        let pipelines = Pipelines::new(context, programs, bindings, buffers.layout.fusion())?;
         Ok(Self {
             buffers,
             pipelines,
@@ -734,7 +834,7 @@ impl Renderer {
         })
     }
     /// 借用唯一工作集，不复制第二套reservoir或场景状态。
-    pub const fn buffers(&self) -> &Buffers {
+    pub const fn buffers(&self) -> &Buffers<B> {
         &self.buffers
     }
     /// 已验证的运行参数；外部参数buffer须使用同值。
@@ -858,7 +958,7 @@ impl Renderer {
         &self,
         context: &mut Context,
         bindings: Bindings,
-        buffers: Buffers,
+        buffers: Buffers<B>,
     ) -> Result<Self, Error> {
         self.frames.next_frame_params()?;
         if self.buffers.layout.fusion() != buffers.layout.fusion() {
@@ -891,6 +991,37 @@ impl Renderer {
             owner: self.frames.owner(),
             base: self.binding_generation,
             pipelines: self.pipelines.rebind(context, bindings)?,
+        })
+    }
+    /// 选择另一已准备renderer的阶段程序，保留本renderer的工作集、历史和设置。
+    ///
+    /// 不编译程序或重建SBT，只建立绑定版本；两者须属于同一Context且融合/颜色布局相同。
+    /// 两个renderer均须无待确认帧，发布仍由本renderer的commit_rebind执行。
+    /// # Errors
+    /// pending、布局不兼容、版本计数溢出或底层绑定失败时保留来源；不改变现有历史。
+    pub fn prepare_variant(
+        &self,
+        context: &mut Context,
+        template: &Self,
+        bindings: Bindings,
+    ) -> Result<Rebinding, Error> {
+        self.frames.next_frame_params()?;
+        template.frames.next_frame_params()?;
+        if self.buffers.layout.fusion() != template.buffers.layout.fusion() {
+            return Err(Error::FusionMismatch);
+        }
+        if self.buffers.layout.has_color_estimates()
+            != template.buffers.layout.has_color_estimates()
+        {
+            return Err(Error::ColorEstimateMismatch);
+        }
+        self.binding_generation
+            .checked_add(1)
+            .ok_or(crate::Error::Overflow)?;
+        Ok(Rebinding {
+            owner: self.frames.owner(),
+            base: self.binding_generation,
+            pipelines: template.pipelines.rebind(context, bindings)?,
         })
     }
     /// 准备另一组阶段程序并保留算法工作集和历史；用于切换受控的 SER 变体。
