@@ -88,6 +88,34 @@ impl Range {
         }
     }
 
+    /// 合并线性粗糙度与法线分布宽度，包围 `sqrt(sqrt(min(r⁴+d⁴,1)))`。
+    ///
+    /// 用于资源期分析；两输入须覆盖过滤后的全部 `[0,1]` 值。端点单调，按 f64
+    /// 求值后外扩32个相邻f32，覆盖precise乘加及两次sqrt的舍入；接近下溢时下界取零。
+    /// 不读取纹理、不修改shader求值，也不证明输入资源的覆盖域。
+    /// # Errors
+    /// 任一范围超出 `[0,1]` 返回 [`Error::Roughness`]。
+    pub fn with_normal_distribution(self, distribution: Self) -> Result<Self, FlowError> {
+        if !self.unit() || !distribution.unit() {
+            return Err(FlowError::Material(Error::Roughness));
+        }
+        let endpoint = |r: f32, d: f32| {
+            let r = f64::from(r);
+            let d = f64::from(d);
+            r * r * r * r + d * d * d * d
+        };
+        let lower = endpoint(self.min, distribution.min);
+        let upper = endpoint(self.max, distribution.max);
+        Ok(Self {
+            min: if lower <= f64::from(f32::MIN_POSITIVE) * 8. {
+                0.
+            } else {
+                rounded(lower.min(1.).sqrt().sqrt() as f32, 32).min
+            },
+            max: rounded(upper.min(1.).sqrt().sqrt() as f32, 32).max.min(1.),
+        })
+    }
+
     const fn unit(self) -> bool {
         self.min >= 0.0 && self.max <= 1.0
     }
@@ -268,6 +296,12 @@ impl FlowKey {
     /// 是否可能有非零 emission。
     pub const fn emits(self) -> bool {
         self.0 & Self::EMISSION != 0
+    }
+
+    /// 去掉与散射独立的发光能力，供不消费emission的sample/evaluate程序去重。
+    /// 不改变任何BSDF分量、测度或混合权重支持域。
+    pub const fn without_emission(self) -> Self {
+        Self(self.0 & !Self::EMISSION)
     }
 
     /// 是否可能评估连续方向；光滑塑料的 diffuse 仍使其为 true。

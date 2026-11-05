@@ -277,3 +277,40 @@ fn analysis_outputs_obey_external_key_contract() {
         }
     }
 }
+
+#[test]
+fn normal_distribution_bounds_cover_float32_shader_evaluation() {
+    for roughness in [0., 0.009_999, 0.01, 0.010_001, 0.4, 1.] {
+        for byte in 0..=255 {
+            let distribution = byte as f32 / 255.;
+            let range = point(roughness)
+                .with_normal_distribution(point(distribution))
+                .unwrap();
+            let alpha = roughness * roughness;
+            let spread = distribution * distribution;
+            let value = (alpha * alpha + spread * spread).min(1.).sqrt().sqrt();
+            assert!(range.min() <= value && value <= range.max());
+        }
+    }
+}
+
+#[test]
+fn normal_distribution_underflow_retains_zero_lower_bound() {
+    let range = point(1.0e-12).with_normal_distribution(point(0.)).unwrap();
+    assert_eq!(range.min(), 0.);
+}
+
+#[test]
+fn removing_emission_preserves_scattering_support() {
+    let material = Material::opaque([0.5; 3], 0.4, 1.5, 0.5, 0.5).unwrap();
+    assert_eq!(material.flow(true).without_emission(), material.flow(false));
+}
+
+#[test]
+fn normal_distribution_rejects_out_of_domain_width() {
+    assert!(
+        point(0.4)
+            .with_normal_distribution(Range::new(0., 1.1).unwrap())
+            .is_err()
+    );
+}

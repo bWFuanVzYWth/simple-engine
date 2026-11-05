@@ -273,9 +273,11 @@ struct FlowLighting<let Flow : uint, Scene> : openpbr::IFlowEvaluationConsumer
 
 /// 一次 callable 消费完整组合顶点；分量不再嵌套调用 callable。
 /// Flow 由资源世代证明，运行时仅翻译参数、查询可见性和采样实际分量。
-public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene scene,
-                                                                           inout TransportCall data,
-                                                                           Settings settings)
+/// CompleteTransport=false由调用方先消费命中段Beer，返回后执行统一RR和finish；
+/// 此时depth不递增，status为材质顶点结果，不能直接送入下一次追踪。
+public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
+                         let CompleteTransport : bool = true>(Scene scene, inout TransportCall data,
+                                                              Settings settings)
     where Scene : IFlowScene
 {
     static_assert((LightMask & ~3u) == 0u, "unknown light strategy mask");
@@ -293,7 +295,8 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene
         path.previous_pdf = data.path.previous_pdf;
     }
     Hit hit = data.hit;
-    path.throughput *= segment_transmittance(path.medium.yzw, hit.distance);
+    if (CompleteTransport)
+        path.throughput *= segment_transmittance(path.medium.yzw, hit.distance);
     SurfaceMaterial material = scene.resolve_flow(hit, Flow, path.medium);
     if ((Flow & openpbr::FLOW_EMISSION) != 0u)
         accumulate_emission(scene, hit, material.emission, path);
@@ -355,7 +358,10 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene
     }
     if (!continuation)
     {
-        finish(path, PATH_DONE);
+        if (CompleteTransport)
+            finish(path, PATH_DONE);
+        else
+            path.status = PATH_DONE;
         data.path = path;
         return;
     }
@@ -364,14 +370,20 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene
         path.dielectric_events += 1;
         if (path.dielectric_events > settings.dielectric_limit)
         {
-            finish(path, PATH_DIELECTRIC_LIMIT);
+            if (CompleteTransport)
+                finish(path, PATH_DIELECTRIC_LIMIT);
+            else
+                path.status = PATH_DIELECTRIC_LIMIT;
             data.path = path;
             return;
         }
     }
     if (scattered.events == 0)
     {
-        finish(path, PATH_DONE);
+        if (CompleteTransport)
+            finish(path, PATH_DONE);
+        else
+            path.status = PATH_DONE;
         data.path = path;
         return;
     }
@@ -397,9 +409,9 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);
     uint status = PATH_ACTIVE;
-    if (max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
+    if (CompleteTransport && max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
-    else if (path.depth + 1 >= 2)
+    else if (CompleteTransport && path.depth + 1 >= 2)
     {
         float survival = roulette_probability(path.throughput, path.eta_scale);
         if (survival == 0)
@@ -412,7 +424,10 @@ public void process_flow<let Flow : uint, Scene, let LightMask : uint = 3>(Scene
                 path.throughput = roulette_reweight(path.throughput, survival);
         }
     }
-    finish(path, status);
+    if (CompleteTransport)
+        finish(path, status);
+    else
+        path.status = status;
     data.path = path;
 }
 
