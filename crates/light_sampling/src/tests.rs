@@ -1,5 +1,53 @@
 use crate::{AliasTable, Error, QuadArea, SELECTORS, pack_vertices};
 
+#[test]
+fn emission_power_scales_with_area_brightness_and_emitting_sides() {
+    let weight = crate::emission_weight([1.; 3], 4.).unwrap();
+    assert_eq!(
+        crate::emitter_power(2., weight, crate::FRONT_SIDE).unwrap(),
+        8.
+    );
+    assert_eq!(
+        crate::emitter_power(2., weight, crate::BOTH_SIDES).unwrap(),
+        16.
+    );
+}
+
+#[test]
+fn a_static_black_or_underflowing_estimate_preserves_positive_support() {
+    let weight = crate::emission_weight([0.; 3], 0.).unwrap();
+    let power = crate::emitter_power(f64::MIN_POSITIVE, weight, crate::FRONT_SIDE).unwrap();
+    assert!(power.is_finite() && power > 0.);
+}
+
+#[test]
+fn invalid_or_overflowing_emission_estimates_are_rejected() {
+    for (rgb, amplitude) in [
+        ([f32::NAN, 0., 0.], 1.),
+        ([-1., 0., 0.], 1.),
+        ([1.; 3], f32::INFINITY),
+        ([f32::MAX; 3], f32::MAX),
+    ] {
+        assert!(crate::emission_weight(rgb, amplitude).is_err());
+    }
+    assert!(crate::emitter_power(f64::MAX, 1., crate::FRONT_SIDE).is_err());
+}
+
+#[test]
+fn vertex_packing_preserves_every_float_bit() {
+    let bits = [
+        [0x8000_0000, 0x7fc0_0123, 0x3f80_0001],
+        [0x7f80_0000, 0xff80_0000, 0x0000_0001],
+        [0x3f00_0000, 0xbf00_0000, 0x3f80_0000],
+        [0x0000_0000, 0x7f7f_ffff, 0xff7f_ffff],
+    ];
+    let vertices = bits.map(|point| point.map(f32::from_bits));
+    assert_eq!(
+        crate::unpack_vertices(pack_vertices(vertices)).map(|point| point.map(f32::to_bits)),
+        bits
+    );
+}
+
 fn check_table(weights: &[f64]) {
     let table = AliasTable::build(weights).unwrap();
     if weights.iter().all(|&w| w == 0.0) {

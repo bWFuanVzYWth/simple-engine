@@ -33,6 +33,7 @@ module shift;
 import restir_pt.types;
 import restir_pt.scene;
 import restir_pt.replay;
+import restir_pt.storage;
 
 namespace restir_pt
 {
@@ -133,7 +134,8 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
     float3 integrand = incidentRadiance * first.value;
     integrand *= scene.transmittance(
         dstPrevious, direction, rcHasPosition ? rcSurface.distance : scene.environmentDistance());
-    if (rcIsEmissive && useNEE && useMIS && lightType != LIGHT_ANALYTIC)
+    if (rcIsEmissive && useNEE && useMIS && lightType != LIGHT_ANALYTIC &&
+        !(lightIsNEE && source.pathFlags.terminalNEE()))
     {
         float lightPdf = source.lightPdf / destinationGeometry;
         if ((rcHasPosition && lightType == LIGHT_EMISSIVE) ||
@@ -155,7 +157,8 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
             scene.evaluateBsdf(rcSurface, source.reconnectionWi, secondComponent);
         integrand *= second.value;
         secondPdf = second.pdf;
-        if (rcIsConnectedToLight && useNEE && useMIS && lightType != LIGHT_ANALYTIC)
+        if (rcIsConnectedToLight && useNEE && useMIS && lightType != LIGHT_ANALYTIC &&
+            !(rcIsNEE && source.pathFlags.terminalNEE()))
             integrand *= rcIsNEE ? lightMisWeight(1.0, source.lightPdf, 1.0, secondPdf)
                                  : lightMisWeight(1.0, secondPdf, 1.0, source.lightPdf);
     }
@@ -199,6 +202,39 @@ public float3 shiftPathFromReplay<Scene : IRestirScene>(
         throughput = 0.0;
     }
     return throughput;
+}
+
+/// 只读源在本轮保持不变；prefix只载入12B热字段，冷身份在其结束后恢复。
+/// 这样replay中的材质callable/SER无需保存整份80B源；所有端点/介质仍由场景精确恢复。
+/// 两源入口只在加载边界选择A/B，replay/shift体保持单份，避免temporal方向复制整个RT控制流。
+/// historySource只选源buffer；previous只选目标几何/光照世代，二者语义独立。
+/// buffer与index引用固定本轮A或已接受历史B，不在本函数提交、交换或修改源。
+public PrecomputedShiftData shiftPathLoaded<Scene : IRestirScene>(
+    inout Scene scene, Surface primary, RWByteAddressBuffer current, RWByteAddressBuffer history,
+    uint index, bool historySource, float primaryRayFootprint, ShiftSettings settings,
+    bool useRussianRoulette, bool useNEE, bool useMIS, bool previous)
+{
+    PathReservoir source =
+        historySource ? load_replay_source(history, index) : load_replay_source(current, index);
+    ReconnectionData replay =
+        traceReplayedPath(scene, primary, source, primaryRayFootprint, settings, useRussianRoulette,
+                          useNEE, useMIS, previous);
+    source = historySource ? load_reservoir(history, index) : load_reservoir(current, index);
+    PrecomputedShiftData result = {};
+    result.pathThroughput = shiftPathFromReplay(scene, settings, primaryRayFootprint, replay,
+                                                source, useNEE, useMIS, previous, result.Jacobian);
+    result.reconnectionJacobian = source.reconnectionJacobian;
+    return result;
+}
+
+/// 单一只读源的入口；复用同一冷热恢复契约，编译器消除恒定false的历史选择。
+public PrecomputedShiftData shiftPathLoaded<Scene : IRestirScene>(
+    inout Scene scene, Surface primary, RWByteAddressBuffer buffer, uint index,
+    float primaryRayFootprint, ShiftSettings settings, bool useRussianRoulette, bool useNEE,
+    bool useMIS, bool previous)
+{
+    return shiftPathLoaded(scene, primary, buffer, buffer, index, false, primaryRayFootprint,
+                           settings, useRussianRoulette, useNEE, useMIS, previous);
 }
 
 /// 完整的 point shift；逆向 pairwise MIS 必须独立以反向 primary 再调用一次，不能反用已改写的

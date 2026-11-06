@@ -83,7 +83,8 @@ public struct Environment
     public float sun_pdf;
 };
 
-/// 不含场景策略的积分设置；预算为 1..64，resolution 为采样器的 log2 分辨率。
+/// 不含场景策略的积分设置；budget为1..64次表面散射，末顶点仍计算发光与NEE。
+/// resolution为采样器的log2分辨率。
 public struct Settings
 {
     public uint seed;

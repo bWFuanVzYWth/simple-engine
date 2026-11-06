@@ -90,7 +90,7 @@ fn scene_providers_preserve_emission_mis() -> Result {
                 attenuation[channel] * color[channel] * 3.0 * 0.2,
             );
         }
-        assert_eq!(path[4], [1, 0, 1, 1]);
+        assert_eq!(path[4], [2, 0, 1, 1]);
     }
     Ok(())
 }
@@ -116,6 +116,29 @@ fn scene_providers_preserve_solid_boundary() -> Result {
 fn scene_termination_clears_geometry_identity() -> Result {
     for path in run(0)? {
         assert_eq!(f32::from_bits(path[0][3]), 0.0);
+        for position in &path[5..7] {
+            for &bits in &position[..3] {
+                assert_eq!(f32::from_bits(bits), 0.0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn one_bounce_budget_performs_one_scatter() -> Result {
+    for path in run(2)? {
+        assert_eq!(path[4], [1, 1, 0, 1]);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn sixty_fourth_bounce_lands_on_terminal_vertex() -> Result {
+    for path in run(3)? {
+        assert_eq!(path[4], [65, 0, 1, 1]);
         for position in &path[5..7] {
             for &bits in &position[..3] {
                 assert_eq!(f32::from_bits(bits), 0.0);

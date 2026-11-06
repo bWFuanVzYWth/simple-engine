@@ -1,13 +1,17 @@
-//! 场景无关的三阶段路径追踪：固定随机身份、样本事务与 Vulkan 阶段录制。
+//! 场景无关的路径追踪：固定随机身份、样本事务与 Vulkan 阶段录制。
 //!
 //! 场景适配器负责求交、覆盖率、纹理到 OpenPBR 的翻译、光源和环境输入。
 //! 共享 Slang 模块位于引擎 `shaders/pt/`，不读取应用材质编号或世界结构。
 //! GPU 功能只录制命令；设备、提交、完成证明及呈现由宿主接入层维护。
 //!
 //! 每个绝对样本依次执行 K1（solid delta 前缀）、K2（剩余路径）与 K3（合成和累积）。
-//! 主查询只在 raygen 中执行，材质 callable 为叶子；阴影通过场景的 RayQuery 接口查询。
+//! `pt.hit_transport` 的生产路径在 raygen 中查询实际 HitObject，按已准备的材质程序槽选择
+//! Hit Group，再经可选 SER 执行叶子 closest-hit。`pt.material_vertex` 的交接为 100B：
+//! 32B 应用材质上下文和 68B 数值输入；输出复用同一存储，仅 88B 有效结果被读取。
+//! 叶子只保留该材质 Flow 能消费的代码；选灯、RayQuery 阴影、累计路径与 RR 留在 raygen。
+//! 材质来源的读取和解码由各场景独立适配。未提供 HitObject 能力的设备可使用原 callable 路径。
 //! 共享输运包含 Beer、发光、NEE/MIS、OpenPBR 散射和 eta-aware RR。末顶点保留发光与 NEE，
-//! 顶点预算硬截断；dielectric 事件耗尽显式失败。单份交接缓冲在批内逐样本复用。
+//! 达到反弹上限后不再散射；dielectric 事件耗尽显式失败。单份交接缓冲在批内逐样本复用。
 //!
 //! `pt.denoise` 提供首表面 OpenPBR 方向 diffuse/specular 能量、世界法线和线性
 //! roughness，以及前向线性深度与无 jitter 的 previous-current 像素运动计算。
@@ -28,10 +32,12 @@
 //!
 //! `pt.path_sampler` 固定随机消费域，256 个绝对样本组成 epoch，分批不改变身份。
 //! 选灯／事件以二样本分层退化换取组内四样本半区投影；不宣称通用高维 net、跨 epoch
-//! 或重投影质量。单轴最多 65536 像素，路径最多 64 个顶点；计数不允许 u32 回绕，
+//! 或重投影质量。单轴最多 65536 像素，路径最多 64 次表面反弹与一个末顶点；计数不允许 u32 回绕，
 //! radiance 使用未补偿 f32 求和。完整数值前提及来源保留在对应 Slang 模块。
 
 #![forbid(unsafe_code)]
+
+pub mod history;
 
 #[cfg(feature = "vulkan")]
 pub mod gpu;
@@ -42,15 +48,18 @@ pub enum Error {
     /// 每批需要至少一个样本。
     #[error("PT 每批样本数必须大于零")]
     Samples,
-    /// 随机域支持最多 64 个路径顶点。
-    #[error("PT 路径顶点预算须属于 1..=64")]
-    Vertices,
+    /// 随机域支持最多 64 次反弹和末顶点 NEE。
+    #[error("PT 最大反弹次数须属于 1..=64")]
+    Bounces,
     /// dielectric 事件预算需要非零。
     #[error("PT dielectric 事件预算必须大于零")]
     DielectricEvents,
     /// 样本计数不允许回绕或丢失整数精度。
     #[error("PT 绝对样本数超过 u32")]
     SampleOverflow,
+    /// 已预留的批次尚未完成编码、提交或取消。
+    #[error("PT 已有待接受批次")]
+    PendingBatch,
 }
 
 /// 两个场景适配器共用的路径预算；显示、环境和材质策略单独提供。
@@ -58,8 +67,8 @@ pub enum Error {
 pub struct Settings {
     /// 本次增加的样本数；批次划分不改变绝对随机身份。
     pub samples: u32,
-    /// 包含末次发光与 NEE 的顶点预算，属于 1..=64。
-    pub max_vertices: u32,
+    /// 最多执行的表面散射次数，属于 1..=64；末顶点仍计算发光与 NEE。
+    pub max_bounces: u32,
     /// 像素与绝对样本的 scramble 种子。
     pub seed: u32,
     /// solid dielectric 散射事件上限；耗尽显式报告失败。
@@ -70,7 +79,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             samples: 1,
-            max_vertices: 12,
+            max_bounces: 12,
             seed: 0,
             max_dielectric_events: 128,
         }
@@ -83,8 +92,8 @@ impl Settings {
         if self.samples == 0 {
             return Err(Error::Samples);
         }
-        if self.max_vertices == 0 || self.max_vertices > 64 {
-            return Err(Error::Vertices);
+        if self.max_bounces == 0 || self.max_bounces > 64 {
+            return Err(Error::Bounces);
         }
         if self.max_dielectric_events == 0 {
             return Err(Error::DielectricEvents);
@@ -93,78 +102,60 @@ impl Settings {
     }
 }
 
-/// 某一视图身份的绝对样本进度；不等同于 GPU 完成进度。
+/// 静态 PT 累积的样本进度；不等同于 GPU 完成进度或随机采样序号。
 ///
-/// `K` 包含影响积分的输入身份，由场景所有者提供；曝光和批次长度不应进入身份。
+/// 输入变化须由实际所有者显式调用 [`Self::reset`]，`begin` 不比较身份或隐式归零。
 /// 开始批次独占借用进度，成功录制后消费 [`Batch::commit`]；丢弃批次保留原进度。
 /// 已录制命令的提交与取消仍由拥有资源租约的宿主接入负责。
-pub struct Progress<K> {
-    key: Option<K>,
+#[derive(Default)]
+pub struct Progress {
     samples: u32,
 }
 
-impl<K> Default for Progress<K> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<K> Progress<K> {
-    /// 创建尚无历史样本的视图。
+impl Progress {
+    /// 创建没有累积样本的视图。
     pub const fn new() -> Self {
-        Self {
-            key: None,
-            samples: 0,
-        }
+        Self { samples: 0 }
     }
 
-    /// 已发布的绝对样本数；只表示成功录制，不证明提交或 GPU 完成。
+    /// 已发布的累积样本数；不证明 GPU 提交或完成。
     pub const fn samples(&self) -> u32 {
         self.samples
     }
 
-    /// 令下一批从样本 0 开始；调用者同时使 GPU 累积失效。
+    /// 显式丢弃静态均值；调用者同时使 GPU 累积失效，不得回退独立的随机身份。
     pub fn reset(&mut self) {
-        self.key = None;
         self.samples = 0;
     }
-}
 
-impl<K: PartialEq> Progress<K> {
-    /// 预留一批样本；身份改变时重置，失败不修改进度。
-    pub fn begin(&mut self, key: K, samples: u32) -> Result<Batch<'_, K>, Error> {
+    /// 预留一批连续样本；不解释输入身份，失败不修改进度。
+    pub fn begin(&mut self, samples: u32) -> Result<Batch<'_>, Error> {
         if samples == 0 {
             return Err(Error::Samples);
         }
-        let first = if self.key.as_ref() == Some(&key) {
-            self.samples
-        } else {
-            0
-        };
+        let first = self.samples;
         let next = first.checked_add(samples).ok_or(Error::SampleOverflow)?;
         Ok(Batch {
             progress: self,
-            key,
             first,
             next,
         })
     }
 }
 
-/// 独占样本事务；未消费 `commit` 时不会发布新的历史身份或计数。
-pub struct Batch<'a, K> {
-    progress: &'a mut Progress<K>,
-    key: K,
+/// 独占累积事务；未消费 `commit` 时不会发布计数。
+pub struct Batch<'a> {
+    progress: &'a mut Progress,
     first: u32,
     next: u32,
 }
 
-impl<K> Batch<'_, K> {
-    /// 本批第一个绝对样本。
+impl Batch<'_> {
+    /// 本批在静态累积中的第一个样本。
     pub const fn first(&self) -> u32 {
         self.first
     }
-    /// 本批成功后的绝对样本总数。
+    /// 本批成功后的累积样本总数。
     pub const fn next(&self) -> u32 {
         self.next
     }
@@ -172,9 +163,8 @@ impl<K> Batch<'_, K> {
     pub const fn samples(&self) -> u32 {
         self.next - self.first
     }
-    /// 成功录制后发布身份和计数；不表示提交或 GPU 完成。
+    /// 成功录制后发布计数；不表示提交或 GPU 完成。
     pub fn commit(self) {
-        self.progress.key = Some(self.key);
         self.progress.samples = self.next;
     }
 }
@@ -184,35 +174,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batching_preserves_absolute_sample_identity() {
+    fn batching_preserves_sample_identity() {
         let mut progress = Progress::new();
-        progress.begin(7, 256).unwrap().commit();
-        let batch = progress.begin(7, 7).unwrap();
+        progress.begin(256).unwrap().commit();
+        let batch = progress.begin(7).unwrap();
         assert_eq!((batch.first(), batch.next()), (256, 263));
     }
 
     #[test]
     fn discarded_batch_keeps_previous_history() {
         let mut progress = Progress::new();
-        progress.begin(7, 12).unwrap().commit();
+        progress.begin(12).unwrap().commit();
         {
-            let _canceled = progress.begin(8, 3).unwrap();
+            let _cancelled = progress.begin(3).unwrap();
         }
-        assert_eq!(progress.begin(7, 1).unwrap().first(), 12);
+        assert_eq!(progress.samples(), 12);
     }
 
     #[test]
-    fn changed_identity_starts_new_accumulation() {
+    fn explicit_reset_starts_new_accumulation() {
         let mut progress = Progress::new();
-        progress.begin(7, 12).unwrap().commit();
-        assert_eq!(progress.begin(8, 1).unwrap().first(), 0);
+        progress.begin(12).unwrap().commit();
+        progress.reset();
+        assert_eq!(progress.begin(1).unwrap().first(), 0);
     }
 
     #[test]
     fn sample_overflow_keeps_previous_count() {
         let mut progress = Progress::new();
-        progress.begin(7, u32::MAX).unwrap().commit();
-        assert!(matches!(progress.begin(7, 1), Err(Error::SampleOverflow)));
+        progress.begin(u32::MAX).unwrap().commit();
+        assert!(matches!(progress.begin(1), Err(Error::SampleOverflow)));
         assert_eq!(progress.samples(), u32::MAX);
+    }
+
+    #[test]
+    fn bounce_limit_accepts_sixty_four_scatter_events() {
+        let settings = Settings {
+            max_bounces: 64,
+            ..Settings::default()
+        };
+        assert!(settings.validate().is_ok());
+        assert_eq!(
+            Settings {
+                max_bounces: 65,
+                ..settings
+            }
+            .validate(),
+            Err(Error::Bounces)
+        );
     }
 }

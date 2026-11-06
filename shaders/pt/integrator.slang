@@ -117,7 +117,7 @@ public void process_material<let Capability : uint, let Emissive : bool = false,
     if (Emissive)
         accumulate_emission(scene, hit, material.emission, path);
     float3 view = -path.direction;
-    bool continuation = path.depth + 1 < settings.budget;
+    bool continuation = path.depth < settings.budget;
     PathSampler sampler = path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     if (Capability < openpbr::CAP_DELTA_CONDUCTOR)
     {
@@ -341,7 +341,7 @@ public void process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
     if ((Flow & openpbr::FLOW_EMISSION) != 0u)
         accumulate_emission(scene, hit, material.emission, path);
     float3 view = -path.direction;
-    bool continuation = path.depth + 1 < settings.budget;
+    bool continuation = path.depth < settings.budget;
     PathSampler sampler = path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     LightSample sun = {}, light = {};
     uint evaluation_mask = 0;

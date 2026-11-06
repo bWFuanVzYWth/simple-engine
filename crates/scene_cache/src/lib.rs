@@ -30,6 +30,10 @@ pub enum Error {
 
 mod slots;
 pub use slots::Slots;
+mod geometry;
+pub use geometry::{
+    GeometryDirectory, GeometryPublication, GeometryRecord, GeometrySource, GeometryUpdate,
+};
 
 /// 资源替换身份序列；0保留为无效值，不因目录压缩或槽复用而复活。
 pub struct Identities {

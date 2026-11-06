@@ -36,7 +36,7 @@ pub struct Programs<'a> {
     pub material_hits: &'a [RayShader<'a>],
     /// 可选 alpha 覆盖率过滤；callable 内的 RayQuery 仍由适配器自行确认候选。
     pub any_hit: Option<RayShader<'a>>,
-    /// 资源世代去重的控制流程序，顺序与适配器的紧凑 SBT 索引一致。
+    /// 兼容路径的叶子 callable；Hit Group 路径传空，顺序与资源计划一致。
     pub callables: &'a [RayShader<'a>],
     /// K3：8×8×1 compute，每样本合成、累积与批末输出。
     pub post: RayShader<'a>,

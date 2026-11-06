@@ -11,7 +11,9 @@
 //! 当前/历史reservoir角色固定：initial/temporal写A，spatial从A写B；融合merge直接输出贡献。
 //! 一轮 spatial 与帧末逻辑交换抵消，下一帧仍以 A 接新样本、B 保存历史，不维护第二份可见状态。
 //! [`Layout::with_color_estimates`]可选分配同角色的两份12N字节RGB估计，用于Control Variates。
-//! 颜色估计属于像素，不是赢家路径身份；路径复用、颜色历史有效性和算法开关由宿主分别维护。
+//! 颜色估计属于像素，不是赢家路径身份；[`FrameState`]集中维护路径与颜色的已接受状态。
+//! 宿主用[`ColorOutput`]明确声明本帧产出，成功提交后共同接受；取消保留两者，
+//! 失效请求可以分别选择路径或颜色。算法开关及实际生产者由宿主提供，不据此隐式全域重置。
 
 #![forbid(unsafe_code)]
 
@@ -22,7 +24,7 @@ mod settings;
 #[cfg(feature = "vulkan")]
 pub mod gpu;
 
-pub use frame::{FrameParams, FrameState, FrameToken};
+pub use frame::{ColorOutput, FrameParams, FrameState, FrameToken};
 pub use layout::{
     Dispatch, Fusion, HitInfo, Layout, Memory, NeighborMask, PathReservoir, PrecomputedShift,
     Reconnection, SpatialFusion, Stage, WorkItem,
@@ -43,7 +45,7 @@ pub enum Error {
     TemporalFusion,
     /// 本 profile 的 1..=64 surface bounce 上限。
     #[error("ReSTIR PT surface bounce 上限须属于 1..=64")]
-    Vertices,
+    Bounces,
     /// temporal 历史上限必须非零。
     #[error("ReSTIR PT 历史上限必须大于零")]
     HistoryLength,
@@ -59,4 +61,7 @@ pub enum Error {
     /// token 来自其他 owner、旧事务或已确认事务。
     #[error("ReSTIR PT 帧票据已失效")]
     StaleFrame,
+    /// 声明产出颜色时，实际工作集必须配置颜色估计缓冲。
+    #[error("ReSTIR PT 颜色输出需要颜色估计工作集")]
+    ColorStorage,
 }

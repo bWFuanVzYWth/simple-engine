@@ -156,15 +156,23 @@ void pt_scene_main(uint3 id: SV_DispatchThreadID)
     attributes.hit.identity.y = base + 1;
     attributes.hit.texel = inputs[base];
     Settings settings = { 17, 1, 8, 8 };
-    if (asuint(inputs[base + 3].w) == 0)
+    uint mode = asuint(inputs[base + 3].w);
+    if (mode == 0)
     {
+        palette.path.depth = 1;
+        attributes.path.depth = 1;
         process_flow<1155, PaletteScene>(PaletteScene(), palette, settings);
         process_material<openpbr::CAP_OPAQUE_DIELECTRIC, true, true, AttributeScene>(
             AttributeScene(), attributes, settings);
     }
     else
     {
-        settings.budget = 3;
+        settings.budget = mode == 1 ? 3 : mode == 2 ? 1 : 64;
+        if (mode == 3)
+        {
+            palette.path.depth = 64;
+            attributes.path.depth = 64;
+        }
         process_flow<272, PaletteScene>(PaletteScene(), palette, settings);
         process_material<openpbr::CAP_DELTA_SOLID_DIELECTRIC, false, false, AttributeScene>(
             AttributeScene(), attributes, settings);

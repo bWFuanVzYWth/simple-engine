@@ -4,6 +4,9 @@
 #[path = "coverage_tests.rs"]
 mod coverage_tests;
 #[cfg(test)]
+#[path = "publication_tests.rs"]
+mod publication_tests;
+#[cfg(test)]
 #[path = "transfer_tests.rs"]
 mod transfer_tests;
 
@@ -225,7 +228,66 @@ pub struct State<R> {
     pub(crate) schedule: Schedule,
 }
 
+/// 整批校验后的独占发布阶段；借用原patch切片，不复制场景或分配暂存。
+///
+/// GPU提交成功后调用[`Self::commit`]；提交失败或取消时直接丢弃，覆盖和代号均不变。
+pub struct PatchPublication<'a, 'p, R> {
+    state: &'a mut State<R>,
+    patches: &'p [Patch],
+    generation: u64,
+    last_use: u64,
+}
+impl<R> PatchPublication<'_, '_, R> {
+    /// 发布整批已准备覆盖；不分配、不返回错误，不代替外部GPU完成证明。
+    pub fn commit(self) {
+        for (index, patch) in self.patches.iter().enumerate() {
+            let pending = self
+                .state
+                .pending(patch.token)
+                .expect("独占发布阶段保持家族锁和唯一token");
+            let generation = self.generation + index as u64 + 1;
+            self.state.generation = generation;
+            self.state
+                .publish_pending(pending, generation, self.last_use);
+        }
+    }
+}
+
 impl<R> State<R> {
+    /// 在任何外部发布前校验整批patch和代号余量，成功后保持本状态独占到提交或取消。
+    ///
+    /// 新资源/接缝须已准备；last_use语义同[`Self::publish`]。空批合法。
+    /// 逐项校验加O(B²)重复token比较，不分配；应用应按自身帧预算限制本批B。
+    /// 有效不同token的家族由既有锁保证互不重叠，不能借伪造子节点token重复发布家族。
+    /// # Errors
+    /// 任一patch过期/失效、输入重复或代号不足时整批不修改覆盖、退役队列或代号。
+    pub fn prepare_publication<'a, 'p>(
+        &'a mut self,
+        patches: &'p [Patch],
+        last_use: u64,
+    ) -> Result<PatchPublication<'a, 'p, R>, StateError> {
+        for (index, patch) in patches.iter().enumerate() {
+            self.validated_pending(patch.token)?;
+            if patches[..index]
+                .iter()
+                .any(|previous| previous.token == patch.token)
+            {
+                return Err(StateError::Transition);
+            }
+        }
+        let count = u64::try_from(patches.len()).map_err(|_| StateError::GenerationExhausted)?;
+        self.generation
+            .checked_add(count)
+            .ok_or(StateError::GenerationExhausted)?;
+        let generation = self.generation;
+        Ok(PatchPublication {
+            state: self,
+            patches,
+            generation,
+            last_use,
+        })
+    }
+
     /// 预分配节点、调度与延迟释放容量，不创建区块或资源。
     pub fn new(config: Config) -> Self {
         let capacity = config.capacity();

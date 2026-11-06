@@ -29,6 +29,62 @@ pub const BACK_SIDE: u32 = 2;
 /// 正反两侧发射，对应 shader `LIGHT_BOTH`；不复制几何或加倍面积密度。
 pub const BOTH_SIDES: u32 = FRONT_SIDE | BACK_SIDE;
 
+/// 资源期的线性 BT.709 发光亮度估计；材质与纹理解码由应用完成。
+///
+/// RGB和幅度须有限非负。本值仅决定提案，不替代真实辐射；忽略动态tint和当前动画帧。
+/// 零值与正数下溢保留MIN_POSITIVE支持，避免潜在发光源在静态提案中消失。
+/// # Errors
+/// 输入无效或乘积超过有限f32域时返回[`Error::Power`]。
+pub const fn emission_weight(rgb: [f32; 3], amplitude: f32) -> Result<f32, Error> {
+    let inputs = [rgb[0], rgb[1], rgb[2], amplitude];
+    let mut index = 0;
+    while index < inputs.len() {
+        if !inputs[index].is_finite() || inputs[index] < 0. {
+            return Err(Error::Power);
+        }
+        index += 1;
+    }
+    let coefficients = [0.2126, 0.7152, 0.0722];
+    let mut luminance = 0.;
+    index = 0;
+    while index < rgb.len() {
+        luminance += rgb[index] as f64 * coefficients[index];
+        index += 1;
+    }
+    positive_power(luminance * amplitude as f64)
+}
+
+/// 以真实总面积、静态亮度估计和实际发射侧数建立BVH功率。
+///
+/// area须正且有限，weight须正且有限，sides属于FRONT/BACK/BOTH；双面不复制几何。
+/// 只影响位置提案，正反PDF仍使用同一棵树的真实量化PMF。
+/// # Errors
+/// 输入无效或功率乘积超出有限f32域时返回[`Error::Power`]。
+pub const fn emitter_power(area: f64, weight: f32, sides: u32) -> Result<f32, Error> {
+    if !area.is_finite()
+        || area <= 0.
+        || !weight.is_finite()
+        || weight <= 0.
+        || sides == 0
+        || sides > 3
+    {
+        return Err(Error::Power);
+    }
+    positive_power(area * weight as f64 * sides.count_ones() as f64)
+}
+
+const fn positive_power(value: f64) -> Result<f32, Error> {
+    let value = value as f32;
+    if !value.is_finite() {
+        return Err(Error::Power);
+    }
+    Ok(if value < f32::MIN_POSITIVE {
+        f32::MIN_POSITIVE
+    } else {
+        value
+    })
+}
+
 /// 无表地近似均匀选择活动索引；不准备alias或分配任何缓冲。
 ///
 /// 每项获得floor/ceil(2^24/count)个格点，前余数项多一格；实际PMF由同一分割给出。
@@ -86,6 +142,18 @@ pub const fn pack_vertices([a, b, c, d]: [[f32; 3]; 4]) -> [[f32; 4]; 3] {
     ]
 }
 
+/// 解码 [`pack_vertices`] 的三个连续记录，不重建或近似第四角。
+///
+/// 所有 f32 位模式原样移动；不验证几何，也不产生额外分配。
+pub const fn unpack_vertices([p, q, r]: [[f32; 4]; 3]) -> [[f32; 3]; 4] {
+    [
+        [p[0], p[1], p[2]],
+        [p[3], q[0], q[1]],
+        [q[2], q[3], r[0]],
+        [r[1], r[2], r[3]],
+    ]
+}
+
 #[cfg(test)]
 mod emitter_tests;
 #[cfg(test)]
@@ -94,6 +162,9 @@ mod tests;
 /// 输入、容量或构建分配失败；失败不产生部分有效的表。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// 提案亮度、面积或功率不能建立有限的正支持。
+    #[error("光源提案功率无效")]
+    Power,
     /// 输入项数超过可为每个正权保留支持的 24-bit 上限。
     #[error("光源 alias 项数超过 2^24")]
     Capacity,

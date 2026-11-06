@@ -201,5 +201,20 @@ fn main() -> Result<(), shader_build::Error> {
             args: &["-capability", "spvShaderInvocationReorderEXT"],
         }),
     );
-    build(&recipes, &[], &[])
+    recipes.extend(
+        [
+            ("storage_roundtrip", "restir_storage.spv"),
+            ("admission_cases", "restir_admission.spv"),
+            ("selection_equivalence", "restir_selection.spv"),
+        ]
+        .map(|(entry, output)| Recipe {
+            source: "shaders/restir.slang",
+            entry,
+            stage: "compute",
+            output,
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-fp-mode", "precise"],
+        }),
+    );
+    build(&recipes, &["../../shaders"], &[])
 }

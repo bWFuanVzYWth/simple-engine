@@ -10,7 +10,7 @@ namespace pt
 /// domain 分配不随分支或已抽到的事件改变；跳过消费者不推进其他域。
 /// 同一交点太阳／局部灯是加性 NEE，故优先保护各组内部；跨组与后续路径仍可能耦合。
 /// selector/event 仍控制高能量路径，并非无害坐标；两点阈值误差是明确接受的代价。
-/// 固定 profile 不按材质能力另选映射；方法的 depth<64。RR 保持普通一维，
+/// 固定 profile 不按材质能力另选映射；方法支持depth<=64；depth=64只供末顶点NEE。RR 保持普通一维，
 /// 但这不保证 RR 与刚抽到的 BSDF throughput 独立，也不消除跨 bounce 相关。
 public struct PathSampler
 {
@@ -21,7 +21,7 @@ public struct PathSampler
     {
         return core.sample_2d(0);
     }
-    /// 独立太阳盘的二维采样；depth<64。
+    /// 独立太阳盘的二维采样；depth<=64。
     public float2 sun(uint depth)
     {
         return core.sample_2d(1 + 8 * depth);

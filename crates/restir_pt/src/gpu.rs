@@ -956,22 +956,43 @@ impl<B> Renderer<B> {
         }
         commands.finish(context).map_err(Error::from)
     }
+    /// 兼容不生产颜色的消费者，等同于以[`crate::ColorOutput::Omitted`]提交。
     /// 完整帧成功提交后推进历史；不表示GPU已完成。
     pub fn commit(&mut self, token: FrameToken) -> Result<(), crate::Error> {
         self.frames.commit(token)
+    }
+    /// 完整帧成功提交后共同接受路径和颜色生产结果；失败不修改帧状态。
+    /// Produced要求实际工作集配置颜色估计缓冲，不表示GPU已完成。
+    pub fn commit_with_color(
+        &mut self,
+        token: FrameToken,
+        color: crate::ColorOutput,
+    ) -> Result<(), crate::Error> {
+        if color == crate::ColorOutput::Produced && !self.buffers.layout.has_color_estimates() {
+            return Err(crate::Error::ColorStorage);
+        }
+        self.frames.commit_with_color(token, color)
+    }
+    /// 上一个已接受帧的颜色估计是否连续可读；待确认帧不改变状态。
+    pub const fn color_history_valid(&self) -> bool {
+        self.frames.color_history_valid()
     }
     /// 已取消本帧命令后保留原历史；提交成功的帧不能用reject撤回。
     pub fn reject(&mut self, token: FrameToken) -> Result<(), crate::Error> {
         self.frames.reject(token)
     }
-    /// 宿主同步重置外部累积和相机历史；不释放或清空在途资源。
-    pub fn reset_history(&mut self) -> Result<(), crate::Error> {
-        self.frames.reset_history()
+    /// 显式选择 Paths 和/或 Color 独立失效；不回退帧序号或清空在途资源。
+    /// 相机元数据、静态累积与重建器由各自所有者按同一请求处理。
+    pub fn invalidate_history(
+        &mut self,
+        request: pt::history::Invalidation,
+    ) -> Result<(), crate::Error> {
+        self.frames.invalidate_history(request)
     }
     /// 更新运行参数并保留历史；pending 期间拒绝。
     ///
     /// 随机身份由 reservoir 保存，参数变化的支持检查属于局部重放。
-    /// 只有宿主确认整个复用域失效时才显式调用 [`Self::reset_history`]。
+    /// 只有宿主明确选择失效范围时才调用 [`Self::invalidate_history`]。
     pub fn set_settings(&mut self, settings: Settings) -> Result<bool, crate::Error> {
         let settings = settings.validate()?;
         self.frames.next_frame_params()?;

@@ -76,6 +76,11 @@ struct Task {
 }
 
 impl Tree {
+    /// 消费树并移交同一份GPU编码，不复制节点；灯数和原输入顺序由调用方另行保留。
+    pub fn into_words(self) -> Vec<u32> {
+        self.words
+    }
+
     /// 构建空间 median 树；空输入合法，不过滤或重新编号任何灯。
     ///
     /// 最多接受 [`SELECTORS`] 个灯。非空 quad 须有正且有限的功率，所有坐标有限，

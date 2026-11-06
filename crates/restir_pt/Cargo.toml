@@ -10,6 +10,7 @@ default = []
 vulkan = ["dep:vulkan", "dep:wgpu"]
 
 [dependencies]
+pt = { path = "../pt" }
 thiserror.workspace = true
 vulkan = { path = "../vulkan", optional = true }
 wgpu = { workspace = true, optional = true }

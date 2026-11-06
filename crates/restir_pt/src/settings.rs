@@ -4,9 +4,9 @@ use crate::Error;
 /// K=3、一轮 spatial、Hybrid/Compact/paired 是本 profile 的固定 shader 契约。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
-    /// NV maxSurfaceBounces 上限，属于 1..=64；不含 camera，primary 命中 vertexIndex=1。
-    /// 按 NV bounce 计数传给 shader，不是旧 PT 的含末顶点消费预算。
-    pub max_vertices: u32,
+    /// 新初采最多执行的表面散射次数，属于1..=64；不含相机射线，末顶点仍计算发光与NEE。
+    /// 已有历史按保存的源路径长度重放；修改此值不隐式拒绝或重置历史，也不限制replay开销。
+    pub max_bounces: u32,
     /// temporal reservoir 的 M 上限；默认 20，M 按参考算法使用 f32。
     pub history_length: u32,
     /// 基础随机种子；具体 replay 身份由 shader 和场景适配器保存。
@@ -23,7 +23,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            max_vertices: 10,
+            max_bounces: 12,
             history_length: 20,
             seed: 0,
             specular_roughness_threshold: 0.2,
@@ -36,8 +36,8 @@ impl Default for Settings {
 impl Settings {
     /// 在输入边界校验路径计数与浮点阈值；不修正或 clamp 参数。
     pub const fn validate(self) -> Result<Self, Error> {
-        if self.max_vertices == 0 || self.max_vertices > 64 {
-            return Err(Error::Vertices);
+        if self.max_bounces == 0 || self.max_bounces > 64 {
+            return Err(Error::Bounces);
         }
         if self.history_length == 0 {
             return Err(Error::HistoryLength);

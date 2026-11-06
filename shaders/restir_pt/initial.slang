@@ -150,7 +150,7 @@ bool initialCanConnect(ShiftSettings settings, uint depth, uint rcLength, Replay
 
 /// 使用已保存 primaryHit；maxSurfaceBounces 须不超过254，与8bit路径长度保持一致。
 /// primaryHit、初始相机/介质与当前scene须属于同一代；所有材质和求交均为实际场景操作。
-/// sample/eval/发光在非末端顶点合并为一次 shadeInitial，重放只调用独立 sample 窄入口。
+/// 每个顶点合并eval/发光；预算耗尽后不采样散射，末顶点NEE不含BSDF竞争。
 /// LightSamples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
 /// PDF不含族选择概率。第二族使用原padding维，不改变散射/RR及重放的随机身份。
 /// sampleLight对相同Surface/u为纯函数，shadeInitial不改变灯采样状态。
@@ -218,7 +218,8 @@ public InitialResult sampleInitialPathTraced<
         bool rouletteKilled =
             useRussianRoulette && (rouletteProbability == 0.0 ||
                                    initialRandomValue<8>(bounceSeed) >= rouletteProbability);
-        bool sampleNEE = depth < maxSurfaceBounces && useNEE && surface.hasNonDeltaLobes;
+        bool continuation = depth < maxSurfaceBounces;
+        bool sampleNEE = useNEE && surface.hasNonDeltaLobes;
         float3 neeDirection = surface.wo;
         float3 secondNEEDirection = surface.wo;
         if (sampleNEE)
@@ -233,13 +234,12 @@ public InitialResult sampleInitialPathTraced<
             }
         }
         InitialShading shading = {};
-        if (depth < maxSurfaceBounces)
-            shading = tracer.shade(
-                scene, state, surface,
-                rouletteKilled ? float3(0.0) : initialBsdfRandom(bounceSeed, useRussianRoulette),
-                neeDirection, secondNEEDirection, !rouletteKilled);
-        if (depth < maxSurfaceBounces)
-            surface.emission = shading.emission;
+        shading = tracer.shade(scene, state, surface,
+                               rouletteKilled || !continuation
+                                   ? float3(0.0)
+                                   : initialBsdfRandom(bounceSeed, useRussianRoulette),
+                               neeDirection, secondNEEDirection, continuation && !rouletteKilled);
+        surface.emission = shading.emission;
 
         LastVertexState last = initialLastVertex(previousScatter, previousSurface, previousRough,
                                                  segment, primaryFootprint, distanceThreshold);
@@ -279,9 +279,6 @@ public InitialResult sampleInitialPathTraced<
                 }
             }
         }
-        if (depth == maxSurfaceBounces)
-            break;
-
         [unroll]
         for (uint lightIndex = 0; lightIndex < LightSamples; ++lightIndex)
         {
@@ -293,7 +290,7 @@ public InitialResult sampleInitialPathTraced<
             if (!(light.pdf > 0.0) || !any(light.radiance > 0.0))
                 continue;
             BsdfEvaluation nee = lightIndex == 0 ? shading.nee : shading.secondNEE;
-            float lightMis = useMIS && light.lightType != LIGHT_ANALYTIC
+            float lightMis = continuation && useMIS && light.lightType != LIGHT_ANALYTIC
                                  ? lightMisWeight(1.0, light.pdf, 1.0, nee.pdf)
                                  : 1.0;
             float3 lightTransmittance =
@@ -319,6 +316,8 @@ public InitialResult sampleInitialPathTraced<
                                                     rc, canConnect, depth, throughput * reflected,
                                                     light.direction, cachedRadiance, reflected,
                                                     sourcePdf, light.pdf, light.lightType);
+                if (selected)
+                    ris.pathFlags.insertTerminalNEE(!continuation);
                 if (selected && canConnect)
                 {
                     ris.reconnectionHit = surface.hit;
@@ -363,6 +362,9 @@ public InitialResult sampleInitialPathTraced<
                 }
             }
         }
+
+        if (!continuation)
+            break;
 
         if (useRussianRoulette)
         {

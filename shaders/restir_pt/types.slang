@@ -70,7 +70,8 @@ public struct HitInfo
 
 /// NV原位布局：0..7为path length，8..15为rc length，16为NEE，17为primary direct，
 /// 18..19为lightType，20..25为rc前delta/transmission/component/indexing，
-/// 26..30为rc后delta/transmission/component；255是无可重连顶点的rc sentinel。
+/// 26..30为rc后delta/transmission/component，31为末顶点NEE无BSDF竞争；
+/// 255是无可重连顶点的rc sentinel。
 public struct ReSTIRPathFlags
 {
 
@@ -97,6 +98,7 @@ public struct ReSTIRPathFlags
     public static const uint kBSDFComponentAfterRcShift = 28;
 
     public static const uint kBSDFComponentMask = 0x7;
+    public static const uint kTerminalNEEShift = 31;
 
     public uint flags = 0;
 
@@ -212,6 +214,18 @@ public struct ReSTIRPathFlags
     public bool lastVertexNEE()
     {
         return ((flags >> kLastVertexNEEShift) & 1) != 0u;
+    }
+
+    /// 散射预算耗尽后的NEE没有BSDF采样竞争；随赢家保存，预算热切不能改写旧样本。
+    [mutating]
+    public void insertTerminalNEE(bool terminal)
+    {
+        flags = (flags & ~(1u << kTerminalNEEShift)) | (uint(terminal) << kTerminalNEEShift);
+    }
+
+    public bool terminalNEE()
+    {
+        return (flags >> kTerminalNEEShift) != 0u;
     }
 
     [mutating]

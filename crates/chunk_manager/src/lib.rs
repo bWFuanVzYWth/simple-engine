@@ -97,5 +97,6 @@ pub use geometry::{
 pub use neighbors::{Face, FaceNeighbor, FaceNeighbors, NeighborStep};
 pub use planner::{Budget, Plan, PlanError, Stats, plan};
 pub use state::{
-    Build, Change, GrowthError, Handle, Patch, PatchToken, Rejected, State, StateError, Ticket,
+    Build, Change, GrowthError, Handle, Patch, PatchPublication, PatchToken, Rejected, State,
+    StateError, Ticket,
 };
