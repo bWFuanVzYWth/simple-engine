@@ -334,18 +334,19 @@ pub struct Programs<'a> {
     /// 初采控制流叶子；数量可独立于重放/求值，索引及类型由对应raygen的构建契约保证。
     /// 使用非空 initial_hits 时允许为空，避免链接不会调用的初采 callable。
     pub initial_callables: &'a [RayShader<'a>],
-    /// 两个replay阶段共用的Flow叶子。
+    /// 两个replay阶段共用的操作专用叶子；可按散射键独立去重。
     pub replay_callables: &'a [RayShader<'a>],
-    /// temporal merge与spatial precompute共用的evaluate叶子。
+    /// temporal merge与spatial precompute共用的求值表，可包含纯eval及连接Beer等独立角色。
+    /// 不要求与replay等长；资源发布者须证明shader中的操作偏移、程序键与此表一致。
     pub evaluate_callables: &'a [RayShader<'a>],
 }
 
 /// initial独立链接初采叶子；重用SBT以replay开头，随后为evaluate或完整重连叶子。
-/// 独立重放/求值Flow数相同；初采与完整重连可扩展控制流特化，索引及payload由着色器契约保证。
+/// 各操作可按真实消费者独立投影和去重；索引、操作偏移和payload由受控着色器构建保证。
 #[derive(Clone, Copy)]
 pub struct FusedPrograms<'a> {
     /// 可选完整重连叶子；空切片沿用独立evaluate。
-    /// 非空须按单侧F、双侧F×F排列；融合SBT在它们之前保留F个replay。
+    /// 非空时融合SBT在它们之前保留完整replay表；本表排列由发布者的shader契约定义。
     /// 对应raygen须使用同一索引和payload契约，不与独立evaluate入口混用。
     pub reconnection_callables: &'a [RayShader<'a>],
     /// primary 与初采。
@@ -495,29 +496,13 @@ impl Pipelines {
             )
         };
         let fused = if fusion != Fusion::NONE {
-            let count = programs.replay_callables.len();
-            if (programs.initial_callables.is_empty() && programs.initial_hits.is_empty())
-                || count == 0
-                || count > u32::MAX as usize / 2
-                || programs.evaluate_callables.len() != count
-            {
-                return Err(vulkan::Error::InvalidArgument(
-                    "融合SBT须含初采命中或callable叶子，以及两组非空等长、合计可由u32索引的重放/求值叶子",
-                )
-                .into());
-            }
             let fused = programs.fused.ok_or(Error::MissingFusionPrograms)?;
-            if !fused.reconnection_callables.is_empty()
-                && count
-                    .checked_add(1)
-                    .and_then(|next| count.checked_mul(next))
-                    != Some(fused.reconnection_callables.len())
-            {
-                return Err(vulkan::Error::InvalidArgument(
-                    "完整重连SBT须按F个单侧、F×F个双侧叶子排列",
-                )
-                .into());
-            }
+            validate_callable_groups(
+                !programs.initial_callables.is_empty() || !programs.initial_hits.is_empty(),
+                programs.replay_callables.len(),
+                programs.evaluate_callables.len(),
+                fused.reconnection_callables.len(),
+            )?;
             Some(fused)
         } else {
             None
@@ -1136,6 +1121,29 @@ const fn validate_subgroup(fusion: Fusion, subgroup: SubgroupProperties) -> Resu
     Ok(())
 }
 
+const fn validate_callable_groups(
+    has_initial: bool,
+    replay: usize,
+    evaluate: usize,
+    reconnection: usize,
+) -> Result<(), vulkan::Error> {
+    let shift = if reconnection == 0 {
+        evaluate
+    } else {
+        reconnection
+    };
+    let total = replay.checked_add(shift);
+    if !has_initial || replay == 0 || evaluate == 0 {
+        return Err(vulkan::Error::InvalidArgument(
+            "融合SBT须含初采、重放和求值叶子",
+        ));
+    }
+    if evaluate > u32::MAX as usize || !matches!(total, Some(count) if count <= u32::MAX as usize) {
+        return Err(vulkan::Error::InvalidArgument("融合SBT索引超出u32范围"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,6 +1158,25 @@ mod tests {
         ballot: true,
         arithmetic: true,
     };
+
+    #[test]
+    fn independently_projected_material_roles_need_not_have_equal_counts() {
+        assert!(validate_callable_groups(true, 6, 10, 0).is_ok());
+        assert!(validate_callable_groups(true, 6, 10, 17).is_ok());
+    }
+
+    #[test]
+    fn fused_material_tables_require_each_consumed_role() {
+        for (initial, replay, evaluate) in [(false, 6, 10), (true, 0, 10), (true, 6, 0)] {
+            assert!(validate_callable_groups(initial, replay, evaluate, 0).is_err());
+        }
+    }
+
+    #[test]
+    fn fused_material_tables_reject_unindexable_concatenation() {
+        assert!(validate_callable_groups(true, u32::MAX as usize, 1, 0).is_err());
+        assert!(validate_callable_groups(true, 6, 1, usize::MAX).is_err());
+    }
 
     #[test]
     fn requested_size_is_independent_of_device_default() {

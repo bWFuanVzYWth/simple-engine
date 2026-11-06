@@ -33,6 +33,7 @@ module initial;
 import restir_pt.types;
 import restir_pt.scene;
 import restir_pt.rng;
+__exported import restir_pt.initial_random;
 import restir_pt.replay;
 import geometry.ray;
 
@@ -55,8 +56,8 @@ public interface IInitialTrace<Scene : IRestirScene, State>
     /// 当前新命中的表面；fromOrigin区分观察位置和已知wo，不能用于历史或光端点。
     Surface load(inout Scene scene, inout State state, HitInfo hit, float3 view, bool fromOrigin);
     [mutating]
-    InitialShading shade(inout Scene scene, inout State state, Surface surface, float3 u,
-                         float3 direction, float3 secondDirection, bool continuation);
+    InitialVertex shade(inout Scene scene, inout State state, Surface surface,
+                        InitialRequest request);
 };
 
 /// 兼容原始TraceRay/callable实现；无额外状态或运行时分支。
@@ -75,57 +76,12 @@ public struct InitialTrace<Scene : IRestirScene> : IInitialTrace<Scene, uint>
                           : scene.loadSurface(hit, view, false);
     }
     [mutating]
-    public InitialShading shade(inout Scene scene, inout uint state, Surface surface, float3 u,
-                                float3 direction, float3 secondDirection, bool continuation)
+    public InitialVertex shade(inout Scene scene, inout uint state, Surface surface,
+                               InitialRequest request)
     {
-        return scene.shadeInitial(surface, u, direction, secondDirection, continuation);
+        return scene.shadeInitialVertex(surface, request);
     }
 };
-
-// 只保留bounce起点；LCG跳跃在模2^32上与逐维next完全相同。
-uint initialRandomState<let Dimension : uint>(uint seed)
-{
-    uint multiplier = 1u;
-    uint increment = 0u;
-    [unroll]
-    for (uint dimension = 0; dimension < Dimension; ++dimension)
-    {
-        multiplier *= 1664525u;
-        increment = 1664525u * increment + 1013904223u;
-    }
-    return multiplier * seed + increment;
-}
-
-float initialRandomValue<let Dimension : uint>(uint seed)
-{
-    return float(initialRandomState<Dimension>(seed) >> 8) * 0x1p-24f;
-}
-
-float3 initialLightRandom<let LightSamples : uint>(uint seed, uint index)
-{
-    if (LightSamples == 2)
-        return float3(index == 0 ? initialRandomValue<4>(seed) : initialRandomValue<6>(seed),
-                      index == 0 ? initialRandomValue<5>(seed) : initialRandomValue<7>(seed),
-                      min((float(index) + initialRandomValue<3>(seed)) * 0.5, 0x1.fffffep-1f));
-    return float3(initialRandomValue<4>(seed), initialRandomValue<5>(seed),
-                  initialRandomValue<3>(seed));
-}
-
-// 第二族的RIS选择使用独立播种，不推进供BSDF重放使用的bounce随机状态。
-float initialLightRISRandom(uint seed, uint index)
-{
-    if (index == 0)
-        return initialRandomValue<2>(seed);
-    return float(block_cipher_tea(seed, 0x6e656532u).x >> 8) * 0x1p-24f;
-}
-
-float3 initialBsdfRandom(uint seed, bool useRussianRoulette)
-{
-    uint selector = useRussianRoulette ? initialRandomState<9>(seed) : initialRandomState<8>(seed);
-    TinyUniformSampleGenerator sampler = rng_from_seed(selector);
-    float2 direction = sampler.next2D();
-    return float3(direction, float(selector >> 8) * 0x1p-24f);
-}
 
 LastVertexState initialLastVertex(BsdfSample sample, Surface surface, bool rough,
                                   ReplaySegment segment, float primaryFootprint,
@@ -153,7 +109,7 @@ bool initialCanConnect(ShiftSettings settings, uint depth, uint rcLength, Replay
 /// 每个顶点合并eval/发光；预算耗尽后不采样散射，末顶点NEE不含BSDF竞争。
 /// LightSamples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
 /// PDF不含族选择概率。第二族使用原padding维，不改变散射/RR及重放的随机身份。
-/// sampleLight对相同Surface/u为纯函数，shadeInitial不改变灯采样状态。
+/// 完整材质阶段一次产生可见NEE候选；调度器不重采灯、不重算材质支持或介质。
 public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : uint = 1>(
     inout Scene scene, uint2 pixel, HitInfo primaryHit, uint initialSeed, uint maxSurfaceBounces,
     ShiftSettings settings, bool useRussianRoulette, bool useNEE, bool useMIS)
@@ -219,26 +175,15 @@ public InitialResult sampleInitialPathTraced<
             useRussianRoulette && (rouletteProbability == 0.0 ||
                                    initialRandomValue<8>(bounceSeed) >= rouletteProbability);
         bool continuation = depth < maxSurfaceBounces;
-        bool sampleNEE = useNEE && surface.hasNonDeltaLobes;
-        float3 neeDirection = surface.wo;
-        float3 secondNEEDirection = surface.wo;
-        if (sampleNEE)
-        {
-            LightSample light =
-                scene.sampleLight(surface, initialLightRandom<LightSamples>(bounceSeed, 0));
-            neeDirection = light.pdf > 0.0 ? light.direction : surface.wo;
-            if (LightSamples == 2)
-            {
-                light = scene.sampleLight(surface, initialLightRandom<LightSamples>(bounceSeed, 1));
-                secondNEEDirection = light.pdf > 0.0 ? light.direction : surface.wo;
-            }
-        }
-        InitialShading shading = {};
-        shading = tracer.shade(scene, state, surface,
-                               rouletteKilled || !continuation
-                                   ? float3(0.0)
-                                   : initialBsdfRandom(bounceSeed, useRussianRoulette),
-                               neeDirection, secondNEEDirection, continuation && !rouletteKilled);
+        InitialRequest request = { bounceSeed,
+                                   (continuation && !rouletteKilled ? INITIAL_SAMPLE : 0u) |
+                                       (useNEE ? INITIAL_NEE : 0u) |
+                                       (continuation && useMIS ? INITIAL_MIS : 0u) |
+                                       (useRussianRoulette ? INITIAL_RR : 0u) |
+                                       (LightSamples == 2 ? INITIAL_TWO_LIGHTS : 0u) |
+                                       (depth == 0 ? INITIAL_PRIMARY : 0u),
+                                   previousSurface.point.position };
+        InitialVertex shading = tracer.shade(scene, state, surface, request);
         surface.emission = shading.emission;
 
         LastVertexState last = initialLastVertex(previousScatter, previousSurface, previousRough,
@@ -249,8 +194,7 @@ public InitialResult sampleInitialPathTraced<
         }
         else if (any(surface.emission > 0.0))
         {
-            float lightPdf =
-                scene.lightPdf(previousSurface, surface.hit, -surface.wo, LIGHT_EMISSIVE, false);
+            float lightPdf = shading.emissionPdf;
             float mis = useNEE && useMIS && !previousScatter.delta
                             ? lightMisWeight(1.0, previousFullPdf, 1.0, lightPdf)
                             : 1.0;
@@ -282,82 +226,50 @@ public InitialResult sampleInitialPathTraced<
         [unroll]
         for (uint lightIndex = 0; lightIndex < LightSamples; ++lightIndex)
         {
-            // 材质调用结束后按同一身份重建灯样本，不让灯载荷跨SER/callable存活。
-            LightSample light = {};
-            if (sampleNEE)
-                light = scene.sampleLight(surface,
-                                          initialLightRandom<LightSamples>(bounceSeed, lightIndex));
-            if (!(light.pdf > 0.0) || !any(light.radiance > 0.0))
+            InitialDirect light = lightIndex == 0 ? shading.first : shading.second;
+            if (!(light.pdf > 0.0))
                 continue;
-            BsdfEvaluation nee = lightIndex == 0 ? shading.nee : shading.secondNEE;
-            float lightMis = continuation && useMIS && light.lightType != LIGHT_ANALYTIC
-                                 ? lightMisWeight(1.0, light.pdf, 1.0, nee.pdf)
-                                 : 1.0;
-            float3 lightTransmittance =
-                scene.transmittance(surface, light.direction, light.distance);
-            float3 reflected =
-                nee.value * light.radiance * lightTransmittance * (lightMis / light.pdf);
-            Surface target = {};
-            if (light.hit.isValid())
-                target = scene.loadSurfaceFromOrigin(light.hit, surface.point.position, false);
-            bool visible = false;
-            if (any(reflected > 0.0))
-                visible = light.hit.isValid()
-                              ? scene.visible(surface, target, false)
-                              : scene.visibleDirection(surface, light.direction, false);
-            if (visible)
+            uint lightType = light.lightType & ~INITIAL_POINT_LIGHT;
+            bool canConnect = initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(),
+                                                segment, light.bsdfPdf, previousRough,
+                                                primaryFootprint, distanceThreshold);
+            float3 cachedRadiance = canConnect ? light.attenuatedRadiance : light.radiance;
+            bool selected = ris.addNEECandidate(initialLightRISRandom(bounceSeed, lightIndex), rc,
+                                                canConnect, depth, throughput * light.reflected,
+                                                light.direction, cachedRadiance, light.reflected,
+                                                sourcePdf, light.pdf, lightType);
+            if (selected)
+                ris.pathFlags.insertTerminalNEE(!continuation);
+            if (selected && canConnect)
             {
-                bool canConnect =
-                    initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(), segment,
-                                      nee.pdf, previousRough, primaryFootprint, distanceThreshold);
-                float3 cachedRadiance =
-                    canConnect ? light.radiance * lightTransmittance : light.radiance;
-                bool selected = ris.addNEECandidate(initialLightRISRandom(bounceSeed, lightIndex),
-                                                    rc, canConnect, depth, throughput * reflected,
-                                                    light.direction, cachedRadiance, reflected,
-                                                    sourcePdf, light.pdf, light.lightType);
-                if (selected)
-                    ris.pathFlags.insertTerminalNEE(!continuation);
-                if (selected && canConnect)
+                ris.reconnectionHit = surface.hit;
+                ris.reconnectionJacobian = segment.geometryFactor;
+                ris.integrand *= previousScatterPdf * light.pdf;
+                ris.rcNextVertexBounceSeed = initialRandomState<2>(bounceSeed);
+                ris.pathFlags.tryInsertBounceTypesBeforeRcVertex(last.data & 0x3fu, true);
+            }
+            if (selected && !canConnect && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH)
+            {
+                ris.reconnectionHit = light.hit;
+                ris.reconnectionJacobian = 1.0;
+                ris.reconnectionIncidentRadiance = light.radiance;
+                ris.reconnectionWi = light.direction;
+                ris.integrand *= light.pdf;
+                ris.pathFlags.insertRcVertexLength(ris.pathFlags.pathLength() + 1);
+                ris.pathFlags.insertIsTransmissionEvent(
+                    dot(surface.point.normal, surface.wo) *
+                            dot(surface.point.normal, light.direction) <
+                        0.0,
+                    true);
+                ris.pathFlags.insertSupportBSDFIndexingBeforeRcVertex(surface.supportBSDFIndexing);
+                if (light.hit.isValid())
                 {
-                    ris.reconnectionHit = surface.hit;
-                    ris.reconnectionJacobian = segment.geometryFactor;
-                    ris.integrand *= previousScatterPdf * light.pdf;
-                    ris.rcNextVertexBounceSeed = initialRandomState<2>(bounceSeed);
-                    ris.pathFlags.tryInsertBounceTypesBeforeRcVertex(last.data & 0x3fu, true);
-                }
-                if (selected && !canConnect && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH)
-                {
-                    // 无普通 rc 的 NEE 必须保存真实光端点，不能缩成旧方向的颜色缓存。
-                    ris.reconnectionHit = light.hit;
-                    ris.reconnectionJacobian = 1.0;
-                    ris.reconnectionIncidentRadiance = light.radiance;
-                    ris.reconnectionWi = light.direction;
-                    ris.integrand *= light.pdf;
-                    ris.pathFlags.insertRcVertexLength(ris.pathFlags.pathLength() + 1);
-                    ris.pathFlags.insertIsTransmissionEvent(
-                        dot(surface.point.normal, surface.wo) *
-                                dot(surface.point.normal, light.direction) <
-                            0.0,
-                        true);
-                    ris.pathFlags.insertSupportBSDFIndexingBeforeRcVertex(
-                        surface.supportBSDFIndexing);
-                    if (light.hit.isValid())
+                    if ((light.lightType & INITIAL_POINT_LIGHT) != 0)
+                        ris.reconnectionIncidentRadiance /= light.geometryFactor;
+                    else
                     {
-                        bool pointLight =
-                            light.lightType == LIGHT_ANALYTIC && scene.isPointLight(light.hit);
-                        float geometryFactor =
-                            (pointLight ? 1.0 : abs(dot(target.point.normal, -light.direction))) /
-                            (light.distance * light.distance);
-                        if (pointLight)
-                        {
-                            ris.reconnectionIncidentRadiance /= geometryFactor;
-                        }
-                        else
-                        {
-                            ris.reconnectionJacobian *= geometryFactor;
-                            ris.lightPdf *= geometryFactor;
-                        }
+                        ris.reconnectionJacobian *= light.geometryFactor;
+                        ris.lightPdf *= light.geometryFactor;
                     }
                 }
             }
@@ -409,7 +321,7 @@ public InitialResult sampleInitialPathTraced<
             float uBSDFRIS = sampler.next1D();
             float3 radiance = scene.environment(scatter.direction, surface.point.position, false);
             float3 environmentTransmittance =
-                scene.transmittance(surface, scatter.direction, scene.environmentDistance());
+                exp(-scatter.medium.yzw * scene.environmentDistance());
             float lightPdf = scene.lightPdf(surface, hit, scatter.direction, LIGHT_ENV, false);
             float mis = useNEE && useMIS && !scatter.delta
                             ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)

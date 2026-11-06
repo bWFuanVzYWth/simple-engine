@@ -143,13 +143,22 @@ public interface IPrefixGuides
     void environment(TransportCall data);
 };
 
+/// HitObject路径的首命中观察者；复用实际命中，不为材质解码重查同一主射线。
+public interface IHitGuides : IPrefixGuides
+{
+    void surface_hit(HitObject object, TransportCall data);
+};
+
 /// 默认不生成辅助量；编译期专门化后不保留额外资源、材质翻译或存储。
-public struct NoPrefixGuides : IPrefixGuides
+public struct NoPrefixGuides : IHitGuides
 {
     public void surface(TransportCall data)
     {
     }
     public void environment(TransportCall data)
+    {
+    }
+    public void surface_hit(HitObject object, TransportCall data)
     {
     }
 };

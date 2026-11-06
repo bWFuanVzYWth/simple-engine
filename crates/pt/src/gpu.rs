@@ -1,4 +1,4 @@
-//! 同一 Vulkan 三阶段录制器；场景描述符与受控 shader 由应用适配器提供。
+//! Vulkan路径录制器；完整输运可显式省略前缀阶段，场景与受控shader由应用适配。
 
 use vulkan::{
     interop::RayShader,
@@ -23,8 +23,9 @@ pub enum Error {
 
 /// 静态场景适配器实例化同一 PT 模块后的受控产物；只在创建 pipeline 时借用。
 pub struct Programs<'a> {
-    /// K1：delta 前缀 raygen。
-    pub prefix: RayShader<'a>,
+    /// 可选K1 delta前缀；None表示transport负责首查询、完整输运及全部post输入。
+    /// 是否可省略由受控shader契约决定，不检查空shader或根据运行输入隐式推断。
+    pub prefix: Option<RayShader<'a>>,
     /// K2：完整输运 raygen。
     pub transport: RayShader<'a>,
     /// 场景 miss。
@@ -47,7 +48,7 @@ pub struct Programs<'a> {
 /// 同一视图的工作缓冲按样本顺序复用；调用方维护跨批次参数更新与提交顺序。
 /// 返回的 [`Recorded`] 在 Context 内登记使用，宿主须显式提交或取消；外部 Flight 真实完成后再关闭。
 pub struct Renderer {
-    prefix: RayTracingPipeline,
+    prefix: Option<RayTracingPipeline>,
     transport: RayTracingPipeline,
     post: ComputePipeline,
     extent: [u32; 2],
@@ -66,13 +67,18 @@ impl Renderer {
         if extent.into_iter().any(|v| v == 0 || v > 65536) {
             return Err(Error::Extent);
         }
-        let prefix = RayTracingPipeline::new(
-            context,
-            trace,
-            [programs.prefix, programs.miss, programs.closest_hit],
-            programs.any_hit,
-            &[],
-        )?;
+        let prefix = programs
+            .prefix
+            .map(|prefix| {
+                RayTracingPipeline::new(
+                    context,
+                    trace,
+                    [prefix, programs.miss, programs.closest_hit],
+                    programs.any_hit,
+                    &[],
+                )
+            })
+            .transpose()?;
         let hits: Vec<_> = std::iter::once(programs.closest_hit)
             .chain(programs.material_hits.iter().copied())
             .collect();
@@ -113,26 +119,35 @@ impl Renderer {
             return Err(Error::Extent);
         }
         Ok(Self {
-            prefix: self.prefix.rebind(context, trace)?,
+            prefix: self
+                .prefix
+                .map(|prefix| prefix.rebind(context, trace))
+                .transpose()?,
             transport: self.transport.rebind(context, trace)?,
             post: self.post.rebind(context, post)?,
             extent,
         })
     }
 
-    /// 当前发布的三阶段版本；供唯一 owner 的资源回收使用。
-    pub fn roots(&self) -> [Resource; 3] {
-        [self.prefix.into(), self.transport.into(), self.post.into()]
+    /// 实际发布的阶段版本；只返回句柄副本，不分配或借用工作存储，供唯一owner回收。
+    pub fn roots(&self) -> impl Iterator<Item = Resource> + use<> {
+        self.prefix
+            .map(Resource::from)
+            .into_iter()
+            .chain([self.transport.into(), self.post.into()])
     }
 
-    /// 按 K1、K2 顺序返回链接后驱动可执行统计；须显式启用 native 统计能力。
+    /// 按K1、K2顺序返回驱动可执行统计；省略K1时第一个向量为空，须显式启用native统计能力。
     /// 不执行 GPU，不含 compute K3；资源或查询错误原样返回。
     pub fn executable_statistics(
         &self,
         context: &Context,
     ) -> Result<[Vec<vulkan::native::ExecutableStatistics>; 2], Error> {
         Ok([
-            self.prefix.executable_statistics(context)?,
+            self.prefix
+                .map(|prefix| prefix.executable_statistics(context))
+                .transpose()?
+                .unwrap_or_default(),
             self.transport.executable_statistics(context)?,
         ])
     }
@@ -142,7 +157,7 @@ impl Renderer {
         self.extent
     }
 
-    /// 逐样本录制 K1→K2→K3 和阶段间可见性，不提交、不等待。
+    /// 逐样本录制可选K1→K2→K3和实际阶段间可见性，不提交、不等待。
     /// 交接及累积缓冲由绑定所有者持有，不按 samples 倍增。
     pub fn record(&self, context: &mut Context, samples: u32) -> Result<Recorded, Error> {
         if samples == 0 {
@@ -150,8 +165,10 @@ impl Renderer {
         }
         let mut commands = Commands::new(context)?;
         for _ in 0..samples {
-            commands.trace(self.prefix, self.extent)?;
-            commands.barrier();
+            if let Some(prefix) = self.prefix {
+                commands.trace(prefix, self.extent)?;
+                commands.barrier();
+            }
             commands.trace(self.transport, self.extent)?;
             commands.barrier();
             commands.dispatch(

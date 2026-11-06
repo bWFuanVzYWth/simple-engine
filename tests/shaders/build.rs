@@ -30,6 +30,12 @@ fn main() -> Result<(), shader_build::Error> {
         ),
         (
             "shaders/reconstruction.slang",
+            "keyed_guide_main",
+            "compute",
+            "keyed_guide_main.spv",
+        ),
+        (
+            "shaders/reconstruction.slang",
             "reflection_motion_main",
             "compute",
             "reflection_motion_main.spv",
@@ -141,6 +147,18 @@ fn main() -> Result<(), shader_build::Error> {
             "denoise_albedo_main",
             "compute",
             "denoise_albedo_main.spv",
+        ),
+        (
+            "shaders/denoise.slang",
+            "denoise_flow_main",
+            "compute",
+            "denoise_flow_main.spv",
+        ),
+        (
+            "shaders/denoise.slang",
+            "flow_discrete_main",
+            "compute",
+            "flow_discrete_main.spv",
         ),
         (
             "shaders/denoise.slang",

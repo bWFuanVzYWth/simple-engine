@@ -81,6 +81,27 @@ fn albedo_is_directional_energy() -> Result {
 
 #[test]
 #[ignore = "需要真实 Vulkan compute GPU"]
+fn flow_guides_preserve_full_material_directional_energy() -> Result {
+    let rows = run(
+        "denoise_flow_main",
+        include_bytes!(concat!(env!("OUT_DIR"), "/denoise_flow_main.spv")),
+        28,
+    )?;
+    for material in 0..7 {
+        for component in 0..2 {
+            for channel in 0..4 {
+                close(
+                    rows[material * 4 + component + 2][channel],
+                    rows[material * 4 + component][channel],
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
 fn prefix_observer_keeps_first_surface_and_transport() -> Result {
     let rows = run(
         "denoise_prefix_main",
@@ -92,5 +113,19 @@ fn prefix_observer_keeps_first_surface_and_transport() -> Result {
     assert_eq!(rows[2], rows[3]);
     assert_eq!(rows[4], rows[5]);
     assert_eq!(rows[4], [0.0, 0.0, 1.0, 1.0]);
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn flow_classification_keeps_mixed_metal_null_proposals() -> Result {
+    let rows = run(
+        "flow_discrete_main",
+        include_bytes!(concat!(env!("OUT_DIR"), "/flow_discrete_main.spv")),
+        4,
+    )?;
+    for (row, expected) in rows.into_iter().zip([0., 1., 0., 1.]) {
+        assert_eq!(row, [expected, expected, 0., 0.]);
+    }
     Ok(())
 }

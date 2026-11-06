@@ -5,6 +5,7 @@ import pt.denoise;
 import pt.integrator;
 import geometry.ray;
 import bsdf.openpbr.api;
+import bsdf.openpbr.flow;
 import bsdf.openpbr.specialized;
 import "bsdf/openpbr/math/microfacet_energy.slang";
 
@@ -78,6 +79,70 @@ void denoise_albedo_main(uint3 id: SV_DispatchThreadID)
                                           float3(0, 0, 1), float4(1, 0, 0, 0));
     outputs[5] = float4(solid.diffuse_albedo, 1);
     outputs[6] = float4(solid.specular_albedo, 1);
+}
+
+void compare_flow_albedo<let Flow : uint>(openpbr::Material material, float4 incident,
+                                          float4 transmitted, uint index)
+{
+    float3 normal = float3(0, 0, 1), view = normalize(float3(0.7, 0.1, 0.7));
+    openpbr::DenoiseAlbedos reference =
+        openpbr::denoise_albedos(ConstantEnergy(), material, normal, view, incident, transmitted);
+    openpbr::DenoiseAlbedos specialized = openpbr::denoise_albedos_flow<Flow>(
+        ConstantEnergy(), material, normal, view, incident, transmitted);
+    outputs[index * 4] = float4(reference.diffuse, 1);
+    outputs[index * 4 + 1] = float4(reference.specular, 1);
+    outputs[index * 4 + 2] = float4(specialized.diffuse, 1);
+    outputs[index * 4 + 3] = float4(specialized.specular, 1);
+}
+
+[numthreads(64, 1, 1)]
+void denoise_flow_main(uint3 id: SV_DispatchThreadID)
+{
+    if (id.x != 0)
+        return;
+    openpbr::Material material = {};
+    material.base_roughness = inputs[0];
+    material.surface.x = 1;
+    float4 air = float4(1, 0, 0, 0), glass = float4(1.5, 0, 0, 0);
+    compare_flow_albedo<1>(material, air, air, 0);
+    material.surface.x = 1.5;
+    compare_flow_albedo<131>(material, air, air, 1);
+    material.surface.z = 0.5;
+    compare_flow_albedo<139>(material, air, air, 2);
+    material.surface.y = 1;
+    material.surface.z = 0;
+    compare_flow_albedo<132>(material, air, air, 3);
+    material.surface.y = 0;
+    material.control.x = 1;
+    material.base_roughness.w = 0;
+    compare_flow_albedo<338>(material, air, glass, 4);
+    material.base_roughness.w = inputs[0].w;
+    material.control.x = 3;
+    compare_flow_albedo<674>(material, glass, air, 5);
+    material.control.x = 0;
+    material.surface.y = 0.5;
+    compare_flow_albedo<2183>(material, air, air, 6);
+}
+
+[numthreads(64, 1, 1)]
+void flow_discrete_main(uint3 id: SV_DispatchThreadID)
+{
+    if (id.x != 0)
+        return;
+    openpbr::Material material = {};
+    material.surface = float4(1, 0.5, 0, 0);
+    float4 air = float4(1, 0, 0, 0), glass = float4(1.5, 0, 0, 0);
+    outputs[0] = float4(float(openpbr::is_discrete_only(material, air, air)),
+                        float(openpbr::is_discrete_only_flow<2116>(material, air, air)), 0, 0);
+    material.surface.y = 1;
+    outputs[1] = float4(float(openpbr::is_discrete_only(material, air, air)),
+                        float(openpbr::is_discrete_only_flow<68>(material, air, air)), 0, 0);
+    material.control.x = 1;
+    material.base_roughness.w = 0.5;
+    outputs[2] = float4(float(openpbr::is_discrete_only(material, air, glass)),
+                        float(openpbr::is_discrete_only_flow<658>(material, air, glass)), 0, 0);
+    outputs[3] = float4(float(openpbr::is_discrete_only(material, glass, glass)),
+                        float(openpbr::is_discrete_only_flow<272>(material, glass, glass)), 0, 0);
 }
 
 public struct PrefixScene : ITraceScene

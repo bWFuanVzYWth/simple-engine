@@ -54,6 +54,34 @@ fn guide(mode: u32) -> Result<Vec<[f32; 4]>> {
     )
 }
 
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn material_key_guides_preserve_the_psr_and_budget_contract() -> Result {
+    for mode in 0..=6 {
+        let expected = guide(mode)?;
+        let keyed = run(
+            "keyed_guide_main",
+            include_bytes!(concat!(env!("OUT_DIR"), "/keyed_guide_main.spv")),
+            mode,
+            5,
+        )?;
+        for row in 0..5 {
+            if row == 0 && expected[2][3] as u32 & 1 != 0 {
+                continue;
+            }
+            for channel in 0..4 {
+                if row != 0 || channel != 3 {
+                    assert!(
+                        (keyed[row][channel] - expected[row][channel]).abs() < 5e-4,
+                        "mode={mode}, row={row}, channel={channel}: keyed={keyed:?}, expected={expected:?}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn spatial(mode: u32) -> Result<[f32; 4]> {
     Ok(run(
         "spatial_main",

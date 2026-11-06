@@ -55,6 +55,22 @@ public bool flow_continuous<let Flow : uint>()
                               FLOW_CONTINUOUS_TRANSMISSION>();
 }
 
+/// 与is_discrete_only相同的全闭包分类；Flow由资源世代证明，纯测度域不保留数值分类分支。
+/// 混合金属的非金属null proposal仍保留原metalness判定，不能把它当成纯金属。
+public bool is_discrete_only_flow<let Flow : uint>(Material material, float4 incident,
+                                                   float4 transmitted)
+{
+    static const bool Delta = (Flow & (FLOW_DELTA_REFLECTION | FLOW_DELTA_TRANSMISSION)) != 0;
+    static const bool Transmission =
+        (Flow & (FLOW_SOLID_TRANSMISSION | FLOW_THIN_TRANSMISSION)) != 0;
+    static const bool Conductor = (Flow & FLOW_CONDUCTOR_REFLECTION) != 0;
+    if (!Delta || !(Transmission || Conductor))
+        return false;
+    if (!flow_continuous<Flow>() && (Transmission || (Flow & FLOW_METAL_MIX) == 0))
+        return true;
+    return is_discrete_only(material, incident, transmitted);
+}
+
 internal bool flow_transmission<let Flow : uint>()
 {
     return flow_has<Flow, FLOW_SOLID_TRANSMISSION | FLOW_THIN_TRANSMISSION>();

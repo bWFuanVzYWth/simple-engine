@@ -39,6 +39,19 @@ public DenoiseGuides denoise_surface<Energy>(Energy energy, SurfaceMaterial mate
     return result;
 }
 
+/// 相同辅助量的Flow专用入口；键由资源发布者证明，保留完整FP32方向能量。
+public DenoiseGuides denoise_surface_flow<let Flow : uint, Energy>(Energy energy,
+                                                                   SurfaceMaterial material,
+                                                                   float3 normal, float3 view,
+                                                                   float4 incident)
+    where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
+{
+    openpbr::DenoiseAlbedos albedos = openpbr::denoise_albedos_flow<Flow>(
+        energy, material.pbr, normal, view, incident, material.transmitted);
+    return { float4(dot(normal, view) < 0 ? -normal : normal, material.pbr.base_roughness.w),
+             albedos.diffuse, albedos.specular };
+}
+
 /// 前向线性深度，单位同场景；不是射线距离。调用者负责拒绝 <=0 或非有限值。
 public float denoise_depth(DenoiseCamera camera, float3 position)
 {

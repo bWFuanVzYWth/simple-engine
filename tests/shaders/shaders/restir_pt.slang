@@ -5,9 +5,11 @@ import restir_pt.types;
 import restir_pt.rng;
 import restir_pt.scene;
 import restir_pt.initial;
+import restir_pt.initial_vertex;
 import restir_pt.shift;
 import restir_pt.reservoir;
 import restir_pt.resampling;
+import geometry.ray;
 
 using namespace restir_pt;
 
@@ -87,6 +89,14 @@ public struct LambertScene : IRestirScene
         result.frontFacing = dot(result.point.normal, result.wo) > 0.0;
         return result;
     }
+    public geometry::SurfacePoint lightEndpoint(HitInfo hit, bool previous)
+    {
+        return loadSurface(hit, float3(0), previous).point;
+    }
+    public InitialVertex shadeInitialVertex(Surface surface, InitialRequest request)
+    {
+        return generic_initial_vertex(this, surface, request);
+    }
     public void setIncident(inout Surface surface, float4 medium)
     {
         surface.incident = medium;
@@ -153,6 +163,21 @@ public struct LambertScene : IRestirScene
     {
         float pdf = max(0.0, dot(surface.point.normal, direction)) / PI;
         return { albedo * pdf, pdf };
+    }
+    public ConnectionEvaluation evaluateConnection(Surface surface, float3 direction,
+                                                   float distance, int component)
+    {
+        return { evaluateBsdf(surface, direction, component),
+                 transmittance(surface, direction, distance) };
+    }
+    public EmitterEvaluation evaluateEmitter(Surface surface, float3 from, bool previous)
+    {
+        surface = loadSurface(surface.hit, surface.wo, previous);
+        Surface source = {};
+        source.point.position = from;
+        return { surface.emission,
+                 lightPdf(source, surface.hit, -surface.wo, LIGHT_EMISSIVE, previous),
+                 surface.point.position, surface.point.normal };
     }
     public bool isSampleRough(Surface surface, uint component, float pdf, float threshold)
     {

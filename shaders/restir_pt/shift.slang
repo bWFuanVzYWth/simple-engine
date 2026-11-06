@@ -109,7 +109,10 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
     int firstComponent = dstPrevious.supportBSDFIndexing && !(rcIsEmissive && lightIsNEE)
                              ? int(source.pathFlags.decodeBSDFComponent(true))
                              : -1;
-    BsdfEvaluation first = scene.evaluateBsdf(dstPrevious, direction, firstComponent);
+    ConnectionEvaluation connection = scene.evaluateConnection(
+        dstPrevious, direction, rcHasPosition ? rcSurface.distance : scene.environmentDistance(),
+        firstComponent);
+    BsdfEvaluation first = connection.bsdf;
     // rcPrevious 在目标前缀中不能已成为更早的 reconnection vertex。
     if (rcLength > 1 && rcFootprintFactor > 0.0 &&
         rcFootprintFactor / first.pdf >= primaryRayFootprint * distanceThreshold)
@@ -132,8 +135,7 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
             ? scene.environment(direction, dstPrevious.point.position, previous)
             : source.reconnectionIncidentRadiance;
     float3 integrand = incidentRadiance * first.value;
-    integrand *= scene.transmittance(
-        dstPrevious, direction, rcHasPosition ? rcSurface.distance : scene.environmentDistance());
+    integrand *= connection.transmittance;
     if (rcIsEmissive && useNEE && useMIS && lightType != LIGHT_ANALYTIC &&
         !(lightIsNEE && source.pathFlags.terminalNEE()))
     {

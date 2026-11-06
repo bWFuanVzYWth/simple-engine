@@ -6,6 +6,7 @@ import bsdf.openpbr.specialized;
 import bsdf.openpbr.api;
 import pt.scene;
 import geometry.ray;
+import pt.key_guides;
 
 [[vk::binding(0, 0)]]
 StructuredBuffer<float4> inputs;
@@ -51,7 +52,7 @@ void psr_main(uint3 id: SV_DispatchThreadID)
     outputs[2] = float4(float(state.count), float(state.refracted), float(state.fixed), 0);
 }
 
-public struct GuideScene : IGuideScene
+public struct GuideScene : IGuideScene, IKeyGuideTrace
 {
     public uint mode;
     public SurfaceMaterial guide_material(Hit hit, float4 incident)
@@ -93,6 +94,27 @@ public struct GuideScene : IGuideScene
     {
         return { hit.surface.position, true, true };
     }
+    public KeyGuideVertex key_vertex(Hit hit, float3 direction, float4 incident)
+    {
+        SurfaceMaterial material = guide_material(hit, incident);
+        if (hit.capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC)
+            return make_key_guide<338>(hit, material, energy(), guide_pose(hit), direction,
+                                       incident);
+        if (hit.capability == openpbr::CAP_DELTA_CONDUCTOR)
+            return make_key_guide<68>(hit, material, energy(), guide_pose(hit), direction,
+                                      incident);
+        return make_key_guide<131>(hit, material, energy(), guide_pose(hit), direction, incident);
+    }
+    public bool intersect_guide(float3 origin, float3 direction, float4 incident,
+                                out KeyGuideVertex vertex)
+    {
+        vertex = {};
+        Hit hit;
+        if (!intersect(origin, direction, hit))
+            return false;
+        vertex = key_vertex(hit, direction, incident);
+        return true;
+    }
 };
 
 [numthreads(64, 1, 1)]
@@ -123,6 +145,35 @@ void guide_main(uint3 id: SV_DispatchThreadID)
     outputs[1] = float4(endpoint.direction, float(endpoint.queries));
     outputs[2] = float4(projection.depth, projection.motion, float(projection.flags));
     outputs[3] = float4(first.path.radiance, float(first.path.status));
+    outputs[4] = float4(float(endpoint.psr.odd), float(endpoint.psr.refracted),
+                        float(endpoint.use_interface_specular), endpoint.distance);
+}
+
+[numthreads(64, 1, 1)]
+void keyed_guide_main(uint3 id: SV_DispatchThreadID)
+{
+    if (id.x != 0)
+        return;
+    uint mode = uint(inputs[0].x);
+    Hit hit = {};
+    hit.surface = { float3(0, 0, 2), float3(0, 0, -1), 0 };
+    hit.capability = mode == 1 || mode == 2 ? openpbr::CAP_DELTA_SOLID_DIELECTRIC
+                     : mode == 6            ? openpbr::CAP_OPAQUE_DIELECTRIC
+                                            : openpbr::CAP_DELTA_CONDUCTOR;
+    hit.distance = 2;
+    float3 direction = mode == 2 ? normalize(float3(0.9, 0, 0.4358899)) : float3(0, 0, 1);
+    float4 incident = float4(mode == 2 ? 1.5 : 1, 100, 100, 100);
+    GuideScene scene = { mode };
+    KeyGuideVertex vertex = scene.key_vertex(hit, direction, incident);
+    KeyGuideEndpoint keyed = trace_key_guide(scene, vertex, float3(0), direction, incident,
+                                             mode == 5 ? 1 : 2, mode == 6);
+    GuideEndpoint endpoint = keyed.endpoint;
+    GuideProjection projection =
+        project_guide(endpoint, camera(0), camera(-1), float2(0.5), uint2(800, 400), true);
+    outputs[0] = float4(endpoint.hit.surface.position, 0);
+    outputs[1] = float4(endpoint.direction, float(endpoint.queries));
+    outputs[2] = float4(projection.depth, projection.motion, float(projection.flags));
+    outputs[3] = float4(3, 5, 7, float(PATH_DONE));
     outputs[4] = float4(float(endpoint.psr.odd), float(endpoint.psr.refracted),
                         float(endpoint.use_interface_specular), endpoint.distance);
 }

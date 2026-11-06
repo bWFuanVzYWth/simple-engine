@@ -196,8 +196,7 @@ public ReconnectionData traceReplayedPath<Scene : IRestirScene>(
                 return result;
             float3 radiance =
                 scene.environment(scatter.direction, surface.point.position, previous);
-            radiance *=
-                scene.transmittance(surface, scatter.direction, scene.environmentDistance());
+            radiance *= exp(-scatter.medium.yzw * scene.environmentDistance());
             float lightPdf = scene.lightPdf(surface, hit, scatter.direction, LIGHT_ENV, previous);
             float mis = useNEE && useMIS && !scatter.delta
                             ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)
@@ -207,29 +206,38 @@ public ReconnectionData traceReplayedPath<Scene : IRestirScene>(
         }
 
         throughput *= exp(-scatter.medium.yzw * distance);
-        Surface next = scene.loadSurface(hit, -scatter.direction, previous);
-        scene.setIncident(next, scatter.medium);
-        incoming = replaySegment(surface, next, scatterPdf);
         uint nextDepth = depth + 1;
         if (nextDepth == pathLength + 1 && !source.pathFlags.lastVertexNEE())
         {
             if (shouldConnect || source.pathFlags.lightType() != LIGHT_EMISSIVE)
                 return result;
+            Surface endpoint = {};
+            endpoint.hit = hit;
+            endpoint.wo = -scatter.direction;
+            EmitterEvaluation emitter =
+                scene.evaluateEmitter(endpoint, surface.point.position, previous);
+            if (!any(emitter.emission > 0.0))
+                return result;
+            endpoint.point.position = emitter.position;
+            endpoint.point.normal = emitter.normal;
+            ReplaySegment emitterSegment = replaySegment(surface, endpoint, scatterPdf);
             bool emitterCouldReconnect =
-                min(incoming.rayFootprint,
-                    incoming.inverseGeometryFactor / (0.5 / 3.14159265358979323846)) >=
+                min(emitterSegment.rayFootprint,
+                    emitterSegment.inverseGeometryFactor / (0.5 / 3.14159265358979323846)) >=
                     primaryRayFootprint * distanceThreshold &&
                 (!surface.supportSimpleRoughnessThreshold || rough);
             if (nextDepth < rcLength && emitterCouldReconnect)
                 return result;
-            float lightPdf =
-                scene.lightPdf(surface, hit, scatter.direction, LIGHT_EMISSIVE, previous);
+            float lightPdf = emitter.pdf;
             float mis = useNEE && useMIS && !scatter.delta
                             ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)
                             : 1.0;
-            result.pathThroughput = throughput * next.emission * mis;
+            result.pathThroughput = throughput * emitter.emission * mis;
             return result;
         }
+        Surface next = scene.loadSurface(hit, -scatter.direction, previous);
+        scene.setIncident(next, scatter.medium);
+        incoming = replaySegment(surface, next, scatterPdf);
         if (shouldConnect && nextDepth == rcLength - 1)
         {
             if (!next.hasNonDeltaLobes)
