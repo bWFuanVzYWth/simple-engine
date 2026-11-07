@@ -1055,3 +1055,79 @@ fn stable_transport_preserves_representable_weighted_contributions() -> Result {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "需要 Vulkan compute：乘除与 MIS 在普通、边界及极端输入下符合实数表达式"]
+fn transport_matches_wide_precision_reference() -> Result {
+    let lo = 2.0_f32.powi(-40);
+    let hi = 2.0_f32.powi(40);
+    let below = f32::from_bits(lo.to_bits() - 1);
+    let above = f32::from_bits(hi.to_bits() + 1);
+    let cases = [
+        ([0., 0.25, 3.], [1., 2., 0.5], 0.125, 4., 0.25, 0.5),
+        ([lo, hi, 1.], [lo, hi, lo], hi, lo, lo, hi),
+        ([hi, lo, 1.], [hi, lo, hi], lo, hi, hi, lo),
+        ([below, above, 0.], [hi, lo, 1.], hi, lo, below, above),
+        (
+            [1e30, 1e-25, 0.],
+            [1e30, 1e30, 1.],
+            1e30,
+            1e-30,
+            1e-25,
+            1e-4,
+        ),
+        ([0.7, 0.002, 17.], [0.13, 21., 0.03], 0.91, 0.29, 0.37, 0.37),
+        ([1., 2., 3.], [4., 5., 6.], 7., 8., 0., 1.),
+        ([1., 2., 3.], [4., 5., 6.], 7., 8., 1., 0.),
+    ];
+    let mut input = Vec::new();
+    let mut expected = Vec::new();
+    for (first, second, denominator, third, sampled, other) in cases {
+        for row in [
+            [first[0], first[1], first[2], denominator],
+            [second[0], second[1], second[2], third],
+            [sampled, other, 0., 0.],
+        ] {
+            input.extend(row.into_iter().flat_map(f32::to_le_bytes));
+        }
+        let product = std::array::from_fn::<_, 3, _>(|i| {
+            f64::from(first[i]) * f64::from(second[i]) / f64::from(denominator)
+        });
+        expected.extend(product);
+        expected.push(product[0]);
+        expected
+            .extend((0..3).map(|i| f64::from(first[i]) * f64::from(second[i]) * f64::from(third)));
+        expected.push(if sampled == 0. {
+            0.
+        } else {
+            f64::from(sampled) / (f64::from(sampled).powi(2) + f64::from(other).powi(2))
+        });
+    }
+    let mut gpu = Gpu::new(Capability::Compute, 0, false)?;
+    let result = gpu.compute(
+        Shader {
+            spirv: include_bytes!(concat!(env!("OUT_DIR"), "/transport-vectors.spv")),
+            entry: "vectors",
+            workgroup: [64, 1, 1],
+        },
+        &input,
+        expected.len() * 4,
+        [1, 1, 1],
+    );
+    let cleanup = gpu.finish();
+    let bytes = result?;
+    cleanup?;
+    for (index, (word, reference)) in bytes.as_chunks::<4>().0.iter().zip(expected).enumerate() {
+        let actual = f64::from(f32::from_le_bytes(*word));
+        assert!(actual.is_finite(), "result {index}: {actual}");
+        if reference == 0. {
+            assert_eq!(actual, 0., "result {index}");
+        } else {
+            assert!(
+                (actual / reference - 1.).abs() < 2e-6,
+                "result {index}: {actual} versus {reference}"
+            );
+        }
+    }
+    Ok(())
+}

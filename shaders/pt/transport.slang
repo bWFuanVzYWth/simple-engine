@@ -3,14 +3,29 @@
 
 /// 稳定贡献计算，不决定 NEE、预算、介质拓扑或随机域。
 /// 因子与 PDF 须有限非负，分母须为正；调用方保证所需最终结果可表示。
-/// 使用 frexp/ldexp 运算，不添加任意输入修复、阈值或饱和裁剪。
+/// 普通数值范围直接乘除，极端范围以 frexp/ldexp 拆分；不修复或裁剪输入。
 module transport;
 
 namespace pt
 {
-/// 通过指数拆分计算 first*second/denominator，避免可表示结果的中间乘积溢出。
+// 非零因子位于 2^-40..2^40 时，三个因子的乘除仍在 float32 正规数域。
+// 87=127-40；指数区间以无符号位模式检查，零因子也安全。其余输入保留指数拆分。
+bool common_factor(float value)
+{
+    uint bits = asuint(value);
+    return (bits == 0) | (bits - (87u << 23u) <= (80u << 23u));
+}
+bool common_factor(float3 value)
+{
+    uint3 bits = asuint(value);
+    return all((bits == 0) | (bits - (87u << 23u) <= (80u << 23u)));
+}
+
+/// 计算 first*second/denominator；极端范围拆分指数，避免可表示结果的中间乘积溢出。
 public float product_over(float first, float second, float denominator)
 {
+    if (common_factor(first) & common_factor(second) & common_factor(denominator))
+        return (first * second) / denominator;
     int a, b, c;
     float significand = frexp(first, a) * frexp(second, b) / frexp(denominator, c);
     return ldexp(significand, a + b - c);
@@ -19,15 +34,19 @@ public float product_over(float first, float second, float denominator)
 /// 按 RGB 分量计算相同的乘积／标量分母，语义同标量重载。
 public float3 product_over(float3 first, float3 second, float denominator)
 {
+    if (common_factor(first) & common_factor(second) & common_factor(denominator))
+        return (first * second) / denominator;
     int3 a, b;
     int c;
     float3 significand = frexp(first, a) * frexp(second, b) / frexp(denominator, c);
     return ldexp(significand, a + b - int3(c));
 }
 
-/// 通过指数拆分计算两个 RGB 因子与标量权重的乘积，保留最终的可表示结果。
+/// 计算两个 RGB 因子与标量权重的乘积，保留最终的可表示结果。
 public float3 triple_product(float3 first, float3 second, float third)
 {
+    if (common_factor(first) & common_factor(second) & common_factor(third))
+        return (first * second) * third;
     int3 a, b;
     int c;
     float3 significand = frexp(first, a) * frexp(second, b) * frexp(third, c);
@@ -59,6 +78,8 @@ public float power_heuristic_over_pdf(float sampled, float other)
         return 0.0;
     if (other <= 0.0)
         return 1.0 / sampled;
+    if (common_factor(sampled) & common_factor(other))
+        return sampled / (sampled * sampled + other * other);
     if (sampled >= other)
     {
         float ratio = other / sampled;

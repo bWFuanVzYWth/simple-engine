@@ -22,6 +22,14 @@ fn main() -> Result<(), shader_build::Error> {
             target: Target::Spirv("spirv_1_4"),
             args: &["-fp-mode", "precise"],
         },
+        Recipe {
+            source: "shaders/transport.slang",
+            entry: "vectors",
+            stage: "compute",
+            output: "transport-vectors.spv",
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-fp-mode", "precise"],
+        },
     ];
     const SPECIALIZATIONS: [(&str, &[&str]); 8] = [
         (
