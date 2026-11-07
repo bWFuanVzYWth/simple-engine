@@ -6,7 +6,9 @@
 //! 本模块沿用 shader_build 的有效性验证，不代替应用维护的物理特化／ABI 审计。
 
 use crate::{FlowError, FlowKey, FlowPlan};
-use shader_build::{Artifact, Recipe, RuntimeCompiler, Target};
+use shader_build::{
+    Artifact, CompiledBatch, Recipe, RuntimeBatch, RuntimeCompiler, RuntimeTicket, Target,
+};
 
 /// 能力计划或 Slang 编译失败；保留精确底层来源。
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +41,34 @@ pub struct ProgramSet<Key = FlowKey> {
     artifacts: Vec<Artifact>,
 }
 
+/// 已去重并登记到资源编译批次的程序集；不持有部分编译结果。
+pub struct PendingProgramSet<Key = FlowKey> {
+    plan: FlowPlan<Key>,
+    tickets: Vec<RuntimeTicket>,
+}
+
+impl<Key> PendingProgramSet<Key> {
+    /// 稳定的键及绑定映射，可在编译前继续规划其他消费者。
+    pub const fn plan(&self) -> &FlowPlan<Key> {
+        &self.plan
+    }
+
+    /// 从完整成功的同批次移动产物，维持键与shader的相同排序。
+    /// # Errors
+    /// 错误批次或已消费凭证返回编译配置错误，不返回部分程序集。
+    pub fn finish(self, compiled: &mut CompiledBatch) -> Result<ProgramSet<Key>, Error> {
+        let artifacts = self
+            .tickets
+            .into_iter()
+            .map(|ticket| compiled.take(ticket))
+            .collect::<Result<_, _>>()?;
+        Ok(ProgramSet {
+            plan: self.plan,
+            artifacts,
+        })
+    }
+}
+
 impl ProgramSet<FlowKey> {
     /// 从真实绑定顺序去重并编译每个控制流；不更改旧程序或创建 GPU 资源。
     ///
@@ -58,6 +88,36 @@ impl ProgramSet<FlowKey> {
 }
 
 impl ProgramSet<(FlowKey, u32)> {
+    /// 将去重后的callable入口登记到调用方批次；并行度和执行时机由资源准备层决定。
+    /// # Errors
+    /// 能力计划、路径或参数无效时返回[`Error`]；不创建GPU资源。
+    pub fn queue_variants(
+        batch: &mut RuntimeBatch<'_>,
+        bindings: impl IntoIterator<Item = (FlowKey, u32)>,
+        template: Template<'_>,
+    ) -> Result<PendingProgramSet<(FlowKey, u32)>, Error> {
+        Self::queue_inner(batch, bindings, template, "callable", |(flow, variant)| {
+            (flow, Some(variant))
+        })
+    }
+
+    /// 将去重后的closest-hit入口登记到调用方批次，沿用相同的键及SBT排序。
+    /// # Errors
+    /// 与[`Self::queue_variants`]相同。
+    pub fn queue_hit_variants(
+        batch: &mut RuntimeBatch<'_>,
+        bindings: impl IntoIterator<Item = (FlowKey, u32)>,
+        template: Template<'_>,
+    ) -> Result<PendingProgramSet<(FlowKey, u32)>, Error> {
+        Self::queue_inner(
+            batch,
+            bindings,
+            template,
+            "closesthit",
+            |(flow, variant)| (flow, Some(variant)),
+        )
+    }
+
     /// 按 OpenPBR 控制流和调用方的离散材质能力共同去重；模板消费 `OPENPBR_VARIANT`。
     /// 变体位由场景适配定义，不参与引擎物理能力的推导。
     /// # Errors
@@ -105,8 +165,20 @@ impl<Key: Copy + Ord> ProgramSet<Key> {
         stage: &str,
         definitions: impl Fn(Key) -> (FlowKey, Option<u32>),
     ) -> Result<Self, Error> {
+        let mut batch = compiler.batch();
+        let pending = Self::queue_inner(&mut batch, bindings, template, stage, definitions)?;
+        pending.finish(&mut batch.compile(std::num::NonZeroUsize::MIN)?)
+    }
+
+    fn queue_inner(
+        batch: &mut RuntimeBatch<'_>,
+        bindings: impl IntoIterator<Item = Key>,
+        template: Template<'_>,
+        stage: &str,
+        definitions: impl Fn(Key) -> (FlowKey, Option<u32>),
+    ) -> Result<PendingProgramSet<Key>, Error> {
         let plan = FlowPlan::new(bindings)?;
-        let mut artifacts = Vec::with_capacity(plan.keys().len());
+        let mut tickets = Vec::with_capacity(plan.keys().len());
         for &key in plan.keys() {
             let (flow, variant) = definitions(key);
             let definition = format!("-DOPENPBR_FLOW={}", flow.bits());
@@ -116,7 +188,7 @@ impl<Key: Copy + Ord> ProgramSet<Key> {
             if let Some(variant) = &variant {
                 args.push(variant);
             }
-            artifacts.push(compiler.compile(&Recipe {
+            tickets.push(batch.queue(&Recipe {
                 source: template.source,
                 entry: template.entry,
                 stage,
@@ -125,7 +197,7 @@ impl<Key: Copy + Ord> ProgramSet<Key> {
                 args: &args,
             })?);
         }
-        Ok(Self { plan, artifacts })
+        Ok(PendingProgramSet { plan, tickets })
     }
 
     /// 输入绑定到排序 callable 表的映射；shader 索引和 SBT 须消费同一份计划。

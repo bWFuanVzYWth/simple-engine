@@ -84,7 +84,8 @@ mod batch;
 #[cfg(test)]
 mod profile;
 mod runtime;
-pub use runtime::{Artifact, RuntimeCompiler};
+pub use batch::CompileStatistics;
+pub use runtime::{Artifact, CompiledBatch, RuntimeBatch, RuntimeCompiler, RuntimeTicket};
 
 /// Slang 输出语言及对应 profile；不在构建后经过其他编译器重写。
 #[derive(Clone, Copy)]

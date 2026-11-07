@@ -1,4 +1,5 @@
 use super::*;
+use std::io;
 
 struct Fixture {
     root: PathBuf,
@@ -128,13 +129,96 @@ fn invalid_spirv_is_rejected_before_cache_publication() {
         panic!("未拒绝无效SPIR-V");
     };
     assert!(diagnostic.contains("Validation of generated SPIR-V failed"));
-    assert!(!fs::read_dir(&compiler.cache).unwrap().any(|entry| {
-        entry
+    assert_eq!(
+        fs::read_dir(compiler.cache.join("objects"))
             .unwrap()
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "spv")
-    }));
+            .count(),
+        0
+    );
+}
+
+#[test]
+#[ignore = "需要已安装的Slang；真实import闭包变化只失效其消费者，回退复用历史产物"]
+fn runtime_cache_tracks_imports_instead_of_unrelated_contents() {
+    let fixture = Fixture::new();
+    let include = fixture.root.join("includes");
+    fs::create_dir(&include).unwrap();
+    let used = include.join("constant.slang");
+    let unused = include.join("unused.slang");
+    let original = "module constant; public uint value() { return 17; }";
+    fs::write(&used, original).unwrap();
+    fs::write(&unused, "module unused;").unwrap();
+    fs::write(&fixture.source, "import constant; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = value(); }").unwrap();
+    let compiler =
+        RuntimeCompiler::new(fixture.root.join("cache"), &[&include], &[&fixture.source]).unwrap();
+    let first = fixture.compile(&compiler);
+    fs::write(&unused, "module unused; // unrelated edit").unwrap();
+    let unchanged = fixture.compile(&compiler);
+    assert!(unchanged.cache_hit());
+    assert_eq!(unchanged.fingerprint(), first.fingerprint());
+    fs::write(&used, "module constant; public uint value() { return 23; }").unwrap();
+    let changed = fixture.compile(&compiler);
+    assert!(!changed.cache_hit());
+    assert_ne!(changed.bytes(), first.bytes());
+    fs::write(&used, original).unwrap();
+    let restored = fixture.compile(&compiler);
+    assert!(restored.cache_hit());
+    assert_eq!(restored.bytes(), first.bytes());
+}
+
+#[test]
+#[ignore = "需要已安装的Slang；并行登记的同身份入口只编译一次且按凭证领取"]
+fn runtime_batch_deduplicates_requests_and_keeps_registration_identity() {
+    let fixture = Fixture::new();
+    let compiler = fixture.compiler();
+    let recipe = |output, args| Recipe {
+        source: fixture.source.to_str().unwrap(),
+        entry: "main",
+        stage: "compute",
+        output,
+        target: Target::Spirv("spirv_1_5"),
+        args,
+    };
+    let mut batch = compiler.batch();
+    let first = batch
+        .queue(&recipe("a.spv", &["-DVALUE=17", "-g0"]))
+        .unwrap();
+    let different = batch
+        .queue(&recipe("b.spv", &["-DVALUE=23", "-g0"]))
+        .unwrap();
+    let duplicate = batch
+        .queue(&recipe("other-name.spv", &["-DVALUE=17", "-g0"]))
+        .unwrap();
+    let mut compiled = batch.compile(NonZeroUsize::new(3).unwrap()).unwrap();
+    assert_eq!(compiled.statistics().cache_hits, 1);
+    let duplicate = compiled.take(duplicate).unwrap();
+    let different = compiled.take(different).unwrap();
+    let first = compiled.take(first).unwrap();
+    assert_eq!(first.bytes(), duplicate.bytes());
+    assert_eq!(first.fingerprint(), duplicate.fingerprint());
+    assert_ne!(first.bytes(), different.bytes());
+}
+
+#[test]
+#[ignore = "需要已安装的Slang；错误批次凭证不能取走另一个入口"]
+fn runtime_ticket_cannot_consume_another_batch() {
+    let fixture = Fixture::new();
+    let compiler = fixture.compiler();
+    let recipe = Recipe {
+        source: fixture.source.to_str().unwrap(),
+        entry: "main",
+        stage: "compute",
+        output: "main.spv",
+        target: Target::Spirv("spirv_1_5"),
+        args: &["-DVALUE=17", "-g0"],
+    };
+    let mut first = compiler.batch();
+    let wrong = first.queue(&recipe).unwrap();
+    let mut second = compiler.batch();
+    let right = second.queue(&recipe).unwrap();
+    let mut compiled = second.compile(NonZeroUsize::MIN).unwrap();
+    assert!(matches!(compiled.take(wrong), Err(Error::Configuration(_))));
+    assert!(!compiled.take(right).unwrap().bytes().is_empty());
 }
 
 #[test]

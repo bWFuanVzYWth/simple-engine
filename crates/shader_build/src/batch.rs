@@ -1,4 +1,4 @@
-//! Cargo 批量调度与依赖内容缓存；缓存字节不替代调用方的 ABI 和物理审计。
+//! Cargo与资源准备共用的批量调度及依赖内容缓存；缓存字节不替代调用方的 ABI 和物理审计。
 use super::{Compiler, Error, field, read};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -51,6 +51,7 @@ pub(super) struct Task {
     arguments: Vec<String>,
     destination: PathBuf,
     reflection: Option<PathBuf>,
+    publish_output: bool,
 }
 
 impl Task {
@@ -83,8 +84,42 @@ impl Task {
             arguments,
             destination: absolute(&destination)?,
             reflection,
+            publish_output: true,
         })
     }
+
+    pub fn cached(entry: &str, arguments: Vec<String>, fallback: PathBuf) -> Result<Self, Error> {
+        let mut task = Self::new(entry, arguments, fallback)?;
+        task.publish_output = false;
+        Ok(task)
+    }
+}
+
+/// 一次批量源码扫描、缓存核验及编译的实际统计；不含GPU管线创建。
+#[derive(Clone, Copy, Debug)]
+pub struct CompileStatistics {
+    /// 已完成的入口数量，包含缓存命中。
+    pub tasks: usize,
+    /// 通过依赖及产物内容校验的命中数。
+    pub cache_hits: usize,
+    /// 本次调度采用的worker上限。
+    pub workers: usize,
+    /// 同时处理的任务峰值；缓存核验也属于任务。
+    pub peak_tasks: usize,
+    /// 源码清单、准备、调度和产物发布的墙钟时间。
+    pub elapsed: Duration,
+}
+
+pub(super) struct Compiled {
+    pub path: PathBuf,
+    pub fingerprint: String,
+    pub cache_hit: bool,
+}
+
+pub(super) struct Output {
+    pub compiled: Vec<Compiled>,
+    pub statistics: CompileStatistics,
+    summary: String,
 }
 
 fn failure(path: &Path, source: io::Error) -> Error {
@@ -120,6 +155,7 @@ struct Inputs {
     output: PathBuf,
     roots: BTreeMap<PathBuf, Vec<PathBuf>>,
     hashes: BTreeMap<PathBuf, String>,
+    cargo: bool,
 }
 
 impl Inputs {
@@ -195,7 +231,16 @@ pub(super) fn compile(
         Some(path) => absolute(Path::new(&path))?,
         None => cache_root(output)?.join("shader-cache"),
     };
-    compile_tracked(compiler, scheduler, output, tasks, &cache, tracked_files)
+    compile_tracked(
+        compiler,
+        scheduler,
+        output,
+        tasks,
+        &cache,
+        tracked_files,
+        true,
+    )
+    .map(|result| result.summary)
 }
 
 fn cache_root(output: &Path) -> Result<PathBuf, Error> {
@@ -232,7 +277,38 @@ fn compile_in(
     tasks: &[Task],
     cache: &Path,
 ) -> Result<String, Error> {
-    compile_tracked(compiler, scheduler, output, tasks, cache, &BTreeSet::new())
+    compile_tracked(
+        compiler,
+        scheduler,
+        output,
+        tasks,
+        cache,
+        &BTreeSet::new(),
+        true,
+    )
+    .map(|result| result.summary)
+}
+
+pub(super) fn compile_runtime(
+    compiler: &Compiler,
+    cache: &Path,
+    tasks: &[Task],
+    tracked_files: &BTreeSet<PathBuf>,
+    jobs: std::num::NonZeroUsize,
+) -> Result<Output, Error> {
+    let scheduler = Scheduler {
+        jobs: jobs.get(),
+        server: None,
+    };
+    compile_tracked(
+        compiler,
+        &scheduler,
+        cache,
+        tasks,
+        cache,
+        tracked_files,
+        false,
+    )
 }
 
 fn compile_tracked(
@@ -242,7 +318,8 @@ fn compile_tracked(
     tasks: &[Task],
     cache: &Path,
     tracked_files: &BTreeSet<PathBuf>,
-) -> Result<String, Error> {
+    cargo: bool,
+) -> Result<Output, Error> {
     let started = Instant::now();
     let output = canonical(output)?;
     fs::create_dir_all(cache.join("requests")).map_err(|e| failure(cache, e))?;
@@ -307,6 +384,7 @@ fn compile_tracked(
         output,
         roots: BTreeMap::new(),
         hashes: BTreeMap::new(),
+        cargo,
     };
     for root in all_roots {
         let mut paths = Vec::new();
@@ -343,7 +421,8 @@ fn compile_tracked(
     let active = AtomicUsize::new(0);
     let peak = AtomicUsize::new(0);
     let jobs = scheduler.jobs.min(tasks.len().max(1));
-    let mut results: Vec<Vec<Result<bool, Error>>> = (0..jobs).map(|_| Vec::new()).collect();
+    let mut results: Vec<Vec<(usize, Result<Compiled, Error>)>> =
+        (0..jobs).map(|_| Vec::new()).collect();
     thread::scope(|scope| -> Result<(), Error> {
         let mut handles = Vec::new();
         for (worker, results) in results.iter_mut().enumerate() {
@@ -362,7 +441,10 @@ fn compile_tracked(
                                     continue;
                                 }
                                 Err(e) => {
-                                    results.push(Err(failure(Path::new("Cargo jobserver"), e)));
+                                    results.push((
+                                        usize::MAX,
+                                        Err(failure(Path::new("Cargo jobserver"), e)),
+                                    ));
                                     failed.store(true, Ordering::Release);
                                     break;
                                 }
@@ -381,7 +463,7 @@ fn compile_tracked(
                     if result.is_err() {
                         failed.store(true, Ordering::Release);
                     }
-                    results.push(result);
+                    results.push((at, result));
                     drop(token);
                 }
             }));
@@ -392,11 +474,17 @@ fn compile_tracked(
         Ok(())
     })?;
     let mut hits = 0;
-    let mut count = 0;
-    for result in results.into_iter().flatten() {
-        hits += usize::from(result?);
-        count += 1;
+    let mut compiled: Vec<Option<Compiled>> = (0..tasks.len()).map(|_| None).collect();
+    for (index, result) in results.into_iter().flatten() {
+        let result = result?;
+        hits += usize::from(result.cache_hit);
+        compiled[index] = Some(result);
     }
+    let compiled = compiled
+        .into_iter()
+        .map(|v| v.ok_or(Error::Worker))
+        .collect::<Result<Vec<_>, _>>()?;
+    let count = compiled.len();
     let summary = format!(
         "cache={}\ntasks={count}\ncache_hits={hits}\ncompiled={}\nworkers={jobs}\npeak_tasks={}\nelapsed_ms={}\n",
         command_path(&cache),
@@ -404,13 +492,25 @@ fn compile_tracked(
         peak.load(Ordering::Acquire),
         started.elapsed().as_millis()
     );
-    println!(
-        "cargo::warning=Slang: {hits}/{count} cache hits, {} compiled, {} ms, peak {}",
-        count - hits,
-        started.elapsed().as_millis(),
-        peak.load(Ordering::Acquire)
-    );
-    Ok(summary)
+    if cargo {
+        println!(
+            "cargo::warning=Slang: {hits}/{count} cache hits, {} compiled, {} ms, peak {}",
+            count - hits,
+            started.elapsed().as_millis(),
+            peak.load(Ordering::Acquire)
+        );
+    }
+    Ok(Output {
+        compiled,
+        summary,
+        statistics: CompileStatistics {
+            tasks: count,
+            cache_hits: hits,
+            workers: jobs,
+            peak_tasks: peak.load(Ordering::Acquire),
+            elapsed: started.elapsed(),
+        },
+    })
 }
 
 fn normalize(path: &Path, output: &Path) -> String {
@@ -424,7 +524,7 @@ fn execute(
     inputs: &Inputs,
     cache: &Path,
     prepared: &Prepared<'_>,
-) -> Result<bool, Error> {
+) -> Result<Compiled, Error> {
     let index = cache
         .join("requests")
         .join(format!("{}.json", prepared.key));
@@ -439,9 +539,9 @@ fn execute(
     lock.lock().map_err(|e| failure(&lock_path, e))?;
     let current = load(&index)?;
     if let Some(manifest) = &current
-        && restore(inputs, cache, prepared, manifest)?
+        && let Some(result) = restore(inputs, cache, prepared, manifest)?
     {
-        return Ok(true);
+        return Ok(result);
     }
     let history = cache.join("requests").join(&prepared.key);
     // 先保存旧单索引，兼容已有缓存。热命中不枚举历史目录。
@@ -466,10 +566,10 @@ fn execute(
             continue;
         }
         if let Some(manifest) = load(&path)?
-            && restore(inputs, cache, prepared, &manifest)?
+            && let Some(result) = restore(inputs, cache, prepared, &manifest)?
         {
             publish(&index, &encode(&manifest)?)?;
-            return Ok(true);
+            return Ok(result);
         }
     }
     let temporary = Temporary::new(&cache.join("temporary"))?;
@@ -520,7 +620,9 @@ fn execute(
             Some(_) => {}
             None => {
                 cacheable = false;
-                println!("cargo::rerun-if-changed={}", path.display());
+                if inputs.cargo {
+                    println!("cargo::rerun-if-changed={}", path.display());
+                }
             }
         }
         extensions.insert(extension(&path));
@@ -537,17 +639,6 @@ fn execute(
         .as_ref()
         .map(|_| read(&reflection))
         .transpose()?;
-    if !cacheable {
-        publish(&prepared.task.destination, &bytes)?;
-        if let (Some(path), Some(bytes)) = (&prepared.task.reflection, &reflection_bytes) {
-            publish(path, bytes)?;
-        }
-        println!(
-            "cargo::warning=Slang {} 包含未声明搜索根或 source_roots 的依赖，本次不缓存",
-            prepared.task.entry
-        );
-        return Ok(false);
-    }
     let mut manifest = Manifest {
         version: VERSION.into(),
         dependencies: deps,
@@ -561,6 +652,27 @@ fn execute(
     };
     manifest.object = object_identity(&prepared.key, &manifest);
     let object = manifest.object.clone();
+    if !cacheable {
+        publish(&prepared.task.destination, &bytes)?;
+        if let (Some(path), Some(bytes)) = (&prepared.task.reflection, &reflection_bytes) {
+            publish(path, bytes)?;
+        }
+        if inputs.cargo {
+            println!(
+                "cargo::warning=Slang {} 包含未声明搜索根或 source_roots 的依赖，本次不缓存",
+                prepared.task.entry
+            );
+        }
+        publish(
+            &prepared.task.destination.with_extension("txt"),
+            diagnostic.as_bytes(),
+        )?;
+        return Ok(Compiled {
+            path: prepared.task.destination.clone(),
+            fingerprint: object,
+            cache_hit: false,
+        });
+    }
     fs::write(
         temporary.0.join("diagnostic.txt"),
         format!(
@@ -584,11 +696,17 @@ fn execute(
     )?;
     remember(&history, &prepared.key, &manifest)?;
     publish(&index, &encode(&manifest)?)?;
-    publish(&prepared.task.destination, &bytes)?;
+    if prepared.task.publish_output {
+        publish(&prepared.task.destination, &bytes)?;
+    }
     if let (Some(path), Some(bytes)) = (&prepared.task.reflection, reflection_bytes) {
         publish(path, &bytes)?;
     }
-    Ok(false)
+    Ok(Compiled {
+        path: object_dir.join("shader"),
+        fingerprint: object,
+        cache_hit: false,
+    })
 }
 
 fn encode(manifest: &Manifest) -> Result<Vec<u8>, Error> {
@@ -611,13 +729,13 @@ fn restore(
     cache: &Path,
     prepared: &Prepared<'_>,
     manifest: &Manifest,
-) -> Result<bool, Error> {
+) -> Result<Option<Compiled>, Error> {
     if manifest.version != VERSION
         || object_identity(&prepared.key, manifest) != manifest.object
         || prepared.task.reflection.is_some() != manifest.reflection.is_some()
         || manifest.inventory != inputs.inventory(&prepared.roots, &manifest.extensions)
     {
-        return Ok(false);
+        return Ok(None);
     }
     for dep in &manifest.dependencies {
         let path = inputs.resolve(&dep.path);
@@ -626,25 +744,31 @@ fn restore(
             None => inputs.digest(&path)?,
         };
         if digest.as_ref() != Some(&dep.digest) {
-            return Ok(false);
+            return Ok(None);
         }
     }
     let object = cache.join("objects").join(&manifest.object);
     let Some(bytes) = checked(&object.join("shader"), &manifest.digest)? else {
-        return Ok(false);
+        return Ok(None);
     };
     let reflection = match &manifest.reflection {
         Some(hash) => checked(&object.join("reflection.json"), hash)?,
         None => Some(Vec::new()),
     };
     let Some(reflection) = reflection else {
-        return Ok(false);
+        return Ok(None);
     };
-    publish(&prepared.task.destination, &bytes)?;
+    if prepared.task.publish_output {
+        publish(&prepared.task.destination, &bytes)?;
+    }
     if let Some(path) = &prepared.task.reflection {
         publish(path, &reflection)?;
     }
-    Ok(true)
+    Ok(Some(Compiled {
+        path: object.join("shader"),
+        fingerprint: manifest.object.clone(),
+        cache_hit: true,
+    }))
 }
 
 fn object_identity(key: &str, manifest: &Manifest) -> String {

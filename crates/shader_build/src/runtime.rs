@@ -1,15 +1,16 @@
-//! 资源重载使用的显式 Slang 编译器与内容缓存；不读取 Cargo `OUT_DIR`，不输出 Cargo 指令。
+//! 资源准备使用的显式Slang编译器；与Cargo共用真实依赖内容缓存。
 //!
-//! 一次所有者保存已确认的编译器身份。每次编译重新读取受控源码根目录，
-//! 目录内模块、include、所有 recipe 参数及输出名共同参与缓存键。
-//! 调用方须将所有可导入源码包含在 `source_roots` 或 `includes`；不控制外部源文件的修改。
-//! 缓存同时保存编译器身份、参数、源码指纹和输出校验；命中时校验实际字节。
-//! 失败保留诊断，不替换已有产物，应用负责在整代资源成功后原子发布。
-//! 使用与构建入口相同的 target/profile 调试策略；只保证 SPIR-V 有效性，不执行应用的物理特化审计。
+//! 调用方先向[`RuntimeBatch`]登记所有独立入口，再指定并行度一次编译。
+//! 每批扫描一次受控输入，缓存只依赖Slang报告的import/include闭包及搜索目录清单；
+//! 不导入的已有文件内容变化不会使该入口失效，新增同名模块仍会失效。
+//! 缓存校验工具链、参数、依赖及实际产物字节，失败不返回部分批次。
+//! 调用方保持源码在批次期间不变，整代应用资源成功后再发布；缓存不代替应用ABI审查。
+//! 不读取Cargo OUT_DIR、jobserver或并行度环境变量，也不输出Cargo指令。
 
-use super::{Compiler, Error, Recipe, Target, debug_argument, field, files, read, validate_recipe};
+use super::{Compiler, Error, Recipe, Target, batch, debug_argument, files, read, validate_recipe};
 use std::{
-    fs, io,
+    fs,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -30,12 +31,13 @@ impl Artifact {
         &self.bytes
     }
 
-    /// 编译器、源码、recipe 和参数的 BLAKE3 指纹，不是跨工具链 ABI。
+    /// 编译器、参数、实际依赖及产物的BLAKE3身份，不是跨工具链ABI。
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
 
-    /// 通过内容校验的缓存产物位置；同名 `.txt` 文件保存编译身份和完整诊断。
+    /// 已校验产物的位置；缓存对象同目录的diagnostic.txt保存首次实际编译诊断。
+    /// 未声明依赖的产物不入缓存，其诊断在本路径替换扩展名为txt的文件中。
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -133,26 +135,51 @@ impl RuntimeCompiler {
         })
     }
 
-    /// 编译一个入口或复用已校验缓存；宏定义通过 `recipe.args` 明确传入。
-    ///
-    /// 输出位于内容寻址缓存，不使用 `recipe.output` 指定的宿主目录。
-    /// 该字段仍完整参与身份，缓存文件仅保留其扩展名。
-    /// 同一所有者可在资源重载时连续编译多个入口，调度由调用方决定。
+    /// 建立显式批次；此时只登记参数，不启动编译器或读取整套源码。
+    pub fn batch(&self) -> RuntimeBatch<'_> {
+        RuntimeBatch {
+            compiler: self,
+            identity: SERIAL.fetch_add(1, Ordering::Relaxed),
+            tasks: Vec::new(),
+        }
+    }
+
+    /// 串行编译单个入口；多个已知入口应通过[`Self::batch`]共享源码扫描和调度。
+    /// `recipe.output`只是逻辑名称，不影响实际编译身份或输出目录。
     /// # Errors
-    /// 源码读取、缓存 IO、启动编译器或 Slang 诊断失败时返回带底层来源的 [`Error`]。
+    /// 与[`RuntimeBatch::queue`]及[`RuntimeBatch::compile`]相同。
     pub fn compile(&self, recipe: &Recipe<'_>) -> Result<Artifact, Error> {
+        let mut batch = self.batch();
+        let ticket = batch.queue(recipe)?;
+        batch.compile(NonZeroUsize::MIN)?.take(ticket)
+    }
+}
+
+/// 登记入口的唯一取件凭证；只能从产生它的批次领取一次产物。
+pub struct RuntimeTicket {
+    identity: u64,
+    index: usize,
+}
+
+/// 尚未执行的资源编译批次；输入参数由本对象拥有，编译器短期借用。
+pub struct RuntimeBatch<'a> {
+    compiler: &'a RuntimeCompiler,
+    identity: u64,
+    tasks: Vec<batch::Task>,
+}
+
+impl RuntimeBatch<'_> {
+    /// 已登记的入口数量，包含显式重复请求。
+    pub const fn task_count(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// 登记入口并复制参数，返回取件凭证；不会编译或发布应用资源。
+    /// # Errors
+    /// 路径、验证选项或输出参数不受支持时返回[`Error`]，既有登记保持有效。
+    pub fn queue(&mut self, recipe: &Recipe<'_>) -> Result<RuntimeTicket, Error> {
         validate_recipe(recipe)?;
         let source = canonical(Path::new(recipe.source))?;
-        let mut roots = self.sources.clone();
-        roots.extend(self.includes.iter().cloned());
-        roots.push(source.clone());
-        let mut source_hash = blake3::Hasher::new();
-        field(&mut source_hash, self.compiler.identity.as_bytes());
-        for path in files(roots)? {
-            field(&mut source_hash, path.to_string_lossy().as_bytes());
-            field(&mut source_hash, &read(&path)?);
-        }
-        let source_hash = source_hash.finalize().to_hex().to_string();
         let mut arguments = vec![
             command_path(&source),
             "-std".into(),
@@ -160,7 +187,7 @@ impl RuntimeCompiler {
             "-O3".into(),
             debug_argument(recipe.target).into(),
         ];
-        for include in &self.includes {
+        for include in &self.compiler.includes {
             arguments.extend(["-I".into(), command_path(include)]);
         }
         match recipe.target {
@@ -184,77 +211,78 @@ impl RuntimeCompiler {
         if matches!(recipe.target, Target::Wgsl) {
             arguments.push("-g0".into());
         }
-        let mut identity = blake3::Hasher::new();
-        field(&mut identity, source_hash.as_bytes());
-        field(&mut identity, recipe.output.as_bytes());
-        for argument in &arguments {
-            field(&mut identity, argument.as_bytes());
-        }
-        let fingerprint = identity.finalize().to_hex().to_string();
-        let extension = match recipe.target {
-            Target::Spirv(_) => "spv",
-            Target::Wgsl => "wgsl",
-        };
-        let path = self.cache.join(format!("{fingerprint}.{extension}"));
-        let checksum = self.cache.join(format!("{fingerprint}.blake3"));
-        if let Some(bytes) = cached(&path, &checksum)? {
-            return Ok(Artifact {
-                bytes,
-                fingerprint,
-                path,
-                cache_hit: true,
-            });
-        }
-        let temporary = self.cache.join(format!(
-            "{fingerprint}.{}-{}.tmp",
+        let index = self.tasks.len();
+        let fallback = self.compiler.cache.join(format!(
+            "uncached-{}-{}-{index}",
             std::process::id(),
-            SERIAL.fetch_add(1, Ordering::Relaxed)
+            self.identity
         ));
-        let mut command = self.compiler.command();
-        command
-            .args(&arguments)
-            .arg("-o")
-            .arg(command_path(&temporary));
-        let result = command.output().map_err(|source| Error::Io {
-            path: self.compiler.path.clone(),
-            source,
-        })?;
-        let diagnostic = format!(
-            "{}\n{}\n{}",
-            result.status,
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let manifest = format!(
-            "compiler={}\nversion={}\ncompiler_blake3={}\nSLANG_RUN_SPIRV_VALIDATION=1\nsource_blake3={source_hash}\nbuild_blake3={fingerprint}\narguments={arguments:?}\n{diagnostic}",
-            self.compiler.path.display(),
-            self.compiler.version,
-            self.compiler.identity
-        );
-        let log = self.cache.join(format!("{fingerprint}.txt"));
-        fs::write(&log, manifest).map_err(|source| Error::Io { path: log, source })?;
-        if !result.status.success() {
-            let _ = fs::remove_file(&temporary);
-            return Err(Error::Compile {
-                compiler: self.compiler.path.clone(),
-                entry: recipe.entry.to_owned(),
-                diagnostic,
-            });
-        }
-        let bytes = read(&temporary)?;
-        let digest = blake3::hash(&bytes).to_hex().to_string();
-        // 每个临时文件独占；同身份的并发产物等价，替换只影响可再生缓存。
-        replace(&temporary, &path)?;
-        fs::write(&checksum, digest).map_err(|source| Error::Io {
-            path: checksum,
-            source,
-        })?;
-        Ok(Artifact {
-            bytes,
-            fingerprint,
-            path,
-            cache_hit: false,
+        self.tasks
+            .push(batch::Task::cached(recipe.entry, arguments, fallback)?);
+        Ok(RuntimeTicket {
+            identity: self.identity,
+            index,
         })
+    }
+
+    /// 统一扫描输入后以显式非零worker上限编译；按登记顺序保存结果。
+    /// 一项失败后停止分配新任务并等待已启动任务结束，不返回部分批次。
+    /// 同身份请求由缓存锁去重；不再向调用者或内核隐藏嵌套并行。
+    /// # Errors
+    /// 源码/缓存IO、编译或线程失败保留[`Error`]来源；成功缓存可供下次重试复用。
+    pub fn compile(self, workers: NonZeroUsize) -> Result<CompiledBatch, Error> {
+        let tracked = files(self.compiler.sources.clone())?;
+        let output = batch::compile_runtime(
+            &self.compiler.compiler,
+            &self.compiler.cache,
+            &self.tasks,
+            &tracked,
+            workers,
+        )?;
+        let artifacts = output
+            .compiled
+            .into_iter()
+            .map(|compiled| {
+                Ok(Some(Artifact {
+                    bytes: read(&compiled.path)?,
+                    fingerprint: compiled.fingerprint,
+                    path: compiled.path,
+                    cache_hit: compiled.cache_hit,
+                }))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(CompiledBatch {
+            identity: self.identity,
+            artifacts,
+            statistics: output.statistics,
+        })
+    }
+}
+
+/// 一次完整编译的自有产物；取走的字节不依赖缓存文件或编译器寿命。
+pub struct CompiledBatch {
+    identity: u64,
+    artifacts: Vec<Option<Artifact>>,
+    statistics: batch::CompileStatistics,
+}
+
+impl CompiledBatch {
+    /// 批次实际命中和准备成本，不包含调用方的后续GPU管线创建。
+    pub const fn statistics(&self) -> batch::CompileStatistics {
+        self.statistics
+    }
+
+    /// 用同批次凭证移动一个产物；不会复制shader字节。
+    /// # Errors
+    /// 凭证来自另一批次或已消费时返回配置错误，不移走其他产物。
+    pub fn take(&mut self, ticket: RuntimeTicket) -> Result<Artifact, Error> {
+        if ticket.identity != self.identity {
+            return Err(Error::Configuration("shader凭证不属于此编译批次".into()));
+        }
+        self.artifacts
+            .get_mut(ticket.index)
+            .and_then(Option::take)
+            .ok_or_else(|| Error::Configuration("shader产物已消费或不存在".into()))
     }
 }
 
@@ -277,50 +305,6 @@ fn command_path(path: &Path) -> String {
         }
     }
     text.into_owned()
-}
-
-fn cached(path: &Path, checksum: &Path) -> Result<Option<Vec<u8>>, Error> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(Error::Io {
-                path: path.to_owned(),
-                source,
-            });
-        }
-    };
-    let expected = match fs::read_to_string(checksum) {
-        Ok(expected) => expected,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(Error::Io {
-                path: checksum.to_owned(),
-                source,
-            });
-        }
-    };
-    Ok((blake3::hash(&bytes).to_hex().as_str() == expected.trim()).then_some(bytes))
-}
-
-fn replace(temporary: &Path, destination: &Path) -> Result<(), Error> {
-    match fs::rename(temporary, destination) {
-        Ok(()) => Ok(()),
-        Err(_) if destination.is_file() && cfg!(windows) => {
-            fs::remove_file(destination).map_err(|source| Error::Io {
-                path: destination.to_owned(),
-                source,
-            })?;
-            fs::rename(temporary, destination).map_err(|source| Error::Io {
-                path: destination.to_owned(),
-                source,
-            })
-        }
-        Err(source) => Err(Error::Io {
-            path: destination.to_owned(),
-            source,
-        }),
-    }
 }
 
 #[cfg(test)]

@@ -96,3 +96,43 @@ fn adapter_variants_split_a_single_flow() {
     };
     assert_ne!(plain.bytes(), adapter.bytes());
 }
+
+#[test]
+#[ignore = "需要已安装的Slang；共同批次保持各操作的键、SBT槽和实际shader字节对应"]
+fn pending_sets_preserve_their_own_bindings_in_a_shared_batch() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("main.slang");
+    let compiler = RuntimeCompiler::new(fixture.0.join("cache"), &[], &[&source]).unwrap();
+    let flow = crate::Material::opaque([0.5; 3], 0.9, 1.5, 0.0, 0.0)
+        .unwrap()
+        .flow(false);
+    let template = || Template {
+        source: source.to_str().unwrap(),
+        entry: "shade",
+        output: "material.spv",
+        target: Target::Spirv("spirv_1_4"),
+        args: &["-g0"],
+    };
+    let mut batch = compiler.batch();
+    let first =
+        ProgramSet::queue_variants(&mut batch, [(flow, 4), (flow, 0), (flow, 4)], template())
+            .unwrap();
+    let second =
+        ProgramSet::queue_variants(&mut batch, [(flow, 9), (flow, 4)], template()).unwrap();
+    let mut compiled = batch
+        .compile(std::num::NonZeroUsize::new(4).unwrap())
+        .unwrap();
+    let second = second.finish(&mut compiled).unwrap();
+    let first = first.finish(&mut compiled).unwrap();
+    let serial =
+        ProgramSet::compile_variants(&compiler, [(flow, 0), (flow, 4), (flow, 9)], template())
+            .unwrap();
+    assert_eq!(first.plan().bindings(), &[1, 0, 1]);
+    assert_eq!(second.plan().bindings(), &[1, 0]);
+    for set in [&first, &second] {
+        for (key, artifact) in set.plan().keys().iter().zip(set.artifacts()) {
+            let reference = serial.plan().keys().binary_search(key).unwrap();
+            assert_eq!(artifact.bytes(), serial.artifacts()[reference].bytes());
+        }
+    }
+}
