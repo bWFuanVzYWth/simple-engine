@@ -12,11 +12,14 @@ pub struct ActionState {
 
 impl ActionState {
     /// 此容量也是上限，预算按来源与动作的组合数计算。
-    pub fn with_capacity(actions: usize) -> Self {
-        Self {
-            held: Vec::with_capacity(actions),
+    /// 容量溢出或分配失败返回 [`InputError::Allocation`]。
+    pub fn with_capacity(actions: usize) -> Result<Self, InputError> {
+        let mut held = Vec::new();
+        held.try_reserve_exact(actions)?;
+        Ok(Self {
+            held,
             max_held: actions,
-        }
+        })
     }
 
     /// 按总序更新持续状态；新来源／动作组合满额时返回 [`InputError::ActionLimit`]。

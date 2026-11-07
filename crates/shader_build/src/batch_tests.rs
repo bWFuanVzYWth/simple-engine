@@ -1,6 +1,18 @@
 use super::*;
 use std::sync::OnceLock;
 
+#[test]
+fn task_rejects_an_output_without_a_filename() {
+    let result = Task::new("main", vec!["main.slang".into()], PathBuf::from(".."));
+    assert!(matches!(result, Err(Error::Configuration(_))));
+}
+
+#[test]
+fn task_rejects_missing_source() {
+    let result = Task::new("main", vec![], PathBuf::from("main.spv"));
+    assert!(matches!(result, Err(Error::Configuration(_))));
+}
+
 struct Fixture {
     root: PathBuf,
     source: PathBuf,

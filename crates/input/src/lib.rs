@@ -35,8 +35,8 @@
 //!     kind: CommandKind::Action { action, phase: ActionPhase::Press },
 //! })?;
 //! let mut batch = CommandBatch::new();
-//! hub.drain_into(&mut batch);
-//! let mut held = ActionState::with_capacity(16);
+//! hub.drain_into(&mut batch)?;
+//! let mut held = ActionState::with_capacity(16)?;
 //! for item in batch.iter() {
 //!     held.observe(item)?;
 //! }
@@ -137,6 +137,9 @@ pub struct Stamp {
 #[derive(Debug, thiserror::Error)]
 /// 输入校验、预算与失步恢复失败。
 pub enum InputError {
+    /// 无法预留输入事件、文本或来源容量，保留底层分配错误。
+    #[error("输入存储分配失败")]
+    Allocation(#[from] std::collections::TryReserveError),
     /// 本地预算为零、总容量溢出或文本超出可寻址范围。
     #[error("输入预算必须非零，文本预算不能超过 u32::MAX")]
     InvalidLimits,

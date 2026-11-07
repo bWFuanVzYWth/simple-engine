@@ -1,6 +1,6 @@
 //! 独占的连续命令与 UTF-8 存储，按借用交付已接收事件。
 
-use crate::{CommandKind, CommandKindRef, MonoTime, SampleTime, SourceId, Stamp};
+use crate::{CommandKind, CommandKindRef, InputError, MonoTime, SampleTime, SourceId, Stamp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -164,11 +164,12 @@ impl CommandBatch {
     }
 
     /// 为事件槽与 UTF-8 字节预留容量；参数是预留量，不是容量上限。
-    pub fn with_capacity(commands: usize, text_bytes: usize) -> Self {
-        Self {
-            items: Vec::with_capacity(commands),
-            text: String::with_capacity(text_bytes),
-        }
+    /// 容量溢出或分配失败返回 [`InputError::Allocation`]。
+    pub fn with_capacity(commands: usize, text_bytes: usize) -> Result<Self, InputError> {
+        let mut batch = Self::new();
+        batch.items.try_reserve_exact(commands)?;
+        batch.text.try_reserve_exact(text_bytes)?;
+        Ok(batch)
     }
 
     /// 清空事件和文本，保留两者容量。

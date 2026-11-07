@@ -69,22 +69,25 @@ impl InputHub {
         let commands = limits
             .max_commands
             .checked_add(limits.max_external_commands)
-            .and_then(|value| value.checked_add(limits.max_sources));
+            .and_then(|value| value.checked_add(limits.max_sources))
+            .ok_or(InputError::InvalidLimits)?;
         let text = limits
             .max_text_bytes
-            .checked_add(limits.max_external_text_bytes);
+            .checked_add(limits.max_external_text_bytes)
+            .ok_or(InputError::InvalidLimits)?;
         if limits.max_commands == 0
             || limits.max_text_bytes == 0
             || limits.max_sources == 0
-            || text.is_none_or(|value| value > u32::MAX as usize)
-            || commands.is_none()
+            || text > u32::MAX as usize
         {
             return Err(InputError::InvalidLimits);
         }
+        let mut sources = Vec::new();
+        sources.try_reserve_exact(limits.max_sources)?;
         Ok(Self {
             limits,
-            sources: Vec::with_capacity(limits.max_sources),
-            batch: CommandBatch::with_capacity(commands.unwrap(), text.unwrap()),
+            sources,
+            batch: CommandBatch::with_capacity(commands, text)?,
             next_sequence: 1,
             last_received: MonoTime::new(0),
             local_commands: 0,
@@ -205,7 +208,18 @@ impl InputHub {
     ///
     /// 对有缺口的来源舍弃其全部未消费命令；其他来源保持原序。
     /// 文本缓冲不做压缩，未引用字节保留到下次清空；交付缺口后仍需显式恢复。
-    pub fn drain_into(&mut self, batch: &mut CommandBatch) {
+    /// 交换前为接收缓冲预留完整预算，`push` 无需逐条扩容。分配失败保持两侧事件及总序不变。
+    pub fn drain_into(&mut self, batch: &mut CommandBatch) -> Result<(), InputError> {
+        // 构造器已校验预算和缺口槽之和；预留以现有长度为基准，成功后才清空、交换。
+        let commands =
+            self.limits.max_commands + self.limits.max_external_commands + self.limits.max_sources;
+        let text = self.limits.max_text_bytes + self.limits.max_external_text_bytes;
+        batch
+            .items
+            .try_reserve(commands.saturating_sub(batch.items.len()))?;
+        batch
+            .text
+            .try_reserve(text.saturating_sub(batch.text.len()))?;
         batch.clear();
         std::mem::swap(batch, &mut self.batch);
         self.local_commands = 0;
@@ -228,6 +242,7 @@ impl InputHub {
                 .items
                 .sort_unstable_by_key(|item| item.stamp().sequence);
         }
+        Ok(())
     }
 
     /// 交付缺口并同步硬件 baseline 后恢复来源，不合成任何按下或释放。
@@ -254,6 +269,17 @@ mod tests {
         ActionId, ActionPhase, ActionState, CommandKind, InputItemRef, InputScope, SampleTime,
         TextOp, TextSessionId, ViewId,
     };
+
+    #[test]
+    fn unrepresentable_storage_is_an_allocation_error() {
+        let result = InputHub::new(Limits {
+            max_commands: isize::MAX as usize,
+            max_sources: 1,
+            max_external_commands: 0,
+            ..Limits::default()
+        });
+        assert!(matches!(result, Err(InputError::Allocation(_))));
+    }
 
     fn action(source: u64, time: u64, phase: ActionPhase) -> Incoming<'static> {
         Incoming {
@@ -284,7 +310,7 @@ mod tests {
         hub.push(action(1, 10, ActionPhase::Press)).unwrap();
         hub.push(action(1, 10, ActionPhase::Release)).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let phases: Vec<_> = batch
             .iter()
             .filter_map(|item| match item {
@@ -314,7 +340,7 @@ mod tests {
         hub.push(first).unwrap();
         hub.push(second).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let stamps: Vec<_> = batch.iter().map(InputItemRef::stamp).collect();
         assert!(stamps[0].sequence < stamps[1].sequence);
         assert_eq!(stamps[1].sampled.unwrap().at, MonoTime::new(4));
@@ -330,7 +356,7 @@ mod tests {
             Err(InputError::Overflow(_))
         ));
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let items: Vec<_> = batch.iter().collect();
         assert!(
             matches!(items.as_slice(), [InputItemRef::Command(command), InputItemRef::Gap(gap)] if command.source == SourceId::new(2) && gap.source == SourceId::new(1))
@@ -359,7 +385,7 @@ mod tests {
         ));
         hub.push(action(1, 4, ActionPhase::Release)).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         assert_eq!(batch.len(), 3);
         assert!(
             batch
@@ -371,7 +397,7 @@ mod tests {
 
     #[test]
     fn action_state_has_a_hard_capacity() {
-        let mut state = ActionState::with_capacity(1);
+        let mut state = ActionState::with_capacity(1).unwrap();
         let first = CommandRef {
             source: SourceId::new(1),
             stamp: Stamp {
@@ -405,8 +431,8 @@ mod tests {
         })
         .unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
-        let mut state = ActionState::with_capacity(2);
+        hub.drain_into(&mut batch).unwrap();
+        let mut state = ActionState::with_capacity(2).unwrap();
         for item in batch.iter() {
             state.observe(item).unwrap();
         }
@@ -420,8 +446,8 @@ mod tests {
         hub.push(action(2, 2, ActionPhase::Press)).unwrap();
         hub.push(action(1, 3, ActionPhase::Release)).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
-        let mut state = ActionState::with_capacity(2);
+        hub.drain_into(&mut batch).unwrap();
+        let mut state = ActionState::with_capacity(2).unwrap();
         for item in batch.iter() {
             state.observe(item).unwrap();
         }
@@ -445,7 +471,7 @@ mod tests {
         .unwrap();
         drop(text);
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         assert!(matches!(
             batch.iter().next(),
             Some(InputItemRef::Command(CommandRef {

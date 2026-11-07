@@ -46,6 +46,13 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn explicit_compiler_rejects_a_directory() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let result = RuntimeCompiler::from_executable(root, root.join("unused-cache"), &[], &[]);
+    assert!(matches!(result, Err(Error::Configuration(_))));
+}
+
+#[test]
 fn explicit_compiler_fails_at_the_requested_path() {
     let fixture = Fixture::new();
     let executable = fixture.root.join("missing-slangc.exe");

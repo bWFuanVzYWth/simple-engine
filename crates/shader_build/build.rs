@@ -2,15 +2,15 @@
 #[path = "src/profile.rs"]
 mod profile;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=src/profile.rs");
     println!("cargo::rustc-check-cfg=cfg(shader_release_lto)");
-    let out = std::env::var_os("OUT_DIR").expect("Cargo 未设置 OUT_DIR");
-    let package = std::env::var("CARGO_PKG_NAME").expect("Cargo 未设置 CARGO_PKG_NAME");
-    let name =
-        profile::cargo_profile(std::path::Path::new(&out), &package).expect("shader profile 无效");
+    let out = std::env::var_os("OUT_DIR").ok_or("Cargo 未设置 OUT_DIR")?;
+    let package = std::env::var("CARGO_PKG_NAME")?;
+    let name = profile::cargo_profile(std::path::Path::new(&out), &package)?;
     if name == "release-lto" {
         println!("cargo::rustc-cfg=shader_release_lto");
     }
+    Ok(())
 }

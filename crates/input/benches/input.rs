@@ -144,8 +144,8 @@ fn batches(c: &mut Criterion) {
         for count in [16, 256, 4096] {
             let mut incoming = Vec::with_capacity(count);
             let mut hub = hub(count);
-            let mut batch = CommandBatch::with_capacity(count, count * 32);
-            let mut state = ActionState::with_capacity(16);
+            let mut batch = CommandBatch::with_capacity(count, count * 32).unwrap();
+            let mut state = ActionState::with_capacity(16).unwrap();
             let mut start = 100;
             group.throughput(Throughput::Elements(count as u64));
             group.bench_function(BenchmarkId::new(name, count), |b| {
@@ -155,7 +155,7 @@ fn batches(c: &mut Criterion) {
                     for &event in black_box(incoming.as_slice()) {
                         hub.push(event).unwrap();
                     }
-                    hub.drain_into(&mut batch);
+                    hub.drain_into(&mut batch).unwrap();
                     black_box(consume(&batch, &mut state));
                 })
             });
@@ -172,7 +172,7 @@ fn recording(count: usize) -> Recording {
         hub.push(event).unwrap();
     }
     let mut batch = CommandBatch::new();
-    hub.drain_into(&mut batch);
+    hub.drain_into(&mut batch).unwrap();
     let mut recorder = Recorder::new(SessionId::new(1), MonoTime::new(0));
     recorder.append(&batch).unwrap();
     recorder.finish()
@@ -188,8 +188,8 @@ fn replays(c: &mut Criterion) {
             max_items: chunk,
             max_text_bytes: chunk * 32,
         };
-        let mut batch = CommandBatch::with_capacity(chunk, limits.max_text_bytes);
-        let mut state = ActionState::with_capacity(16);
+        let mut batch = CommandBatch::with_capacity(chunk, limits.max_text_bytes).unwrap();
+        let mut state = ActionState::with_capacity(16).unwrap();
         group.bench_function(BenchmarkId::new("editing", chunk), |b| {
             b.iter(|| {
                 let mut replay = recording

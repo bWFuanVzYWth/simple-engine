@@ -162,9 +162,6 @@ pub enum Error {
     /// 编译期间源码发生改变，不能把产物发布为原输入的缓存。
     #[error("shader 编译期间输入改变：{0}")]
     InputChanged(PathBuf),
-    /// 构建任务线程异常退出。
-    #[error("shader 构建任务异常退出")]
-    Worker,
     /// 编译器执行成功启动，但返回非零状态。
     #[error("Slang {entry} 失败（{compiler}）：\n{diagnostic}")]
     Compile {
@@ -477,12 +474,18 @@ impl Compiler {
             path: resolved.to_owned(),
             source,
         })?;
+        if !path.is_file() {
+            return Err(Error::Configuration(format!(
+                "Slang 编译器不是文件：{}",
+                path.display()
+            )));
+        }
         track(resolved);
         if let Some(parent) = resolved.parent().filter(|parent| parent.is_dir()) {
             track(parent);
         }
         track(&path);
-        let parent = path.parent().expect("绝对编译器路径缺少父目录");
+        let parent = path.parent().expect("canonical 文件拥有父目录");
         // 安装目录跟踪组件增删；只将 Slang 组件纳入身份，避免无关 SDK 二进制影响指纹。
         let mut directories = BTreeSet::from([parent.to_owned()]);
         if let Some(root) = parent.parent() {

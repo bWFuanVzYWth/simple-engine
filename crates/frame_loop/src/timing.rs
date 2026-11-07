@@ -133,9 +133,11 @@ impl<const N: usize> FrameStats<N> {
     /// 在改变样本前统一准备 ring、排序和图表容量；失败时保留样本。
     /// 已有容量在重置后复用，读取图表和排序不再分配；清理旧帧的成本为摊销 O(1)。
     ///
-    /// # Panics
-    ///
-    /// `N == 0` 时在任何状态变更前拒绝；至少需要一个未归因余量段。
+    /// `N == 0` 无法通过编译；至少需要一个未归因余量段。
+    /// ```compile_fail
+    /// let mut stats = frame_loop::FrameStats::<0>::default();
+    /// stats.record(std::time::Duration::from_millis(1)).unwrap();
+    /// ```
     pub fn record(&mut self, elapsed: Duration) -> Result<(), FrameStatsError> {
         self.record_attributed(elapsed, FrameAttribution::default())
     }
@@ -146,15 +148,15 @@ impl<const N: usize> FrameStats<N> {
     /// 等于完整间隔且不溢出。仅能限制错误输入的总量，不能自动识别重叠计时。
     /// 重置后的第一条记录整体跳过，不参与会话最慢帧；失败时保留原样本。
     ///
-    /// # Panics
-    ///
-    /// `N == 0` 时在任何状态变更前拒绝；至少需要一个未归因余量段。
+    /// `N == 0` 无法通过编译；至少需要一个未归因余量段。
     pub fn record_attributed(
         &mut self,
         elapsed: Duration,
         attribution: FrameAttribution<N>,
     ) -> Result<(), FrameStatsError> {
-        assert!(N != 0, "帧归因至少需要一个余量段");
+        const {
+            assert!(N != 0, "帧归因至少需要一个余量段");
+        }
         if self.skip_next_sample {
             self.skip_next_sample = false;
             return Ok(());
@@ -349,13 +351,6 @@ mod tests {
         assert_eq!(stats.sample(winners[0]).unwrap().elapsed_ns, 100_000_001);
         assert_eq!(stats.compact_sample_indices(0, &mut winners), 0);
     }
-    #[test]
-    #[should_panic(expected = "帧归因至少需要一个余量段")]
-    fn zero_stages_cannot_record_an_unattributable_interval() {
-        let mut stats = super::FrameStats::<0>::default();
-        stats.record(Duration::from_millis(1)).unwrap();
-    }
-
     #[test]
     fn peak_buckets_keep_whole_samples_and_original_indices() {
         let samples = [[3.0, 0.0], [6.0, 4.0], [0.0, 5.0], [7.0, 0.0], [0.0, 2.0]];

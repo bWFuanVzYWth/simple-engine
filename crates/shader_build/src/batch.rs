@@ -56,6 +56,9 @@ pub(super) struct Task {
 
 impl Task {
     pub fn new(entry: &str, arguments: Vec<String>, destination: PathBuf) -> Result<Self, Error> {
+        if arguments.first().is_none_or(String::is_empty) {
+            return Err(Error::Configuration("缺少 shader 源文件".into()));
+        }
         let mut reflection = None;
         for (i, argument) in arguments.iter().enumerate() {
             let path = if argument == "-reflection-json" {
@@ -79,10 +82,19 @@ impl Task {
                 return Err(Error::Configuration("-o/-depfile 由构建所有者管理".into()));
             }
         }
+        let destination = absolute(&destination)?;
+        for path in std::iter::once(&destination).chain(reflection.iter()) {
+            if path.file_name().is_none() {
+                return Err(Error::Configuration(format!(
+                    "输出缺少文件名：{}",
+                    path.display()
+                )));
+            }
+        }
         Ok(Self {
             entry: entry.into(),
             arguments,
-            destination: absolute(&destination)?,
+            destination,
             reflection,
             publish_output: true,
         })
@@ -341,6 +353,12 @@ fn compile_tracked(
             }
         }
         let source = canonical(Path::new(&task.arguments[0]))?;
+        if !source.is_file() {
+            return Err(Error::Configuration(format!(
+                "shader 源路径不是文件：{}",
+                source.display()
+            )));
+        }
         let mut roots = vec![source.parent().expect("canonical 文件父目录").to_owned()];
         let mut args = task.arguments.clone();
         args[0] = normalize(&source, &output);
@@ -425,10 +443,12 @@ fn compile_tracked(
         (0..jobs).map(|_| Vec::new()).collect();
     thread::scope(|scope| -> Result<(), Error> {
         let mut handles = Vec::new();
+        let mut worker_failure = None;
+        let mut worker_panic = None;
         for (worker, results) in results.iter_mut().enumerate() {
             let (next, failed, active, peak, inputs, prepared, cache) =
                 (&next, &failed, &active, &peak, &inputs, &prepared, &cache);
-            handles.push(scope.spawn(move || {
+            let spawned = thread::Builder::new().spawn_scoped(scope, move || {
                 while !failed.load(Ordering::Acquire)
                     && next.load(Ordering::Acquire) < prepared.len()
                 {
@@ -466,12 +486,29 @@ fn compile_tracked(
                     results.push((at, result));
                     drop(token);
                 }
-            }));
+            });
+            match spawned {
+                Ok(handle) => handles.push(handle),
+                Err(error) => {
+                    failed.store(true, Ordering::Release);
+                    worker_failure = Some(Error::Io {
+                        path: PathBuf::from("shader worker"),
+                        source: error,
+                    });
+                    break;
+                }
+            }
         }
         for handle in handles {
-            handle.join().map_err(|_| Error::Worker)?;
+            if let Err(payload) = handle.join() {
+                failed.store(true, Ordering::Release);
+                worker_panic.get_or_insert(payload);
+            }
         }
-        Ok(())
+        if let Some(payload) = worker_panic {
+            std::panic::resume_unwind(payload);
+        }
+        worker_failure.map_or(Ok(()), Err)
     })?;
     let mut hits = 0;
     let mut compiled: Vec<Option<Compiled>> = (0..tasks.len()).map(|_| None).collect();
@@ -482,8 +519,8 @@ fn compile_tracked(
     }
     let compiled = compiled
         .into_iter()
-        .map(|v| v.ok_or(Error::Worker))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|v| v.expect("全部 worker 正常结束且任务均成功时结果完整"))
+        .collect::<Vec<_>>();
     let count = compiled.len();
     let summary = format!(
         "cache={}\ntasks={count}\ncache_hits={hits}\ncompiled={}\nworkers={jobs}\npeak_tasks={}\nelapsed_ms={}\n",

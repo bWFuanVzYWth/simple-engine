@@ -101,6 +101,14 @@ impl Recorder {
         if total > u32::MAX as usize {
             return Err(ReplayError::TextLimit);
         }
+        target
+            .items
+            .try_reserve(batch.items.len())
+            .map_err(InputError::from)?;
+        target
+            .text
+            .try_reserve(batch.text.len())
+            .map_err(InputError::from)?;
         let base = target.text.len() as u32;
         target
             .items
@@ -363,13 +371,18 @@ impl Replay<'_> {
                     {
                         return Err(ReplayError::TextLimit);
                     }
+                    out.items.try_reserve(1).map_err(InputError::from)?;
+                    out.text.try_reserve(bytes).map_err(InputError::from)?;
                     out.push(CommandRef {
                         source: command.source,
                         stamp,
                         kind,
                     });
                 }
-                gap => out.items.push(gap),
+                gap => {
+                    out.items.try_reserve(1).map_err(InputError::from)?;
+                    out.items.push(gap);
+                }
             }
             self.cursor += 1;
         }
@@ -445,7 +458,7 @@ mod tests {
         hub.push(action(110, ActionPhase::Press)).unwrap();
         hub.push(action(115, ActionPhase::Release)).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let mut recorder = Recorder::new(SessionId::new(1), MonoTime::new(100));
         recorder.append(&batch).unwrap();
         let recording = recorder.finish();
@@ -478,7 +491,7 @@ mod tests {
         hub.push(action(10, ActionPhase::Press)).unwrap();
         assert!(hub.push(action(11, ActionPhase::Release)).is_err());
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let mut recorder = Recorder::new(SessionId::new(1), MonoTime::new(0));
         recorder.append(&batch).unwrap();
         let recording = recorder.finish();
@@ -496,7 +509,7 @@ mod tests {
         hub.push(action(10, ActionPhase::Press)).unwrap();
         hub.push(action(11, ActionPhase::Release)).unwrap();
         let mut batch = CommandBatch::new();
-        hub.drain_into(&mut batch);
+        hub.drain_into(&mut batch).unwrap();
         let mut recorder = Recorder::new(SessionId::new(1), MonoTime::new(0));
         recorder.append(&batch).unwrap();
         let recording = recorder.finish();
