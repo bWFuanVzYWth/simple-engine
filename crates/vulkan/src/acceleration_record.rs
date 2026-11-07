@@ -9,6 +9,12 @@ pub(crate) struct BuildBuffers {
 }
 
 impl BuildBuffers {
+    pub(crate) fn destroy(mut self, device: &Device) {
+        for buffer in [&mut self.input, &mut self.scratch].into_iter().flatten() {
+            buffer.destroy(device);
+        }
+    }
+
     pub(crate) fn memory(&self) -> (u64, usize) {
         [&self.input, &self.scratch]
             .into_iter()
@@ -41,6 +47,11 @@ struct Resources<'a> {
 
 impl Drop for Resources<'_> {
     fn drop(&mut self) {
+        if self.device.is_quarantined() {
+            std::mem::forget(self.structure.take());
+            std::mem::forget(std::mem::take(&mut self.buffers));
+            return;
+        }
         if let Some(structure) = self.structure.take() {
             structure.recycle(self.device, self.pool);
         }

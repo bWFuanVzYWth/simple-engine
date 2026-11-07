@@ -62,7 +62,7 @@ fn build_streamline() -> Result<(), Box<dyn std::error::Error>> {
         .include(sdk.join("include"))
         .include(sdk.join("vulkan-headers/include"))
         .file("streamline/bridge.cpp")
-        .compile("simple_engine_streamline");
+        .try_compile("simple_engine_streamline")?;
     let output = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("缺少 OUT_DIR")?);
     // 自定义profile的PROFILE仍可能为release；从Cargo的build包输出槽定位真实目录。
     // 同时适用于build/<package-hash>/out及build/<package>/<hash>/out。

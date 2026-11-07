@@ -12,6 +12,13 @@
 //! 并退役已被 collect 撤销的版本；不得显式 destroy 仍被原生命令使用的外部 wgpu 资源。
 //! HAL guard 使用设备的非递归锁，必须逐个借入并及时释放，持有时不得调用其他 wgpu API。
 //!
+//! # 第三方故障边界
+//!
+//! 固定的 wgpu 30.0.1 在 `Device::poll` 收到部分 HAL 设备故障时走内部 fatal panic；
+//! [`wgpu::PollError`] 仅公开超时与提交索引错误。本模块无法经稳定接口取得全部底层来源，
+//! 正常轮询仍受此限制；不匹配 panic 文本或修改依赖实现。析构改用原生队列等待：
+//! 完成或 DEVICE_LOST 后释放，其他等待失败保留设备和资源并记录错误。
+//!
 //! 来源：[HAL 录制](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.as_hal_mut)、
 //! [资源状态交接](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.transition_resources)。
 
@@ -61,8 +68,8 @@ impl std::ops::Deref for VulkanInstance {
 
 /// 同设备、同 Vulkan 队列的唯一提交所有者；内含唯一 native Context。
 ///
-/// wgpu 资源使用外部 handle，native 资源/版本由 Context 资源表独占。析构等待全部提交；无法确认完成时终止进程，避免释放
-/// GPU 仍在使用的 native 内存。枚举索引属于本次 Vulkan 实例，不是跨运行的设备身份。
+/// wgpu 资源使用外部 handle，native 资源/版本由 Context 资源表独占。析构等待全部提交；无法确认完成时
+/// 记录错误并保留设备与在途资源，避免提前释放。枚举索引属于本次 Vulkan 实例，不是跨运行的设备身份。
 /// Windows dlss_rr 在设备创建时独立查询并可选启用 SDK 能力；不支持时仍可正常使用原生 RT。
 /// early bootstrap 进程只允许一个 Context 设备 owner；其析构先关闭 SDK，再释放 VkDevice。
 /// 该进程关闭后不重新初始化 SDK，普通 native Context 不受此限制。
@@ -572,6 +579,7 @@ impl WgpuContext {
         health.attach(&device);
         let native = Context::new(Device {
             health,
+            uncertain_use: Default::default(),
             raw: unsafe {
                 ash::Device::load(
                     physical.instance.raw.fp_v1_0(),
@@ -1179,19 +1187,49 @@ impl WgpuContext {
 
 impl Drop for WgpuContext {
     fn drop(&mut self) {
-        if let Some((cache, mut disk)) = self.pipeline_cache.take() {
-            // 持有缓存的 2D owner 可以在上次快照后建立新管线。
-            disk.used();
-            disk.flush(|| cache.get_data());
-        }
-        if let Err(error) = wait(&self.device, None) {
-            eprintln!("无法确认互操作提交已完成：{error}");
-            std::process::abort();
+        let idle = self.native.device.wait_idle();
+        if !crate::context::execution_ended(idle) {
+            log::error!("无法确认互操作队列已结束，保留设备与在途资源：{idle:?}");
+            self.native.retain_failed_shutdown();
+            #[cfg(all(feature = "dlss_rr", target_os = "windows"))]
+            {
+                std::mem::forget(self.streamline.runtime.take());
+                std::mem::forget(self.streamline.process.take());
+            }
+            std::mem::forget(self.pipeline_cache.take());
+            return;
         }
         #[cfg(all(feature = "dlss_rr", target_os = "windows"))]
         {
+            let released = self
+                .streamline
+                .runtime
+                .as_mut()
+                .map_or(Ok(()), |runtime| runtime.close());
+            let released = released.and_then(|()| {
+                if self.streamline.process.is_some() {
+                    crate::streamline::shutdown()
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(error) = released {
+                log::error!("SDK 退役失败，保留设备和 SDK 所有者：{error}");
+                self.native.retain_failed_shutdown();
+                std::mem::forget(self.streamline.runtime.take());
+                std::mem::forget(self.streamline.process.take());
+                std::mem::forget(self.pipeline_cache.take());
+                return;
+            }
             drop(self.streamline.runtime.take());
             drop(self.streamline.process.take());
+        }
+        if let Some((cache, mut disk)) = self.pipeline_cache.take() {
+            // 持有缓存的 2D owner 可以在上次快照后建立新管线。
+            if idle.is_ok() && self.native.device.health.is_active() {
+                disk.used();
+                disk.flush(|| cache.get_data());
+            }
         }
     }
 }
@@ -1291,23 +1329,17 @@ pub(crate) fn record(
     })
 }
 
-pub(crate) fn wait(
-    device: &wgpu::Device,
-    submission: Option<wgpu::SubmissionIndex>,
-) -> Result<(), Error> {
+pub(crate) fn wait(owner: &Device, submission: Option<wgpu::SubmissionIndex>) -> Result<(), Error> {
+    let device = owner
+        ._owner
+        .as_ref()
+        .ok_or(Error::Unsupported("等待需要 wgpu 宿主"))?;
     if let Err(error) = device.poll(wgpu::PollType::Wait {
         submission_index: submission,
         timeout: None,
     }) {
-        if device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .is_err()
-        {
-            eprintln!("无法确认 wgpu 提交已完成：{error}");
-            std::process::abort();
+        if !crate::context::execution_ended(owner.wait_idle()) {
+            owner.quarantine();
         }
         return Err(error.into());
     }

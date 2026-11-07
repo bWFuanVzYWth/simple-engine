@@ -34,8 +34,8 @@ impl ProcessOwner {
 impl Drop for ProcessOwner {
     fn drop(&mut self) {
         if let Err(error) = crate::streamline::shutdown() {
-            eprintln!("无法在 VkDevice 退役前关闭 Streamline：{error}");
-            std::process::abort();
+            log::error!("无法在 VkDevice 退役前关闭 Streamline：{error}");
+            return;
         }
         EARLY_DEVICE.store(false, Ordering::Release);
     }
@@ -256,7 +256,7 @@ impl WgpuContext {
             return Err(Error::InvalidState("SDK 命令须先提交或取消，再重配").into());
         }
         if self.streamline.last_serial > self.completed_serial() {
-            crate::interop::wait(&self.device, None)?;
+            crate::interop::wait(&self.native.device, None)?;
             self.drain_completed();
         }
         Ok(())
@@ -317,6 +317,9 @@ impl WgpuContext {
     /// 未提交的 SDK 命令必须先提交或取消。之后可重新 configure_streamline。
     pub fn release_streamline(&mut self) -> Result<(), RecordError> {
         self.wait_streamline_reconfiguration()?;
+        if let Some(runtime) = &mut self.streamline.runtime {
+            runtime.close()?;
+        }
         drop(self.streamline.runtime.take());
         self.streamline.configuration = None;
         self.streamline.recovery = Recovery::new();
@@ -536,7 +539,7 @@ mod tests {
         let recorded = context.record_streamline(images, retry)?;
         assert!(!context.streamline.recovery.reset_required());
         context.submit([recorded.commands])?;
-        crate::interop::wait(context.device(), None)?;
+        crate::interop::wait(&context.native.device, None)?;
         context.completed_serial();
         recorded.evaluation?;
         context.release_streamline()?;

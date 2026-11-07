@@ -282,11 +282,52 @@ impl<T> Arena<T> {
     pub(crate) fn retained_bytes(&self) -> usize {
         self.slots.capacity() * size_of::<Slot<T>>() + self.free.capacity() * size_of::<u32>()
     }
+
+    /// 消费整个槽表，不再保留身份；仅供所有者结束后的无分配清理。
+    pub(crate) fn into_values(self) -> impl Iterator<Item = T> {
+        self.slots.into_iter().filter_map(|slot| slot.value)
+    }
+
+    /// 只扫描 start 之后的槽，用于独占移出时不持有容器借用的前向游标。
+    pub(crate) fn first_key_from(&self, owner: u64, start: usize) -> Option<Key> {
+        let (offset, slot) = self
+            .slots
+            .get(start..)?
+            .iter()
+            .enumerate()
+            .find(|(_, slot)| slot.value.is_some())?;
+        Some(Key {
+            owner,
+            slot: (start + offset) as u32,
+            generation: slot.generation,
+        })
+    }
+
+    /// 消费整个槽表，在原有容量内按销毁等级排序，不建立临时身份列表。
+    pub(crate) fn into_ordered_values(
+        mut self,
+        rank: impl Fn(&T) -> u8,
+    ) -> impl Iterator<Item = T> {
+        self.slots
+            .sort_unstable_by_key(|slot| slot.value.as_ref().map(&rank));
+        self.into_values()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_consumes_each_live_value_in_rank_order() {
+        let mut arena = Arena::new();
+        let removed = arena.try_insert(1, 9).ok().unwrap();
+        arena.try_insert(1, 3).ok().unwrap();
+        arena.try_insert(1, 1).ok().unwrap();
+        assert_eq!(arena.remove(removed), Some(9));
+        let values: Vec<_> = arena.into_ordered_values(|value| *value).collect();
+        assert_eq!(values, [1, 3]);
+    }
 
     #[test]
     fn final_generation_is_used_once() {

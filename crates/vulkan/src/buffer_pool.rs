@@ -126,6 +126,10 @@ impl BufferPool {
     }
 
     pub(crate) fn give(&mut self, device: &Device, class: Class, mut buffer: Buffer) {
+        if device.is_quarantined() {
+            std::mem::forget(buffer);
+            return;
+        }
         let bytes = buffer.allocation_bytes();
         if !self.enabled || bytes > IDLE_LIMIT {
             buffer.destroy(device);

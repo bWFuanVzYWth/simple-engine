@@ -29,6 +29,12 @@ CI 在 Linux 执行 `cpu` 与 `features`、Windows 执行 `build` 与 `docs`，�
 
 功能裁剪使用 `-Suite features` 独立检查根包，避免 workspace 成员统一 feature 后掩盖缺失依赖；各开关语义见 [引擎入口](engine.md)。
 
+Windows 上检查 Streamline 桥接的退出失败处理：先按 [DLSS RR 手册](streamline.md) 安装锁定 SDK，并安装带 `clang++` 的 LLVM；在仓库根目录的 PowerShell 运行下面命令。它使用模拟 SDK 调用，不创建窗口或 GPU 设备。成功会显示 `4 failure-boundary tests passed`；编译失败先检查 `clang++`、MSVC 工具链和 SDK 路径，断言失败保留完整终端输出。
+
+```powershell
+./scripts/test_streamline_bridge.ps1 -SdkRoot "$PWD/target/streamline-sdk"
+```
+
 ## 工具链
 
 本机路径、私有环境与凭据放在被忽略的 `local/`，模板、显式加载和 Cargo 覆盖方式见[本机配置](local.md)。

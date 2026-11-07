@@ -31,6 +31,27 @@ fn record(life: &mut Owner, payload: usize) -> RecordId {
 }
 
 #[test]
+fn shutdown_retires_all_record_states_before_ranked_resources() {
+    let mut life = Owner::new(7);
+    let removed = record(&mut life, 99);
+    let submitted = record(&mut life, 1);
+    let uncertain = record(&mut life, 2);
+    record(&mut life, 3);
+    life.take_pending(removed).unwrap();
+    life.prepare_batch(&[submitted]).unwrap().accept();
+    life.prepare_batch(&[uncertain]).unwrap().quarantine();
+    for data in [Data::Buffer(7), Data::Layout(3), Data::Micromap(6)] {
+        life.insert_resource(data)
+            .unwrap_or_else(|_| panic!("测试资源插入失败"));
+    }
+    let mut records = Vec::new();
+    let resources = life.into_shutdown(|record| records.push(record.into_buffers()));
+    let ranks = resources.map(|data| data.rank()).collect::<Vec<_>>();
+    assert_eq!(records, [1, 2, 3]);
+    assert_eq!(ranks, [3, 6, 7]);
+}
+
+#[test]
 fn duplicate_batch_restores_pending_records() {
     let mut life = Owner::new(7);
     let id = record(&mut life, 42);

@@ -32,11 +32,7 @@ pub(crate) struct MicromapData {
 }
 
 impl MicromapData {
-    pub(crate) fn new(
-        device: &Device,
-        wgpu_device: &wgpu::Device,
-        maps: &[OpacityMap<'_>],
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(device: &Device, maps: &[OpacityMap<'_>]) -> Result<Self, Error> {
         device.ensure_active()?;
         if !device.opacity_micromap {
             return Err(Error::Unsupported("设备未启用 opacity micromap"));
@@ -146,9 +142,9 @@ impl MicromapData {
             );
             Ok(())
         })?;
-        // wait 失败也先确认全队列完成，否则终止；不释放在途 input/scratch/OMM。
+        // wait 失败也先确认全队列完成，否则保留在途 input/scratch/OMM。
         let submitted = device.submit([command])?;
-        crate::interop::wait(wgpu_device, Some(submitted))?;
+        crate::interop::wait(device, Some(submitted))?;
         Ok(result.finish())
     }
 

@@ -37,6 +37,10 @@ impl<T: Destroy> DerefMut for Guard<'_, T> {
 }
 impl<T: Destroy> Drop for Guard<'_, T> {
     fn drop(&mut self) {
+        if self.device.is_quarantined() {
+            std::mem::forget(self.value.take());
+            return;
+        }
         if let Some(value) = &mut self.value {
             value.destroy(self.device);
         }

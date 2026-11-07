@@ -267,6 +267,23 @@ impl<P: Payloads, B> Life<P, B> {
 }
 
 impl<P: Payloads, B> Life<P, B> {
+    /// 消费所有者并交出全部实际载荷；宿主先证明 GPU 已结束，先清理记录，再清理有序资源。
+    /// 不经过仍可能分配失败的运行期闭包计划；身份随整个所有者失效。
+    pub(crate) fn into_shutdown(
+        mut self,
+        mut retire_record: impl FnMut(Record<B>),
+    ) -> impl Iterator<Item = Data<P>> {
+        let mut cursor = 0;
+        while let Some(key) = self.records.first_key_from(self.owner, cursor) {
+            cursor = key.slot as usize + 1;
+            let record = self
+                .take_shutdown(crate::handles::RecordId::new(key))
+                .expect("独占前向游标给出的完整记录");
+            retire_record(record);
+        }
+        self.resources.into_ordered_values(Data::rank)
+    }
+
     pub(crate) fn retained_bytes(&self) -> usize {
         self.resources.retained_bytes()
             + self.records.retained_bytes()

@@ -309,6 +309,7 @@ impl Context {
         }
         Ok(Self::new(Device {
             health: crate::health::Health::new(),
+            uncertain_use: Default::default(),
             raw: device,
             physical,
             buffer_bytes: AtomicU64::new(0),
@@ -852,12 +853,10 @@ impl Context {
         &mut self,
         maps: &[crate::OpacityMap<'_>],
     ) -> Result<crate::OpacityMicromap, Error> {
-        let device = self
-            .device
-            ._owner
-            .as_ref()
-            .ok_or(Error::Unsupported("OMM 构建需要 wgpu 设备"))?;
-        let data = MicromapData::new(&self.device, device, maps)?;
+        if self.device._owner.is_none() {
+            return Err(Error::Unsupported("OMM 构建需要 wgpu 设备"));
+        }
+        let data = MicromapData::new(&self.device, maps)?;
         let count = data.map_count();
         Ok(crate::OpacityMicromap {
             key: self.insert(Data::Micromap(data))?,
@@ -979,18 +978,21 @@ impl Context {
             graph::PlanError::InvalidShape => Error::InvalidState("资源邻接身份无效"),
             graph::PlanError::Allocation(error) => error.into(),
         })?;
-        self.recycle_unkept(&plan.keep);
+        self.recycle_unkept(&plan.keep)?;
         self.retire_ready();
         Ok(())
     }
 
-    fn recycle_unkept(&mut self, keep: &[bool]) {
-        let mut retired: Vec<_> = self
+    fn recycle_unkept(&mut self, keep: &[bool]) -> Result<(), Error> {
+        let mut retired = Vec::new();
+        for (key, data) in self
             .life
             .resources()
             .filter(|(key, _)| !keep[key.slot as usize])
-            .map(|(key, data)| (data.rank(), key.slot, key.generation))
-            .collect();
+        {
+            retired.try_reserve(1)?;
+            retired.push((data.rank(), key.slot, key.generation));
+        }
         retired.sort_unstable_by_key(|v| v.0);
         for (_, slot, generation) in retired {
             // 本 owner 的临时排序表只携带槽位和代次。
@@ -1003,6 +1005,7 @@ impl Context {
                 data.recycle(&self.device, &mut self.as_pool);
             }
         }
+        Ok(())
     }
     pub(crate) fn encode(&self, key: RecordId, command: vk::CommandBuffer) -> Result<(), Error> {
         self.record(key)?.encode(self, command)
@@ -1015,28 +1018,42 @@ impl Context {
         self.record(key)?.track(self, encoder)
     }
 }
+impl Context {
+    /// 只有无法证明 GPU 停止或 SDK 释放失败时保留整套所有者，禁止部分销毁在途依赖。
+    pub(crate) fn retain_failed_shutdown(&mut self) {
+        self.device.quarantine();
+        let owner = self.owner();
+        std::mem::forget(std::mem::replace(&mut self.life, Life::new(owner)));
+        std::mem::forget(std::mem::take(&mut self.as_pool));
+        std::mem::forget(self.pipeline_cache.take());
+        std::mem::forget(self.device._owner.take());
+        std::mem::forget(self.device.wgpu_queue.take());
+        std::mem::forget(self.device.physical.instance._owner.take());
+        std::mem::forget(self.device._loader.take());
+    }
+}
+
 impl Drop for Context {
     fn drop(&mut self) {
         if self
             .life
             .records()
             .any(|(_, r)| r.state() != State::Pending)
+            || self.device.is_quarantined()
         {
-            let result = if let Some(device) = &self.device._owner {
-                crate::interop::wait(device, None)
-            } else {
-                unsafe { self.device.raw.queue_wait_idle(self.device.queue) }.map_err(Error::from)
-            };
-            if result.is_err() {
-                std::process::abort();
+            let result = self.device.wait_idle();
+            if !crate::context::execution_ended(result) {
+                log::error!("无法确认 native 队列已结束，保留设备与在途资源：{result:?}");
+                self.retain_failed_shutdown();
+                return;
             }
         }
-        let ids: Vec<_> = self.life.records().map(|(id, _)| id).collect();
-        for id in ids {
-            let record = self.life.take_shutdown(id).expect("idle owner的现存记录");
-            self.recycle_record(record, false);
+        let owner = self.owner();
+        let life = std::mem::replace(&mut self.life, Life::new(owner));
+        let resources = life.into_shutdown(|record| record.into_buffers().destroy(&self.device));
+        for mut resource in resources {
+            resource.destroy(&self.device);
         }
-        self.collect_inner(&[]).expect("清理本 owner 的完整资源表");
         self.as_pool.destroy(&self.device);
         if let Some(cache) = self.pipeline_cache.take() {
             cache.destroy(&self.device);
@@ -1064,10 +1081,10 @@ pub(crate) fn immediate(
     f: impl FnOnce(vk::CommandBuffer) -> Result<(), Error>,
 ) -> Result<(), Error> {
     device.ensure_active()?;
-    if let (Some(wgpu_device), Some(_)) = (&device._owner, &device.wgpu_queue) {
+    if let (Some(_), Some(_)) = (&device._owner, &device.wgpu_queue) {
         let commands = crate::interop::record(device, "native upload", f)?;
         let submission = device.submit([commands])?;
-        return crate::interop::wait(wgpu_device, Some(submission));
+        return crate::interop::wait(device, Some(submission));
     }
     let raw = &device.raw;
     let pool = unsafe {
@@ -1107,19 +1124,32 @@ pub(crate) fn immediate(
             )
         };
         let result = match submitted {
-            Ok(()) => unsafe { raw.wait_for_fences(&[fence], true, u64::MAX) },
+            Ok(()) => {
+                let result = unsafe { raw.wait_for_fences(&[fence], true, u64::MAX) };
+                if result.is_err()
+                    && !crate::context::execution_ended(result)
+                    && !crate::context::execution_ended(device.wait_idle())
+                {
+                    device.quarantine();
+                }
+                result
+            }
             Err(error) => Err(error),
         };
-        if result.is_err() && unsafe { raw.queue_wait_idle(device.queue) }.is_err() {
-            std::process::abort();
+        if result == Err(vk::Result::ERROR_DEVICE_LOST) {
+            device.health.fail(crate::DeviceFailure::Lost);
         }
-        unsafe {
-            raw.destroy_fence(fence, None);
+        if !device.is_quarantined() {
+            unsafe {
+                raw.destroy_fence(fence, None);
+            }
         }
         result.map_err(Error::from)
     })();
-    unsafe {
-        raw.destroy_command_pool(pool, None);
+    if !device.is_quarantined() {
+        unsafe {
+            raw.destroy_command_pool(pool, None);
+        }
     }
     result
 }
@@ -3184,7 +3214,7 @@ impl Recorded {
                     |command| context.encode(self.key, command),
                 )?;
                 let submission = context.device.submit([tracker, commands])?;
-                crate::interop::wait(device, Some(submission))
+                crate::interop::wait(&context.device, Some(submission))
             } else {
                 immediate(&context.device, |command| context.encode(self.key, command))
             }
@@ -3204,7 +3234,7 @@ impl Recorded {
     /// GPU 确认完成后调用。回调不得 panic。额外等待会改变时序，不能用于性能验收。
     /// 只接受外部原生设备上的普通待执行记录，不接受 wgpu 或 AS 构建记录。
     /// 调用方独占同一队列；输入不得依赖尚未提交的外部 command。
-    /// 与普通同步提交共用等待失败策略；设备失效且无法确认队列停止时中止进程。
+    /// 与普通同步提交共用等待失败策略；无法确认队列停止时保留在途资源并返回错误。
     /// # Errors
     /// 归属、记录类型、资源依赖或底层提交/等待失败时返回来源；不会报告未完成操作成功。
     pub fn submit_diagnostic_and_wait(

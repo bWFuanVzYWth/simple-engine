@@ -9,6 +9,7 @@
 //! 后 proxy 保留到进程退出；[`shutdown`] 退役 plugin 后仍可销毁宿主设备。
 //! Runtime 不提交或等待；configure、释放与 shutdown 前必须完成此前 evaluate。
 //! SDK 异常使整个命令不可提交；普通失败允许宿主回退当前 noisy 图像。
+//! 初始化回滚若不能关闭 SDK，桥接保留其借用存储和模块，后续初始化返回错误，直到进程重启。
 //!
 //! 宿主须实际启用 SDK 所需 extensions/features，至少包括 `synchronization2`、
 //! `shaderStorageImageWriteWithoutFormat`；early interposer 另需 Vulkan 1.3 与 `privateData`。
@@ -279,8 +280,8 @@ pub fn shutdown() -> Result<(), Error> {
 
 /// 单 renderer 的 SDK owner；独占录制，不拥有宿主 Vulkan 设备。
 ///
-/// 每次 configure 与析构前须完成此前 GPU evaluate。释放 SDK 资源失败时终止进程，
-/// 避免继续销毁无法证明安全的借用设备。early interposer 的进程状态由 shutdown 退役。
+/// 每次 configure 与析构前须完成此前 GPU evaluate。显式 [`Self::close`] 保留释放错误；
+/// 析构无法上抛时记录错误并保留 bridge 所有者。early interposer 的进程状态由 shutdown 退役。
 pub struct Runtime {
     handle: *mut c_void,
 }
@@ -289,6 +290,18 @@ pub struct Runtime {
 unsafe impl Send for Runtime {}
 
 impl Runtime {
+    /// 完成此前 GPU 使用后释放 SDK 资源；重复关闭为空操作，失败保留所有者以便宿主处理。
+    /// 调用方须先处理返回错误，再释放借入的 Vulkan 设备。
+    /// # Errors
+    /// SDK 资源释放或关闭失败时保留原始来源。
+    pub fn close(&mut self) -> Result<(), Error> {
+        if !self.handle.is_null() {
+            check(unsafe { se_sl_destroy(self.handle) })?;
+            self.handle = std::ptr::null_mut();
+        }
+        Ok(())
+    }
+
     /// 借入活动宿主设备；无 early bootstrap 时使用 manual hooking。
     /// # Safety
     /// init 来自同一活动设备，宿主保活至本 owner 释放；所需 SDK extensions/features 已启用。
@@ -343,9 +356,8 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         // new/evaluate 的调用方保证已完成所有 GPU 工作；bridge 只释放本 owner 的资源。
-        if let Err(error) = check(unsafe { se_sl_destroy(self.handle) }) {
-            eprintln!("{error}");
-            std::process::abort();
+        if let Err(error) = self.close() {
+            log::error!("无法释放 SDK 所有者：{error}");
         }
     }
 }
@@ -499,7 +511,7 @@ pub(crate) mod interop_tests {
         retry.reset = 0; // 取消后的安全适配必须自行重建并强制 reset。
         let recorded = context.record_streamline(images, retry)?;
         context.submit([recorded.commands])?;
-        crate::interop::wait(context.device(), None)?;
+        crate::interop::wait(&context.native.device, None)?;
         context.completed_serial();
         recorded.evaluation?;
         let output = images[6].download(context.native())?;

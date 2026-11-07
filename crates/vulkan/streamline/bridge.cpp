@@ -74,14 +74,42 @@ struct Context
     PFun_slDLSSDGetOptimalSettings *optimal{};
     ~Context()
     {
-        if (initialized)
-            shutdown();
         if (module)
             FreeLibrary(module);
     }
 };
 
-Context *active{}, *bootstrapped{};
+Context *active{}, *bootstrapped{}, *failed_cleanup{};
+
+// 初始化失败的本地 owner 也必须先成功关闭 SDK；异常时保留 SDK 引用的路径、身份与模块。
+struct PendingContextDeleter
+{
+    void operator()(Context *ctx) const noexcept
+    {
+        if (ctx->initialized)
+        {
+            try
+            {
+                if (ctx->shutdown() != sl::Result::eOk)
+                {
+                    failed_cleanup = ctx;
+                    std::fputs("Streamline initialization cleanup failed; retaining owner\n",
+                               stderr);
+                    return;
+                }
+            }
+            catch (...)
+            {
+                failed_cleanup = ctx;
+                std::fputs("Streamline initialization cleanup threw; retaining owner\n", stderr);
+                return;
+            }
+            ctx->initialized = false;
+        }
+        delete ctx;
+    }
+};
+using PendingContext = std::unique_ptr<Context, PendingContextDeleter>;
 
 bool module_directory(std::wstring &result)
 {
@@ -318,15 +346,24 @@ extern "C" const char *se_sl_last_error()
 
 // bootstrap context 保留到进程退出；路径初始化后不再更改。
 extern "C" const wchar_t *se_sl_interposer_path()
+try
 {
     std::lock_guard lock(api_mutex);
     return bootstrapped && bootstrapped->initialized ? bootstrapped->interposer_path.c_str()
                                                      : nullptr;
 }
+catch (...)
+{
+    fail("Exception while accessing Streamline interposer path", -4);
+    return nullptr;
+}
 
 extern "C" int32_t se_sl_bootstrap(const SeSlApplication *application)
+try
 {
     std::lock_guard lock(api_mutex);
+    if (failed_cleanup)
+        return fail("Previous Streamline cleanup failed; restart required", -2);
     if (!application || !application->engine_version || !*application->engine_version ||
         !application->project_id || !*application->project_id)
         return fail("Invalid Streamline application identity");
@@ -345,21 +382,19 @@ extern "C" int32_t se_sl_bootstrap(const SeSlApplication *application)
         GetLastError() == ERROR_ENVVAR_NOT_FOUND &&
         !SetEnvironmentVariableW(L"VK_LAYER_VALIDATE_SYNC", L"1"))
         return fail("Cannot enable Khronos synchronization validation", -3);
-    try
-    {
-        auto ctx = std::make_unique<Context>();
-        const auto result = initialize(*ctx, true, *application);
-        if (!result)
-            bootstrapped = ctx.release();
-        return result;
-    }
-    catch (...)
-    {
-        return fail("Exception during Streamline bootstrap", -4);
-    }
+    PendingContext ctx(new Context());
+    const auto result = initialize(*ctx, true, *application);
+    if (!result)
+        bootstrapped = ctx.release();
+    return result;
+}
+catch (...)
+{
+    return fail("Exception during Streamline bootstrap", -4);
 }
 
 extern "C" int32_t se_sl_shutdown()
+try
 {
     std::lock_guard lock(api_mutex);
     if (active)
@@ -372,27 +407,33 @@ extern "C" int32_t se_sl_shutdown()
     // 保留 proxy 模块至进程退出；宿主尚需用它执行 vkDestroyDevice/Instance。
     return result;
 }
+catch (...)
+{
+    return fail("Exception during Streamline shutdown", -4);
+}
 
 extern "C" int32_t se_sl_create(const SeSlInit *init, const SeSlApplication *application,
                                 void **output)
+try
 {
     std::lock_guard lock(api_mutex);
     if (output)
         *output = nullptr;
+    if (failed_cleanup)
+        return fail("Previous Streamline cleanup failed; restart required", -2);
     if (!init || !output || !init->device || !init->instance || !init->physical_device ||
         !application || !application->engine_version || !*application->engine_version ||
         !application->project_id || !*application->project_id)
         return fail("Invalid Streamline initialization");
     if (active)
         return fail("Only one RR owner can be active", -2);
-    try
     {
-        std::unique_ptr<Context> owned;
+        PendingContext owned;
         Context *ctx = bootstrapped;
         int32_t result;
         if (!ctx)
         {
-            owned = std::make_unique<Context>();
+            owned.reset(new Context());
             ctx = owned.get();
             if ((result = initialize(*ctx, false, *application)))
                 return result;
@@ -424,14 +465,15 @@ extern "C" int32_t se_sl_create(const SeSlInit *init, const SeSlApplication *app
         *output = active;
         return 0;
     }
-    catch (...)
-    {
-        return fail("Exception while attaching Streamline", -4);
-    }
+}
+catch (...)
+{
+    return fail("Exception while attaching Streamline", -4);
 }
 
 extern "C" int32_t se_sl_configure(void *context, uint32_t width, uint32_t height, uint32_t quality,
                                    SeSlSize *size)
+try
 {
     std::lock_guard lock(api_mutex);
     if (!context || context != active || !width || !height || !size)
@@ -465,8 +507,13 @@ extern "C" int32_t se_sl_configure(void *context, uint32_t width, uint32_t heigh
     *size = ctx.input;
     return 0;
 }
+catch (...)
+{
+    return fail("Exception during Streamline configuration", -4);
+}
 
 extern "C" int32_t se_sl_evaluate(void *context, const SeSlFrame *frame)
+try
 {
     std::lock_guard lock(api_mutex);
     if (!context || context != active || !frame || !active->configured ||
@@ -532,8 +579,14 @@ extern "C" int32_t se_sl_evaluate(void *context, const SeSlFrame *frame)
     // 2.14.1 plugin 不传递 NGX bool，必须检查同步错误回调。
     return logged_error ? -5 : 0;
 }
+catch (...)
+{
+    evaluating = false;
+    return fail("SDK exception; command buffer must not be submitted", -100);
+}
 
 extern "C" int32_t se_sl_destroy(void *context)
+try
 {
     std::lock_guard lock(api_mutex);
     if (!context)
@@ -546,13 +599,21 @@ extern "C" int32_t se_sl_destroy(void *context)
         result = check(ctx->free_resources(sl::kFeatureDLSS_RR, ctx->viewport), "slFreeResources");
     if (result)
         return result; // 失败时保留 owner，不能证明 SDK 私有资源已释放。
-    active = nullptr;
     ctx->evaluated = ctx->configured = false;
     if (ctx != bootstrapped)
     {
         result = check(ctx->shutdown(), "slShutdown");
+        if (result)
+            return result;
         ctx->initialized = false;
+        active = nullptr;
         delete ctx;
     }
+    else
+        active = nullptr;
     return result;
+}
+catch (...)
+{
+    return fail("Exception during Streamline resource release", -4);
 }

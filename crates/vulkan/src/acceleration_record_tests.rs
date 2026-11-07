@@ -129,7 +129,7 @@ fn queued_blas_can_feed_a_later_tlas_submission() -> Result<(), Error> {
     assert_eq!(context.last_submission_serial(), 2);
     // 构建链未执行 host wait；发布根保留在途 TLAS 及其 BLAS 依赖。
     context.native().collect(&[acceleration.into()])?;
-    crate::interop::wait(&context.device, Some(submitted))?;
+    crate::interop::wait(&context.native.device, Some(submitted))?;
     context.native().collect(&[acceleration.into()])?;
     assert_eq!(
         context.native_ref().as_build_memory(),
@@ -166,7 +166,7 @@ fn build_temporaries_return_only_after_reported_completion() -> Result<(), Error
     assert_eq!(inflight.pending_bytes, 0);
     assert_eq!(inflight.inflight_bytes, before.pending_bytes);
     assert_eq!(inflight.inflight_buffers, 4);
-    crate::interop::wait(&context.device, Some(submitted))?;
+    crate::interop::wait(&context.native.device, Some(submitted))?;
     context.native().collect(&[acceleration.into()])?;
     assert_eq!(
         context.native_ref().as_build_memory(),

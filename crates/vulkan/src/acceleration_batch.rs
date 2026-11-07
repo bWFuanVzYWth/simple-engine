@@ -120,6 +120,12 @@ impl<'a> BatchResources<'a> {
 
 impl Drop for BatchResources<'_> {
     fn drop(&mut self) {
+        if self.device.is_quarantined() {
+            std::mem::forget(std::mem::take(&mut self.blases));
+            std::mem::forget(self.input.take());
+            std::mem::forget(self.scratch.take());
+            return;
+        }
         for blas in self.blases.drain(..) {
             blas.recycle(self.device, self.pool);
         }
@@ -531,13 +537,13 @@ impl BlasData {
                     scratch: resources.scratch.take(),
                 },
             ))
-        } else if let Some(wgpu_device) = &device._owner {
+        } else if device._owner.is_some() {
             let stage = Instant::now();
             let command = crate::interop::record(device, "BLAS batch", encode)?;
             timing.record_ns = nanos(stage);
             let stage = Instant::now();
             let submitted = device.submit([command])?;
-            crate::interop::wait(wgpu_device, Some(submitted))?;
+            crate::interop::wait(device, Some(submitted))?;
             timing.submit_wait_ns = nanos(stage);
             if let Some(queries) = &queries {
                 timing.gpu_build_ns = Some(queries.elapsed(device)?);
@@ -546,7 +552,7 @@ impl BlasData {
         } else {
             let stage = Instant::now();
             // 同一 raw 录制用于两种宿主；一次提交/完成后才归还共享 input 与 scratch。
-            // immediate 失败时确认队列完成或终止，guards 不会释放仍在执行的候选。
+            // immediate 失败时确认队列完成或保留资源，guards 不会释放仍在执行的候选。
             crate::native::immediate(device, |command| {
                 let stage = Instant::now();
                 let result = encode(command);
