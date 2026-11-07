@@ -3039,10 +3039,18 @@ impl Record {
         Ok(())
     }
     fn encode(&self, context: &Context, command: vk::CommandBuffer) -> Result<(), Error> {
+        self.encode_operations(context, command, self.operations())
+    }
+    fn encode_operations(
+        &self,
+        context: &Context,
+        command: vk::CommandBuffer,
+        operations: &[Op],
+    ) -> Result<(), Error> {
         let device = &context.device;
         unsafe {
             memory_barrier(device, command);
-            for op in self.operations() {
+            for op in operations {
                 match op {
                     Op::Trace(p, size) => {
                         let version = p.data(context)?;
@@ -3180,6 +3188,61 @@ impl Recorded {
             } else {
                 immediate(&context.device, |command| context.encode(self.key, command))
             }
+        })();
+        if context.device.health.is_active() {
+            let record = context.life.take_sync(self.key, result.is_ok())?;
+            context.recycle_record(record, result.is_ok());
+            context.retire_ready();
+        } else {
+            context.life.quarantine_records(&[self.key]);
+        }
+        result
+    }
+
+    /// 原生诊断：在每次 trace/dispatch 后独立提交并等待，保留原操作顺序及资源所有权。
+    /// `checkpoint` 接收操作序号、种类、尺寸和完成标志；false 在提交前调用，true 只在
+    /// GPU 确认完成后调用。回调不得 panic。额外等待会改变时序，不能用于性能验收。
+    /// 只接受外部原生设备上的普通待执行记录，不接受 wgpu 或 AS 构建记录。
+    /// 调用方独占同一队列；输入不得依赖尚未提交的外部 command。
+    /// 与普通同步提交共用等待失败策略；设备失效且无法确认队列停止时中止进程。
+    /// # Errors
+    /// 归属、记录类型、资源依赖或底层提交/等待失败时返回来源；不会报告未完成操作成功。
+    pub fn submit_diagnostic_and_wait(
+        self,
+        context: &mut Context,
+        mut checkpoint: impl FnMut(usize, &'static str, [u32; 3], bool),
+    ) -> Result<(), Error> {
+        context.device.ensure_active()?;
+        let record = context.record(self.key)?;
+        if record.state() != State::Pending {
+            return Err(Error::InvalidState("命令已编码"));
+        }
+        let result = (|| {
+            if context.device._owner.is_some()
+                || !context.record(self.key)?.build_roots().is_empty()
+            {
+                return Err(Error::InvalidArgument("逐操作诊断需要原生普通待执行记录"));
+            }
+            context.validate_submission(&[self.key])?;
+            context.life.begin_sync(self.key)?;
+            let record = context.record(self.key)?;
+            let operations = record.operations();
+            let mut start = 0;
+            for (index, operation) in operations.iter().enumerate() {
+                let (kind, extent) = match operation {
+                    Op::Trace(_, extent) => ("trace", *extent),
+                    Op::Dispatch(_, extent) => ("dispatch", *extent),
+                    _ if index + 1 == operations.len() => ("tail", [0; 3]),
+                    _ => continue,
+                };
+                checkpoint(index, kind, extent, false);
+                immediate(&context.device, |command| {
+                    record.encode_operations(context, command, &operations[start..=index])
+                })?;
+                checkpoint(index, kind, extent, true);
+                start = index + 1;
+            }
+            Ok(())
         })();
         if context.device.health.is_active() {
             let record = context.life.take_sync(self.key, result.is_ok())?;
