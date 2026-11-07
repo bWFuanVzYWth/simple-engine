@@ -600,7 +600,7 @@ impl WgpuContext {
             opacity_micromap: micromap_enabled,
             invocation_reorder: invocation_reorder_enabled,
             pipeline_statistics: capabilities.pipeline_statistics,
-        });
+        })?;
         drop(hal_device);
         let (completed_tx, completed_rx) = mpsc::channel();
         Ok(Self {

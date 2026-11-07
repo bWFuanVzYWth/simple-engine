@@ -224,17 +224,17 @@ impl Context {
         }
     }
 
-    pub(crate) fn new(device: Device) -> Self {
+    pub(crate) fn new(device: Device) -> Result<Self, Error> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let owner = NEXT
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-            .expect("设备标识已耗尽");
-        Self {
+            .map_err(|_| Error::InvalidState("设备标识已耗尽"))?;
+        Ok(Self {
             device,
             life: Life::new(owner),
             as_pool: BufferPool::default(),
             pipeline_cache: None,
-        }
+        })
     }
 
     /// 启用本设备独占的管线缓存。调用者提供应用私有、可信的可再生缓存目录。
@@ -307,7 +307,7 @@ impl Context {
         {
             return Err(Error::InvalidArgument("外部设备 API 版本与能力不匹配"));
         }
-        Ok(Self::new(Device {
+        Self::new(Device {
             health: crate::health::Health::new(),
             uncertain_use: Default::default(),
             raw: device,
@@ -325,7 +325,7 @@ impl Context {
             opacity_micromap: raw.capabilities.opacity_micromap,
             invocation_reorder: raw.capabilities.invocation_reorder,
             pipeline_statistics: raw.capabilities.pipeline_statistics,
-        }))
+        })
     }
     /// 实际启用能力。
     pub fn capabilities(&self) -> Capabilities {

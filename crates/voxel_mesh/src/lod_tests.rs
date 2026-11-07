@@ -1,6 +1,28 @@
 use super::*;
 use std::cell::Cell as Counter;
 
+#[test]
+fn impossible_cache_capacity_returns_allocation_error() {
+    assert!(matches!(
+        Pyramid::with_capacity(usize::MAX),
+        Err(Error::Allocation(_))
+    ));
+}
+
+#[test]
+fn exhausted_revision_preserves_the_previous_tree() {
+    let source = stripes(2, false);
+    let mut pyramid = Pyramid::new().unwrap();
+    pyramid.revision = u64::MAX;
+    let mut tree = LodTree::new();
+    pyramid
+        .build(&source, region(6, 6, [0; 3]), sample, &mut tree)
+        .unwrap();
+    let previous = *tree.sample(&pyramid, [3, 4, 5]).unwrap();
+    assert!(matches!(pyramid.clear(), Err(Error::IdentityExhausted)));
+    assert_eq!(*tree.sample(&pyramid, [3, 4, 5]).unwrap(), previous);
+}
+
 struct RawNode {
     values: [u32; 64],
     pointers: u64,
@@ -74,7 +96,7 @@ fn region(root_lod: u8, lod: u8, minimum: [u64; 3]) -> Region {
 #[test]
 fn occupancy_counts_volume_and_odd_octants_exactly() {
     let source = stripes(2, true);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let full = pyramid
         .summarize(&source, region(6, 6, [0; 3]), sample)
         .unwrap();
@@ -96,7 +118,7 @@ fn representative_is_priority_selection_instead_of_majority() {
         versions: vec![vec![1]],
         reads: Counter::new(0),
     };
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let summary = pyramid
         .summarize(&source, region(2, 2, [0; 3]), |value| Sample {
             priority: if value == 9 { 7 } else { 0 },
@@ -110,7 +132,7 @@ fn representative_is_priority_selection_instead_of_majority() {
 #[test]
 fn uniform_regions_skip_source_nodes_and_preserve_raw_value() {
     let source = stripes(0, false);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let request = Region {
         root: Cell::Uniform(73),
         root_lod: 42,
@@ -132,7 +154,7 @@ fn uniform_regions_skip_source_nodes_and_preserve_raw_value() {
 #[test]
 fn odd_region_build_uses_eight_fine_cells_per_coarse_cell() {
     let source = stripes(3, true);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let mut tree = LodTree::new();
     pyramid
         .build(&source, region(8, 7, [128, 0, 0]), sample, &mut tree)
@@ -149,7 +171,7 @@ fn odd_region_build_uses_eight_fine_cells_per_coarse_cell() {
 #[test]
 fn directional_materials_reach_actual_mesh_labels() {
     let source = stripes(3, false);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let mut tree = LodTree::new();
     pyramid
         .build(&source, region(8, 8, [0; 3]), sample, &mut tree)
@@ -187,7 +209,7 @@ fn directional_materials_reach_actual_mesh_labels() {
 #[test]
 fn disabled_boundaries_leave_uniform_interior_empty() {
     let source = stripes(0, false);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let mut tree = LodTree::new();
     pyramid
         .build(
@@ -219,12 +241,12 @@ fn disabled_boundaries_leave_uniform_interior_empty() {
 #[test]
 fn new_batch_preserves_source_cache_and_invalidates_old_tree() {
     let source = stripes(2, false);
-    let mut pyramid = Pyramid::new();
+    let mut pyramid = Pyramid::new().unwrap();
     let request = region(6, 6, [0; 3]);
     let summary = pyramid.summarize(&source, request, sample).unwrap();
     let mut tree = LodTree::new();
     pyramid.build(&source, request, sample, &mut tree).unwrap();
-    pyramid.begin_batch();
+    pyramid.begin_batch().unwrap();
     source.reads.set(0);
     assert_eq!(
         pyramid.summarize(&source, request, sample).unwrap(),
@@ -237,7 +259,7 @@ fn new_batch_preserves_source_cache_and_invalidates_old_tree() {
 #[test]
 fn one_slot_cache_collisions_do_not_invalidate_output() {
     let source = stripes(3, false);
-    let mut pyramid = Pyramid::with_capacity(1);
+    let mut pyramid = Pyramid::with_capacity(1).unwrap();
     let mut tree = LodTree::new();
     pyramid
         .build(&source, region(8, 8, [0; 3]), sample, &mut tree)
@@ -273,7 +295,7 @@ fn edited_point_reduces_only_new_native_ancestor_path() {
         levels,
         reads: Counter::new(0),
     };
-    let mut pyramid = Pyramid::with_capacity(4096);
+    let mut pyramid = Pyramid::with_capacity(4096).unwrap();
     let request = region(8, 8, [0; 3]);
     let previous = pyramid.summarize(&source, request, sample).unwrap();
     source.levels[0][0].values[0] = 0;
@@ -291,6 +313,7 @@ fn malformed_leaf_pointer_is_rejected_without_recursion() {
     let mut source = stripes(0, false);
     source.levels[0][0].pointers = 1;
     let error = Pyramid::new()
+        .unwrap()
         .summarize(&source, region(2, 2, [0; 3]), sample)
         .unwrap_err();
     assert!(matches!(error, Error::Depth));

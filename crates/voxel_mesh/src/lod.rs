@@ -82,6 +82,9 @@ pub enum Error<E> {
     /// 摘要或生成节点数量超过 u32。
     #[error("LOD 摘要或节点编号耗尽")]
     Capacity,
+    /// 金字塔所有者身份或批次版本已耗尽，不能再发行不会混淆的新身份。
+    #[error("LOD 所有者身份或批次版本耗尽")]
+    IdentityExhausted,
     /// 生成树不属于当前摘要版本。
     #[error(transparent)]
     Access(#[from] AccessError),
@@ -285,48 +288,56 @@ pub struct Pyramid {
     build_revision: u64,
 }
 
-impl Default for Pyramid {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Pyramid {
-    /// 创建独占缓存；身份耗尽时 panic，初始只保存一项空摘要。
-    pub fn new() -> Self {
+    /// 创建独占缓存，初始只保存一项空摘要；身份耗尽或分配失败返回来源。
+    pub fn new() -> Result<Self, Error<Infallible>> {
         Self::with_capacity(4096)
     }
 
     /// 预分配指定数量的 direct-mapped 原生摘要槽；容量只影响命中率。
     ///
     /// 冲突仅替换一个缓存槽，不重建表、不修改生成树的 palette。零容量禁用缓存。
-    pub fn with_capacity(max_nodes: usize) -> Self {
+    /// 身份耗尽、容量溢出或预分配失败返回错误。
+    pub fn with_capacity(max_nodes: usize) -> Result<Self, Error<Infallible>> {
         let owner = NEXT_OWNER
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
-            .expect("LOD 所有者身份耗尽");
-        Self {
+            .map_err(|_| Error::IdentityExhausted)?;
+        let mut cache = Vec::new();
+        cache.try_reserve_exact(max_nodes)?;
+        cache.resize_with(max_nodes, || None);
+        let mut palette = Vec::new();
+        palette.try_reserve_exact(max_nodes.max(256))?;
+        palette.resize(max_nodes.max(256), None);
+        let mut summaries = Vec::new();
+        summaries.try_reserve_exact(1)?;
+        summaries.push(Summary::EMPTY);
+        let mut build_slots = Vec::new();
+        build_slots.try_reserve_exact(max_nodes.max(256))?;
+        build_slots.resize(max_nodes.max(256), None);
+        Ok(Self {
             owner,
             revision: 0,
-            cache: std::iter::repeat_with(|| None).take(max_nodes).collect(),
+            cache,
             cache_len: 0,
-            palette: vec![None; max_nodes.max(256)],
-            summaries: vec![Summary::EMPTY],
+            palette,
+            summaries,
             frames: Vec::new(),
             build_frames: Vec::new(),
-            build_slots: vec![None; max_nodes.max(256)],
+            build_slots,
             build_revision: 0,
-        }
+        })
     }
 
-    /// 清除逻辑缓存并保留容量，使旧生成树失效；版本耗尽时 panic。
-    pub fn clear(&mut self) {
+    /// 清除逻辑缓存并保留容量，使旧生成树失效；版本耗尽返回错误并保留原状态。
+    pub fn clear(&mut self) -> Result<(), Error<Infallible>> {
+        self.begin_batch()?;
         for slot in &mut self.cache {
             *slot = None;
         }
         self.cache_len = 0;
-        self.begin_batch();
+        Ok(())
     }
 
     /// 当前缓存的不同原生源节点数量，不包含均匀区域。
@@ -338,12 +349,17 @@ impl Pyramid {
     ///
     /// 旧树失效。palette 槽用版本懒失效，不扫描清表；POD 摘要只重置 Vec 长度。
     /// 必须在一组中心与邻居构建之前调用，不能在这些树之间调用。
-    pub fn begin_batch(&mut self) {
-        self.revision = self.revision.checked_add(1).expect("LOD 缓存版本耗尽");
+    /// 版本耗尽时返回错误，不改变旧树和缓存。
+    pub fn begin_batch(&mut self) -> Result<(), Error<Infallible>> {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(Error::IdentityExhausted)?;
         self.frames.clear();
         self.build_frames.clear();
         self.summaries.clear();
         self.summaries.push(Summary::EMPTY);
+        Ok(())
     }
 
     /// 缓存、临时 palette 和 scratch 的保留字节，不含 allocator 元数据。
