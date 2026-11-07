@@ -41,6 +41,10 @@ pub use timestamp::TimestampQueries;
 mod pipeline_statistics;
 pub use pipeline_statistics::{ExecutableStatistic, ExecutableStatistics, StatisticValue};
 
+#[path = "checkpoints.rs"]
+mod checkpoints;
+pub use checkpoints::{Checkpoint, CheckpointProgress, CheckpointReport};
+
 /// 宿主创建设备时实际启用的能力。
 #[derive(Clone, Copy, Default)]
 pub struct Capabilities {
@@ -120,6 +124,7 @@ pub struct Context {
     pub(crate) life: Life<Native, BuildBuffers>,
     as_pool: BufferPool,
     pipeline_cache: Option<crate::pipeline_cache::Native>,
+    checkpoints: Option<checkpoints::Checkpoints>,
 }
 
 pub(crate) struct Native;
@@ -234,6 +239,7 @@ impl Context {
             life: Life::new(owner),
             as_pool: BufferPool::default(),
             pipeline_cache: None,
+            checkpoints: None,
         })
     }
 
@@ -3089,6 +3095,12 @@ impl Record {
                     Op::Trace(p, size) => {
                         let version = p.data(context)?;
                         let program = context.ray_program(version.program())?;
+                        context.checkpoint(
+                            command,
+                            "trace/begin",
+                            program.raw().pipeline.as_raw(),
+                            *size,
+                        )?;
                         device.raw.cmd_bind_pipeline(
                             command,
                             vk::PipelineBindPoint::RAY_TRACING_KHR,
@@ -3112,10 +3124,22 @@ impl Record {
                             size[1],
                             size[2],
                         );
+                        context.checkpoint(
+                            command,
+                            "trace/end",
+                            program.raw().pipeline.as_raw(),
+                            *size,
+                        )?;
                     }
                     Op::Dispatch(p, groups) => {
                         let version = p.data(context)?;
                         let program = context.compute_program(version.program())?;
+                        context.checkpoint(
+                            command,
+                            "dispatch/begin",
+                            program.raw().pipeline.as_raw(),
+                            *groups,
+                        )?;
                         device.raw.cmd_bind_pipeline(
                             command,
                             vk::PipelineBindPoint::COMPUTE,
@@ -3132,6 +3156,12 @@ impl Record {
                         device
                             .raw
                             .cmd_dispatch(command, groups[0], groups[1], groups[2]);
+                        context.checkpoint(
+                            command,
+                            "dispatch/end",
+                            program.raw().pipeline.as_raw(),
+                            *groups,
+                        )?;
                     }
                     Op::Keepalive(_) | Op::Access(_) => {}
                     Op::Barrier => memory_barrier(device, command),
