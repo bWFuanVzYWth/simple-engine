@@ -116,6 +116,22 @@ impl Range {
         })
     }
 
+    pub(crate) const fn reflection_measure(self) -> Result<u32, FlowError> {
+        if !self.unit() {
+            return Err(FlowError::Material(Error::Roughness));
+        }
+        let alpha = product(self, self);
+        Ok((if alpha.min < 1.0e-4 {
+            FlowKey::DELTA_REFLECTION
+        } else {
+            0
+        }) | (if alpha.max >= 1.0e-4 {
+            FlowKey::CONTINUOUS_REFLECTION
+        } else {
+            0
+        }))
+    }
+
     const fn unit(self) -> bool {
         self.min >= 0.0 && self.max <= 1.0
     }

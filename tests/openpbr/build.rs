@@ -65,7 +65,7 @@ fn main() -> Result<(), shader_build::Error> {
         target: Target::Spirv("spirv_1_4"),
         args,
     }));
-    const FLOWS: [(&str, &[&str]); 29] = [
+    const FLOWS: [(&str, &[&str]); 30] = [
         (
             "flow-opaque.spv",
             &["-fp-mode", "precise", "-DOPENPBR_FLOW=195"],
@@ -181,6 +181,16 @@ fn main() -> Result<(), shader_build::Error> {
         (
             "flow-metal-lambert.spv",
             &["-fp-mode", "precise", "-DOPENPBR_FLOW=2181"],
+        ),
+        (
+            "flow-binary-metal-sss.spv",
+            &[
+                "-fp-mode",
+                "precise",
+                "-DOPENPBR_FLOW=2191",
+                "-DOPENPBR_VARIANT=6144",
+                "-DOPENPBR_RECIPE_VARIANT=1",
+            ],
         ),
     ];
     recipes.extend(FLOWS.into_iter().map(|(output, args)| Recipe {

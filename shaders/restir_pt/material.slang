@@ -10,7 +10,7 @@ namespace restir_pt
 /// 仅BSDF使用着色法线；介质跨界和路径偏移始终使用几何法线。
 public float3 material_normal(Surface surface, pt::SurfaceMaterial material)
 {
-    return any(material.normal != 0) ? material.normal : surface.point.normal;
+    return select(any(material.normal != 0), material.normal, surface.point.normal);
 }
 
 /// 采样结果不携带未被point算法消费的闭包；保留精确proposal、介质和delta过滤语义。

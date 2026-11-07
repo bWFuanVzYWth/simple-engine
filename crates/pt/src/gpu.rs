@@ -4,6 +4,7 @@ use vulkan::{
     interop::RayShader,
     native::{
         Bindings, Commands, ComputePipeline, Context, RayTracingPipeline, Recorded, Resource,
+        TimestampQueries,
     },
 };
 
@@ -160,22 +161,68 @@ impl Renderer {
     /// 逐样本录制可选K1→K2→K3和实际阶段间可见性，不提交、不等待。
     /// 交接及累积缓冲由绑定所有者持有，不按 samples 倍增。
     pub fn record(&self, context: &mut Context, samples: u32) -> Result<Recorded, Error> {
+        self.record_inner(context, samples, None)
+    }
+
+    /// 与 [`Self::record`] 共用实际阶段；每样本四槽分别包围主体 TraceRays 和 post。
+    /// 可选前缀不计时；起点位于额外排序屏障之后，终点位于原有阶段结束屏障之后。
+    /// 这些 ALL_COMMANDS 时间戳是设备调度跨度，不能解释为隔离执行或窗口整帧。
+    /// pool 须属于 context，容量恰好为 `samples * 4`，并在复用前收取完成通知；
+    /// 本方法 reset 整个 pool，调用方负责在 collect 时保活它。
+    ///
+    /// # Errors
+    /// 样本、pool 容量或 native 命令无效时保留错误；不提交、不等待。
+    pub fn record_with_timestamps(
+        &self,
+        context: &mut Context,
+        samples: u32,
+        queries: TimestampQueries,
+    ) -> Result<Recorded, Error> {
+        if samples
+            .checked_mul(4)
+            .is_none_or(|count| queries.len() != count)
+        {
+            return Err(vulkan::Error::InvalidArgument("PT timestamp 容量不足").into());
+        }
+        self.record_inner(context, samples, Some(queries))
+    }
+
+    fn record_inner(
+        &self,
+        context: &mut Context,
+        samples: u32,
+        queries: Option<TimestampQueries>,
+    ) -> Result<Recorded, Error> {
         if samples == 0 {
             return Err(crate::Error::Samples.into());
         }
         let mut commands = Commands::new(context)?;
-        for _ in 0..samples {
+        if let Some(queries) = queries {
+            commands.reset_timestamps(queries)?;
+        }
+        for sample in 0..samples {
             if let Some(prefix) = self.prefix {
                 commands.trace(prefix, self.extent)?;
                 commands.barrier();
             }
+            if let Some(queries) = queries {
+                commands.barrier();
+                commands.write_timestamp(queries, sample * 4)?;
+            }
             commands.trace(self.transport, self.extent)?;
             commands.barrier();
+            if let Some(queries) = queries {
+                commands.write_timestamp(queries, sample * 4 + 1)?;
+                commands.write_timestamp(queries, sample * 4 + 2)?;
+            }
             commands.dispatch(
                 self.post,
                 [self.extent[0].div_ceil(8), self.extent[1].div_ceil(8), 1],
             )?;
             commands.barrier();
+            if let Some(queries) = queries {
+                commands.write_timestamp(queries, sample * 4 + 3)?;
+            }
         }
         Ok(commands.finish(context)?)
     }

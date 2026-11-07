@@ -106,6 +106,10 @@ public struct InitialRequest
     public uint bounceSeed;
     public uint flags;
     public float3 previousPosition;
+    public float3 throughput;
+    public float weight;
+    /// 负值表示上一个散射没有竞争的命中灯 MIS。
+    public float previousMisPdf;
 };
 
 /// 80B数值NEE候选；pdf<=0表示无可见贡献。只保留RIS和重连实际消费的字段。
@@ -123,14 +127,14 @@ public struct InitialDirect
     public uint lightType;
 };
 
-/// 完整初采材质阶段结果；已完成灯采样、BSDF、介质和可见性，RIS仍由调度器拥有。
+/// 材质阶段更新路径内 RIS 权重并返回胜出的候选；调度器据此写入重连状态。
 public struct InitialVertex
 {
     public BsdfSample sample;
     public float3 emission;
     public float emissionPdf;
-    public InitialDirect first;
-    public InitialDirect second;
+    public InitialDirect direct;
+    public float weight;
 };
 
 /// 默认 point-reservoir 所需的精确求交与材料操作。

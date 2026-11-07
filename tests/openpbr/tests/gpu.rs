@@ -308,7 +308,7 @@ fn specialized_cases(capability: usize) -> Result<Vec<Case>> {
     Ok(cases)
 }
 
-const FLOWS: [&[u8]; 29] = [
+const FLOWS: [&[u8]; 30] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-opaque.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-subsurface.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-conductor.spv")),
@@ -341,9 +341,12 @@ const FLOWS: [&[u8]; 29] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-null-continuous.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-null-smooth.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-lambert.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-binary-metal-sss.spv")),
 ];
 
 fn flow_cases(profile: usize) -> Result<Vec<Case>> {
+    let binary = profile == 29;
+    let profile = if binary { 16 } else { profile };
     if profile < 8 {
         return specialized_cases(profile);
     }
@@ -427,6 +430,9 @@ fn flow_cases(profile: usize) -> Result<Vec<Case>> {
     let mut cases = specialized_cases(capability)?;
     cases.retain(|case| {
         let words = case.material.to_words();
+        if binary && !matches!(f32::from_bits(words[6]), 0.0 | 1.0) {
+            return false;
+        }
         let roughness = f32::from_bits(words[3]);
         let rough = roughness * roughness >= 1e-4;
         if matches!(profile, 13 | 15) {
@@ -457,7 +463,12 @@ fn flow_cases(profile: usize) -> Result<Vec<Case>> {
     if matches!(profile, 14..=17) {
         let mut mixed = Vec::new();
         for case in cases {
-            for metalness in [0.0, 128.0 / 255.0, 1.0] {
+            let weights: &[f32] = if binary {
+                &[0., 1.]
+            } else {
+                &[0., 0.19, 0.73, 1.]
+            };
+            for &metalness in weights {
                 let mut case = case.clone();
                 let words = case.material.to_words();
                 case.material = Material::opaque(

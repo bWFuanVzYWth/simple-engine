@@ -126,14 +126,16 @@ internal void require_flow<let Flow : uint>()
         "thin reflection/transmission domains disagree");
 }
 
-internal Material flow_material<let Flow : uint>(Material material)
-{
-    if (!flow_has<Flow, FLOW_SUBSURFACE>())
-        material.surface.z = 0.0;
-    else if (!flow_has<Flow, FLOW_DIFFUSE>())
-        material.surface.z = 1.0;
-    return material;
-}
+#if defined(OPENPBR_RECIPE_VARIANT) && (OPENPBR_VARIANT & 2048)
+static const bool binary_metal = true;
+#else
+static const bool binary_metal = false;
+#endif
+#if defined(OPENPBR_RECIPE_VARIANT) && (OPENPBR_VARIANT & 4096)
+static const bool binary_sss = true;
+#else
+static const bool binary_sss = false;
+#endif
 
 internal PrimeFullCompactOpaqueState flow_opaque<let Flow : uint, Provider>(Provider energy,
                                                                             Material material,
@@ -141,61 +143,95 @@ internal PrimeFullCompactOpaqueState flow_opaque<let Flow : uint, Provider>(Prov
                                                                             float4 incident)
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    material = flow_material<Flow>(material);
     float3 color = material.base_roughness.xyz;
     PrimeFullCompactOpaqueState state = {};
-    if (FLOW_HAS(Flow, FLOW_DIELECTRIC_REFLECTION) || !FLOW_LAYER(Flow))
-        state = primeFullPtOpaqueStateImpl<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION),
-                                           !FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION)>(
-            energy, FLOW_BASE(Flow) || !FLOW_LAYER(Flow) ? color : float3(0.0),
-            material.base_roughness.w, material.surface.x / incident.x, material.surface.z,
-            !FLOW_LAYER(Flow), saturate(color), float3(1.0), wi);
+    state.microfacet.alpha = FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION)
+                                 ? float2(material.base_roughness.w * material.base_roughness.w)
+                                 : float2(0);
+    if (FLOW_HAS(Flow, FLOW_CONDUCTOR_REFLECTION))
+    {
+        state.metalness = FLOW_HAS(Flow, FLOW_METAL_MIX) ? material.surface.y : 1.0;
+        if (!binary_metal || state.metalness > 0.0)
+        {
+            state.conductorFresnel.f0 = saturate(color);
+            state.conductorFresnel.f82 = 1;
+            state.conductorFresnel.f90 = 1;
+            state.conductorFresnel.weight = 1;
+            state.conductorFresnel.energyF0 = saturate(color);
+            state.conductorEss =
+                !FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION) ||
+                        (FLOW_HAS(Flow, FLOW_DELTA_REFLECTION) &&
+                         primeFullOpenPbrMicrofacetEffectivelySmooth(state.microfacet))
+                    ? 1.0
+                    : primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(state.microfacet, wi.z,
+                                                                            float3(1), float3(1))
+                          .x;
+        }
+        if (!FLOW_LAYER(Flow) || (binary_metal && state.metalness == 1.0))
+        {
+            state.kind = PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR;
+            return state;
+        }
+    }
+    float3 baseEnergy = 0;
+    if (FLOW_BASE(Flow))
+    {
+        state.baseColor = color;
+        baseEnergy = wi.z >= 0 ? color : float3(0);
+        if (FLOW_HAS(Flow, FLOW_SUBSURFACE))
+        {
+            float w = FLOW_HAS(Flow, FLOW_DIFFUSE) ? material.surface.z : 1.0;
+            state.subsurfaceWeight = w;
+            state.subsurfaceAnisotropy = PRIME_FULL_PT_SUBSURFACE_ANISOTROPY;
+            if (w > 0.0)
+            {
+                state.subsurfaceColor = primeFullPtSubsurfaceColor(color);
+                float3 sss = primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL);
+                if (binary_sss || !FLOW_HAS(Flow, FLOW_DIFFUSE))
+                {
+                    state.kind = PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE;
+                    baseEnergy = sss;
+                }
+                else
+                {
+                    state.kind = w == 1.0 ? PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                                          : PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE;
+                    baseEnergy = color * (1.0 - w) + sss * w;
+                    state.diffuseMix = primeFullCompactMakeMixState(w, color, sss);
+                }
+            }
+            else
+                state.diffuseMix.firstSampleWeight = 1;
+        }
+    }
+    if (FLOW_HAS(Flow, FLOW_DIELECTRIC_REFLECTION))
+    {
+        state.dielectricFresnel.ior = material.surface.x / incident.x;
+        state.dielectricFresnel.energyIor =
+            primeFullOpenPbrIorAdjustment(state.dielectricFresnel.ior, 1.0);
+        state.dielectricFresnel.color = 1;
+        state.dielectricMultipleScattering =
+            primeFullOpenPbrMicrofacetDielectricMsCompensation<!FLOW_HAS(
+                Flow, FLOW_CONTINUOUS_REFLECTION)>(energy, state.microfacet, wi.z,
+                                                   state.dielectricFresnel.energyIor);
+        if (FLOW_BASE(Flow))
+            state.layer = primeFullCompactMakeLayerState(
+                baseEnergy, float3(1.0 - state.dielectricMultipleScattering.z),
+                primeFullCompactDielectricEnergyImpl<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
+                    wi, state, PRIME_FULL_OPENPBR_FLAG_ALL));
+        else
+            state.layer.specularSampleWeight =
+                state.dielectricMultipleScattering.z > 0.0 ? 1.0 : 0.0;
+    }
     else
     {
-        state.microfacet.alpha = FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION)
-                                     ? float2(material.base_roughness.w * material.base_roughness.w)
-                                     : float2(0.0);
-        state.baseColor = color;
-        state.subsurfaceWeight = material.surface.z;
-        state.subsurfaceColor =
-            FLOW_HAS(Flow, FLOW_SUBSURFACE) ? primeFullPtSubsurfaceColor(color) : color;
-        state.subsurfaceAnisotropy = PRIME_FULL_PT_SUBSURFACE_ANISOTROPY;
-        state.diffuseMix =
-            primeFullCompactMakeMixState(material.surface.z, color, state.subsurfaceColor);
-        state.dielectricFresnel.ior = 1.0;
-        state.dielectricFresnel.energyIor = 1.0;
-        state.dielectricFresnel.color = float3(1.0);
-        state.dielectricMultipleScattering = float3(1.0, 1.0, 0.0);
-        state.layer.transmittanceIn = float3(1.0);
-        state.layer.specularSampleWeight = 0.0;
-        state.layer.baseSampleWeight = any(color > 0.0) ? 1.0 : 0.0;
+        state.dielectricFresnel.ior = 1;
+        state.dielectricFresnel.energyIor = 1;
+        state.dielectricFresnel.color = 1;
+        state.dielectricMultipleScattering = float3(1, 1, 0);
+        state.layer.transmittanceIn = 1;
+        state.layer.baseSampleWeight = any(color > 0) ? 1 : 0;
     }
-    if (!FLOW_BASE(Flow) && FLOW_HAS(Flow, FLOW_DIELECTRIC_REFLECTION))
-    {
-        state.layer.baseSampleWeight = 0.0;
-        state.layer.specularSampleWeight = state.dielectricMultipleScattering.z > 0.0 ? 1.0 : 0.0;
-    }
-    if (FLOW_LAYER(Flow) && flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>())
-    {
-        state.metalness = material.surface.y;
-        state.conductorFresnel.f0 = saturate(material.base_roughness.xyz);
-        state.conductorFresnel.f82 = float3(1.0);
-        state.conductorFresnel.f90 = float3(1.0);
-        state.conductorFresnel.weight = 1.0;
-        state.conductorFresnel.energyF0 = saturate(material.base_roughness.xyz);
-        if (!flow_has<Flow, FLOW_CONTINUOUS_REFLECTION>())
-            state.conductorEss = 1.0;
-        else
-            state.conductorEss =
-                flow_has<Flow, FLOW_DELTA_REFLECTION>() &&
-                        primeFullOpenPbrMicrofacetEffectivelySmooth(state.microfacet)
-                    ? 1.0
-                    : primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
-                          state.microfacet, wi.z, float3(1.0), float3(1.0))
-                          .x;
-    }
-    if (FLOW_HAS(Flow, FLOW_METAL_MIX))
-        state.metalness = material.surface.y;
     return state;
 }
 
@@ -224,9 +260,23 @@ flow_layer_evaluate<let Flow : uint>(float3 wi, float3 wo, PrimeFullCompactOpaqu
     float base_pdf;
     if (flow_has<Flow, FLOW_SUBSURFACE>() && flow_has<Flow, FLOW_DIFFUSE>())
     {
+#if defined(OPENPBR_RECIPE_VARIANT) && (OPENPBR_VARIANT & 4096)
+        if (state.subsurfaceWeight == 1.0)
+        {
+            base = primeFullCompactSubsurfaceEval<true>(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+            base_pdf =
+                primeFullCompactSubsurfacePdf<true>(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+        }
+        else
+        {
+            base = primeFullCompactLambertEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+            base_pdf = primeFullCompactLambertPdf(wi, wo);
+        }
+#else
         base = primeFullCompactMixedDiffuseEval<true>(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
         base_pdf =
             primeFullCompactMixedDiffusePdf<true>(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+#endif
     }
     else if (flow_has<Flow, FLOW_SUBSURFACE>())
     {
@@ -280,17 +330,23 @@ flow_opaque_evaluate<let Flow : uint>(float3 wi, float3 wo, PrimeFullCompactOpaq
         reflection = primeFullOpenPbrReflectiveEvalBaseImpl<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
             wi, wo, state.microfacet, PRIME_FULL_OPENPBR_FLAG_ALL,
             PRIME_FULL_OPENPBR_FLAG_REFLECTION);
-    PrimeFullCompactOpaqueEvaluation first = flow_layer_evaluate<Flow>(wi, wo, state, reflection);
-    if (!flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>())
-        return first;
     PrimeFullCompactOpaqueEvaluation second = {};
-    if (flow_has<Flow, FLOW_CONTINUOUS_REFLECTION>())
+    if (FLOW_HAS(Flow, FLOW_CONDUCTOR_REFLECTION) && (!binary_metal || state.metalness > 0))
     {
-        second.throughput =
-            primeFullCompactConductorEvalFromBase<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
-                reflection, state);
-        second.pdf = reflection.pdf;
+        if (FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION))
+        {
+            second.throughput =
+                primeFullCompactConductorEvalFromBase<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
+                    reflection, state);
+            second.pdf = reflection.pdf;
+        }
+        if (binary_metal && state.metalness == 1)
+            return second;
     }
+    PrimeFullCompactOpaqueEvaluation first = flow_layer_evaluate<Flow>(wi, wo, state, reflection);
+    if (!FLOW_HAS(Flow, FLOW_CONDUCTOR_REFLECTION) || binary_metal)
+        return first;
+
     first.throughput =
         primeFullCompactMixEval(first.throughput, second.throughput, state.metalness);
     first.pdf = lerp(first.pdf, second.pdf, state.metalness);
@@ -351,7 +407,7 @@ flow_layer_sample<let Flow : uint>(float3 wi, float3 u, PrimeFullCompactOpaqueSt
     {
         if (state.subsurfaceWeight == 0.0)
             result = primeFullCompactLambertSample(wi, random, state, PRIME_FULL_OPENPBR_FLAG_ALL);
-        else if (state.subsurfaceWeight == 1.0)
+        else if (binary_sss || state.subsurfaceWeight == 1.0)
             result = primeFullCompactSubsurfaceSample<true>(wi, random, state,
                                                             PRIME_FULL_OPENPBR_FLAG_ALL);
         else
@@ -409,7 +465,16 @@ flow_opaque_sample<let Flow : uint>(float3 wi, float3 u, PrimeFullCompactOpaqueS
         return result;
     }
     PrimeFullOpenPbrSample result;
-    if (flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>())
+    if (binary_metal && FLOW_HAS(Flow, FLOW_CONDUCTOR_REFLECTION) && state.metalness == 1.0)
+    {
+        if (!FLOW_HAS(Flow, FLOW_CONTINUOUS_REFLECTION))
+            return primeFullCompactConductorDiscreteSample(
+                wi, primeFullCompactOpaqueDiscreteStateFromFull(state),
+                PRIME_FULL_OPENPBR_FLAG_ALL);
+        return primeFullCompactConductorSampleImpl<!FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
+            wi, u, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+    }
+    if (!binary_metal && flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>())
     {
         float m = state.metalness;
         if (u.z < m)
@@ -432,6 +497,8 @@ flow_opaque_sample<let Flow : uint>(float3 wi, float3 u, PrimeFullCompactOpaqueS
         if (flow_has<Flow, FLOW_DELTA_REFLECTION>() &&
             primeFullOpenPbrIsDelta(result.throughput.flags))
         {
+            if (m == 0.0)
+                return result;
             result.throughput.value =
                 lerp(primeFullOpenPbrSpecularFresnelUnpolarized(state.dielectricFresnel, wi.z),
                      primeFullOpenPbrConductorFresnelUnpolarized(state.conductorFresnel, wi.z), m);
@@ -449,7 +516,7 @@ flow_opaque_sample<let Flow : uint>(float3 wi, float3 u, PrimeFullCompactOpaqueS
             return result;
     }
     PrimeFullCompactOpaqueEvaluation evaluated = flow_opaque_evaluate<Flow>(wi, result.wo, state);
-    if (flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>() && state.metalness > 0.0 &&
+    if (!binary_metal && flow_has<Flow, FLOW_CONDUCTOR_REFLECTION>() && state.metalness > 0.0 &&
         state.metalness < 1.0)
         result.throughput = evaluated.throughput;
     else
@@ -700,34 +767,26 @@ public interface IFlowEvaluationConsumer
     void consume(uint direction, Evaluation evaluated);
 };
 
-/// 单一顶点共享 ONB 和状态；先依次消费评估，最后生成散射。
-/// 所有可见性查询须由调用方先完成；昂贵外部光照求值应留在本函数返回之后。
-public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Directions : uint = 3>(
+/// 正向组合：共享一次局部坐标和能量准备，仅求所请求的方向和散射。
+public Batch shade_flow<let Flow : uint, Provider, let Directions : uint = 3>(
     Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
-    inout Consumer consumer)
+    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted)
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
-    where Consumer : IFlowEvaluationConsumer
 {
     require_flow<Flow>();
     static_assert((Directions & ~3u) == 0u, "unknown evaluation direction mask");
+    Batch batch = {};
     Sample result = {};
     result.relative_eta = 1.0;
     result.medium = incident;
     if (!flow_continuous<Flow>())
     {
-        if ((Directions & 1u) != 0u && (evaluation_mask & 1u) != 0u)
-            consumer.consume(0u, evaluate_flow<Flow>(energy, material, normal, view, first,
-                                                     incident, transmitted));
-        if ((Directions & 2u) != 0u && (evaluation_mask & 2u) != 0u)
-            consumer.consume(1u, evaluate_flow<Flow>(energy, material, normal, view, second,
-                                                     incident, transmitted));
         if (continuation)
             result = sample_flow<Flow>(energy, material, normal, view, u, incident, transmitted);
-        return result;
+        return { batch.first, batch.second, result };
     }
     if ((evaluation_mask & Directions) == 0u && !continuation)
-        return result;
+        return { batch.first, batch.second, result };
     if (flow_transmission<Flow>())
     {
         float ior = FLOW_HAS(Flow, FLOW_THIN_TRANSMISSION) ? transmitted.x / incident.x
@@ -738,7 +797,7 @@ public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Direct
         {
             if (continuation)
                 result = flow_matched_solid(normal, view, incident, transmitted);
-            return result;
+            return { batch.first, batch.second, result };
         }
         PrimeFullOpenPbrOnb onb =
             specialized_frame<FLOW_LEGACY(Flow)>(normal, view, incident, transmitted);
@@ -749,18 +808,18 @@ public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Direct
         if (FLOW_HAS(Flow, FLOW_SOLID_TRANSMISSION))
             state.entering = 1u;
         if ((Directions & 1u) != 0u && (evaluation_mask & 1u) != 0u)
-            consumer.consume(0u, flow_transmission_evaluate_prepared<Flow>(
-                                     wi, primeFullOpenPbrOnbToLocal(onb, first), state));
+            batch.first = flow_transmission_evaluate_prepared<Flow>(
+                wi, primeFullOpenPbrOnbToLocal(onb, first), state);
         if ((Directions & 2u) != 0u && (evaluation_mask & 2u) != 0u)
-            consumer.consume(1u, flow_transmission_evaluate_prepared<Flow>(
-                                     wi, primeFullOpenPbrOnbToLocal(onb, second), state));
+            batch.second = flow_transmission_evaluate_prepared<Flow>(
+                wi, primeFullOpenPbrOnbToLocal(onb, second), state);
         if (continuation)
             result =
                 specialized_result<FLOW_LEGACY(Flow), !FLOW_HAS(Flow, FLOW_DELTA_REFLECTION |
                                                                           FLOW_DELTA_TRANSMISSION)>(
                     flow_transmission_sample_prepared<Flow>(wi, u, state), onb, view, incident,
                     transmitted);
-        return result;
+        return { batch.first, batch.second, result };
     }
     PrimeFullOpenPbrOnb onb =
         specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, transmitted);
@@ -770,51 +829,42 @@ public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Direct
     {
         PrimeFullCompactOpaqueEvaluation evaluated =
             flow_opaque_evaluate<Flow>(wi, primeFullOpenPbrOnbToLocal(onb, first), state);
-        consumer.consume(0u, specialized_evaluation < FLOW_HAS(Flow, FLOW_SUBSURFACE) &&
-                                 !FLOW_HAS(Flow, FLOW_DIFFUSE | FLOW_DIELECTRIC_REFLECTION |
-                                                     FLOW_CONDUCTOR_REFLECTION) >
-                                     (evaluated.throughput, evaluated.pdf));
+        batch.first =
+            specialized_evaluation < FLOW_HAS(Flow, FLOW_SUBSURFACE) &&
+            !FLOW_HAS(Flow, FLOW_DIFFUSE | FLOW_DIELECTRIC_REFLECTION | FLOW_CONDUCTOR_REFLECTION) >
+                (evaluated.throughput, evaluated.pdf);
     }
     if ((Directions & 2u) != 0u && (evaluation_mask & 2u) != 0u)
     {
         PrimeFullCompactOpaqueEvaluation evaluated =
             flow_opaque_evaluate<Flow>(wi, primeFullOpenPbrOnbToLocal(onb, second), state);
-        consumer.consume(1u, specialized_evaluation < FLOW_HAS(Flow, FLOW_SUBSURFACE) &&
-                                 !FLOW_HAS(Flow, FLOW_DIFFUSE | FLOW_DIELECTRIC_REFLECTION |
-                                                     FLOW_CONDUCTOR_REFLECTION) >
-                                     (evaluated.throughput, evaluated.pdf));
+        batch.second =
+            specialized_evaluation < FLOW_HAS(Flow, FLOW_SUBSURFACE) &&
+            !FLOW_HAS(Flow, FLOW_DIFFUSE | FLOW_DIELECTRIC_REFLECTION | FLOW_CONDUCTOR_REFLECTION) >
+                (evaluated.throughput, evaluated.pdf);
     }
     if (continuation)
         result = specialized_result<FLOW_LEGACY(Flow), !FLOW_HAS(Flow, FLOW_DELTA_REFLECTION)>(
             flow_opaque_sample<Flow>(wi, u, state), onb, view, incident, transmitted);
-    return result;
+    return { batch.first, batch.second, result };
 }
 
-internal struct FlowBatchCollector : IFlowEvaluationConsumer
-{
-    Batch value;
-
-    [mutating]
-    void consume(uint direction, Evaluation evaluated)
-    {
-        if (direction == 0u)
-            value.first = evaluated;
-        else
-            value.second = evaluated;
-    }
-};
-
-/// 收集两方向评估与最后的散射；即时消费方使用 shade_flow_consume，避免保留完整 Batch。
-public Batch shade_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+/// 延迟着色适配器按方向接收上述数值结果。
+public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Directions : uint = 3>(
     Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted)
+    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
+    inout Consumer consumer)
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where Consumer : IFlowEvaluationConsumer
 {
-    FlowBatchCollector collector = {};
-    Sample scattered = shade_flow_consume<Flow, Provider, FlowBatchCollector, Directions>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        transmitted, collector);
-    collector.value.scattered = scattered;
-    return collector.value;
+    Batch b = shade_flow<Flow, Provider, Directions>(energy, material, normal, view, first, second,
+                                                     evaluation_mask, u, continuation, incident,
+                                                     transmitted);
+    if ((Directions & evaluation_mask & 1u) != 0)
+        consumer.consume(0u, b.first);
+    if ((Directions & evaluation_mask & 2u) != 0)
+        consumer.consume(1u, b.second);
+    return b.scattered;
 }
+
 }

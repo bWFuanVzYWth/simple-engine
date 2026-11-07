@@ -32,6 +32,9 @@
 
 #![forbid(unsafe_code)]
 
+mod recipe;
+pub use recipe::{Base, Recipe, Weight};
+
 mod flow;
 pub use flow::{FlowError, FlowKey, FlowPlan, InterfaceIor, MaterialRanges, Range, RangeScan};
 

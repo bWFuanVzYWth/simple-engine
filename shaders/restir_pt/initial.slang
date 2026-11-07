@@ -175,16 +175,20 @@ public InitialResult sampleInitialPathTraced<
             useRussianRoulette && (rouletteProbability == 0.0 ||
                                    initialRandomValue<8>(bounceSeed) >= rouletteProbability);
         bool continuation = depth < maxSurfaceBounces;
-        InitialRequest request = { bounceSeed,
-                                   (continuation && !rouletteKilled ? INITIAL_SAMPLE : 0u) |
-                                       (useNEE ? INITIAL_NEE : 0u) |
-                                       (continuation && useMIS ? INITIAL_MIS : 0u) |
-                                       (useRussianRoulette ? INITIAL_RR : 0u) |
-                                       (LightSamples == 2 ? INITIAL_TWO_LIGHTS : 0u) |
-                                       (depth == 0 ? INITIAL_PRIMARY : 0u),
-                                   previousSurface.point.position };
+        InitialRequest request = {
+            bounceSeed,
+            (continuation && !rouletteKilled ? INITIAL_SAMPLE : 0u) | (useNEE ? INITIAL_NEE : 0u) |
+                (continuation && useMIS ? INITIAL_MIS : 0u) |
+                (useRussianRoulette ? INITIAL_RR : 0u) |
+                (LightSamples == 2 ? INITIAL_TWO_LIGHTS : 0u) | (depth == 0 ? INITIAL_PRIMARY : 0u),
+            previousSurface.point.position,
+            throughput,
+            ris.weight,
+            useNEE && useMIS && !previousScatter.delta ? previousFullPdf : -1.0
+        };
         InitialVertex shading = tracer.shade(scene, state, surface, request);
         surface.emission = shading.emission;
+        ris.weight = shading.weight;
 
         LastVertexState last = initialLastVertex(previousScatter, previousSurface, previousRough,
                                                  segment, primaryFootprint, distanceThreshold);
@@ -201,11 +205,10 @@ public InitialResult sampleInitialPathTraced<
             float3 cachedEmission = surface.emission;
             if (depth - 1 == rc.pathFlags.rcVertexLength())
                 cachedEmission *= previousSegmentTransmittance;
-            bool selected = ris.addBSDFHitCandidate(
-                initialRandomValue<1>(bounceSeed), rc, depth - 1,
-                throughput * mis * surface.emission, -surface.wo, cachedEmission,
-                mis * surface.emission, sourcePdf, lightPdf, LIGHT_EMISSIVE);
-            if (selected && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
+            ris.storeBSDFHitCandidate(rc, depth - 1, throughput * mis * surface.emission,
+                                      cachedEmission, mis * surface.emission, sourcePdf, lightPdf,
+                                      LIGHT_EMISSIVE);
+            if (rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
                 (settings.shiftMapping == 1 || depth == 1))
             {
                 bool canConnect =
@@ -223,24 +226,19 @@ public InitialResult sampleInitialPathTraced<
                 }
             }
         }
-        [unroll]
-        for (uint lightIndex = 0; lightIndex < LightSamples; ++lightIndex)
+        if (shading.direct.pdf > 0.0)
         {
-            InitialDirect light = lightIndex == 0 ? shading.first : shading.second;
-            if (!(light.pdf > 0.0))
-                continue;
+            InitialDirect light = shading.direct;
             uint lightType = light.lightType & ~INITIAL_POINT_LIGHT;
             bool canConnect = initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(),
                                                 segment, light.bsdfPdf, previousRough,
                                                 primaryFootprint, distanceThreshold);
             float3 cachedRadiance = canConnect ? light.attenuatedRadiance : light.radiance;
-            bool selected = ris.addNEECandidate(initialLightRISRandom(bounceSeed, lightIndex), rc,
-                                                canConnect, depth, throughput * light.reflected,
-                                                light.direction, cachedRadiance, light.reflected,
-                                                sourcePdf, light.pdf, lightType);
-            if (selected)
-                ris.pathFlags.insertTerminalNEE(!continuation);
-            if (selected && canConnect)
+            ris.storeNEECandidate(rc, canConnect, depth, throughput * light.reflected,
+                                  light.direction, cachedRadiance, light.reflected, sourcePdf,
+                                  light.pdf, lightType);
+            ris.pathFlags.insertTerminalNEE(!continuation);
+            if (canConnect)
             {
                 ris.reconnectionHit = surface.hit;
                 ris.reconnectionJacobian = segment.geometryFactor;
@@ -248,7 +246,7 @@ public InitialResult sampleInitialPathTraced<
                 ris.rcNextVertexBounceSeed = initialRandomState<2>(bounceSeed);
                 ris.pathFlags.tryInsertBounceTypesBeforeRcVertex(last.data & 0x3fu, true);
             }
-            if (selected && !canConnect && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH)
+            if (!canConnect && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH)
             {
                 ris.reconnectionHit = light.hit;
                 ris.reconnectionJacobian = 1.0;

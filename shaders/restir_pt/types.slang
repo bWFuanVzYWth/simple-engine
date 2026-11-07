@@ -346,68 +346,55 @@ public struct PathRISState
         return X;
     }
 
+    /// 叶子已按发光、局部灯、环境顺序抽取胜者。此处仅写胜者的重连属性。
     [mutating]
-    public bool addNEECandidate(float u, PathReconnectionInfo pathRcInfo, bool isRcVertex,
-                                uint pathLength, float3 pathContribution, float3 wi, float3 Le,
-                                float3 Lr, float sourcePdf, float lightPdf, uint lightType)
+    public void storeNEECandidate(PathReconnectionInfo rc, bool isRcVertex, uint depth,
+                                  float3 contribution, float3 wi, float3 Le, float3 Lr,
+                                  float sourcePdf, float pdf, uint lightType)
     {
-        bool selected = addPSSSample(u, pathContribution);
-        uint rcVertexLength = pathRcInfo.pathFlags.rcVertexLength();
-        rcVertexLength = isRcVertex ? pathLength : rcVertexLength;
-        this.pathFlags.flags = selected ? pathRcInfo.pathFlags.flags : this.pathFlags.flags;
-        this.pathFlags.insertPathLength(selected ? pathLength : this.pathFlags.pathLength());
-        this.pathFlags.insertRcVertexLength(selected ? rcVertexLength
-                                                     : this.pathFlags.rcVertexLength());
-        this.pathFlags.insertLastVertexNEE(selected || this.pathFlags.lastVertexNEE());
-        this.reconnectionIncidentRadiance = selected
-                                                ? (isRcVertex ? Le : pathRcInfo.rcThroughput * Lr)
-                                                : this.reconnectionIncidentRadiance;
-        this.reconnectionWi =
-            selected ? (isRcVertex ? wi : pathRcInfo.reconnectionWi) : this.reconnectionWi;
-        this.reconnectionHit.data =
-            selected ? pathRcInfo.reconnectionHit.data : this.reconnectionHit.data;
-        this.reconnectionJacobian =
-            selected ? pathRcInfo.reconnectionJacobian : this.reconnectionJacobian;
-        this.rcNextVertexBounceSeed =
-            selected ? pathRcInfo.rcNextVertexBounceSeed : this.rcNextVertexBounceSeed;
-
-        this.integrand = selected ? pathContribution * sourcePdf : this.integrand;
-        this.lightPdf = selected ? lightPdf : this.lightPdf;
-        this.pathFlags.insertLightType(selected ? lightType : this.pathFlags.lightType());
-
-        return selected;
+        pathFlags = rc.pathFlags;
+        pathFlags.insertPathLength(depth);
+        if (isRcVertex)
+            pathFlags.insertRcVertexLength(depth);
+        pathFlags.insertLastVertexNEE(true);
+        pathFlags.insertLightType(lightType);
+        reconnectionIncidentRadiance = isRcVertex ? Le : rc.rcThroughput * Lr;
+        reconnectionWi = isRcVertex ? wi : rc.reconnectionWi;
+        reconnectionHit = rc.reconnectionHit;
+        reconnectionJacobian = rc.reconnectionJacobian;
+        rcNextVertexBounceSeed = rc.rcNextVertexBounceSeed;
+        integrand = contribution * sourcePdf;
+        lightPdf = pdf;
     }
 
     [mutating]
-    public bool addBSDFHitCandidate(float u, PathReconnectionInfo pathRcInfo, uint pathLength,
-                                    float3 pathContribution, float3 wi, float3 Le, float3 Lr,
-                                    float sourcePdf, float lightPdf, uint lightType)
+    public void storeBSDFHitCandidate(PathReconnectionInfo rc, uint depth, float3 contribution,
+                                      float3 Le, float3 Lr, float sourcePdf, float pdf,
+                                      uint lightType)
     {
+        pathFlags = rc.pathFlags;
+        pathFlags.insertPathLength(depth);
+        pathFlags.insertLastVertexNEE(false);
+        pathFlags.insertLightType(lightType);
+        reconnectionIncidentRadiance =
+            depth == rc.pathFlags.rcVertexLength() ? Le : rc.rcThroughput * Lr;
+        reconnectionWi = rc.reconnectionWi;
+        reconnectionHit = rc.reconnectionHit;
+        reconnectionJacobian = rc.reconnectionJacobian;
+        rcNextVertexBounceSeed = rc.rcNextVertexBounceSeed;
+        integrand = contribution * sourcePdf;
+        lightPdf = pdf;
+    }
 
-        bool selected = addPSSSample(u, pathContribution);
-        uint rcVertexLength = pathRcInfo.pathFlags.rcVertexLength();
-        bool isRcVertex = pathLength == rcVertexLength;
-
-        this.pathFlags.flags = selected ? pathRcInfo.pathFlags.flags : this.pathFlags.flags;
-        this.pathFlags.insertPathLength(selected ? pathLength : this.pathFlags.pathLength());
-        this.pathFlags.insertLastVertexNEE(!selected && this.pathFlags.lastVertexNEE());
-        this.reconnectionIncidentRadiance = selected
-                                                ? (isRcVertex ? Le : (pathRcInfo.rcThroughput * Lr))
-                                                : this.reconnectionIncidentRadiance;
-
-        this.reconnectionWi = selected ? pathRcInfo.reconnectionWi : this.reconnectionWi;
-        this.reconnectionHit.data =
-            selected ? pathRcInfo.reconnectionHit.data : this.reconnectionHit.data;
-        this.reconnectionJacobian =
-            selected ? pathRcInfo.reconnectionJacobian : this.reconnectionJacobian;
-        this.rcNextVertexBounceSeed =
-            selected ? pathRcInfo.rcNextVertexBounceSeed : this.rcNextVertexBounceSeed;
-
-        this.integrand = selected ? pathContribution * sourcePdf : this.integrand;
-        this.lightPdf = selected ? lightPdf : this.lightPdf;
-        this.pathFlags.insertLightType(selected ? lightType : this.pathFlags.lightType());
-
-        return selected;
+    [mutating]
+    public bool addBSDFHitCandidate(float u, PathReconnectionInfo rc, uint depth,
+                                    float3 contribution, float3 wi, float3 Le, float3 Lr,
+                                    float sourcePdf, float pdf, uint lightType)
+    {
+        if (!addPSSSample(u, contribution))
+            return false;
+        storeBSDFHitCandidate(rc, depth, contribution, Le, Lr, sourcePdf, pdf, lightType);
+        return true;
     }
 
     [mutating]
@@ -447,12 +434,17 @@ public struct PathRISState
     [mutating]
     public bool addPSSSample(float u, float3 pathContribution)
     {
+        return selectCandidate(weight, u, pathContribution);
+    }
+
+    public static bool selectCandidate(inout float total, float u, float3 pathContribution)
+    {
         float w = toScalar(pathContribution);
 
         w = isnan(w) ? 0.0f : w;
-        this.weight += w;
+        total += w;
 
-        return (u * this.weight < w);
+        return (u * total < w);
     }
 
     public static float toScalar(float3 color)
