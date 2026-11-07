@@ -1019,8 +1019,12 @@ impl Context {
     }
 }
 impl Context {
-    /// 只有无法证明 GPU 停止或 SDK 释放失败时保留整套所有者，禁止部分销毁在途依赖。
-    pub(crate) fn retain_failed_shutdown(&mut self) {
+    /// 无法证明 GPU 停止或外部 SDK 释放失败时，永久保留资源及其依赖所有者。
+    ///
+    /// 此错误边界不等待、不分配，也不回收保留对象。所有资源身份失效，设备进入故障状态；
+    /// 后续操作不能恢复本 Context。若通过 [`Self::from_raw`] 借入宿主设备，宿主还须保留
+    /// 原始设备、实例及外部 SDK 所有者，不能在本 Context 析构后销毁仍被保留的依赖。
+    pub fn retain_failed_shutdown(&mut self) {
         self.device.quarantine();
         let owner = self.owner();
         std::mem::forget(std::mem::replace(&mut self.life, Life::new(owner)));
