@@ -3,6 +3,7 @@
 /// Solid/Thin白名单数值部件。连续折射公式据RoboCute适配，来源见assets/NOTICE.md；第三方源保持不变。
 module transmission_composition;
 import bsdf.openpbr.composition;
+import bsdf.openpbr.primary_policy;
 import "bsdf/openpbr/math/fresnel.slang";
 import "bsdf/openpbr/math/delta.slang";
 import "bsdf/openpbr/math/microfacet_distribution.slang";
@@ -19,8 +20,8 @@ public interface ITransmission
     static State prepare<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(P energy, float roughness,
                                                                      float ior, float3 extinction,
                                                                      float3 wi);
-    static Value evaluate(float3 wi, float3 wo, State s);
-    static Proposal sample(float3 wi, float3 u, State s);
+    static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s);
+    static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s);
 };
 public struct SolidDelta : ITransmission
 {
@@ -30,14 +31,14 @@ public struct SolidDelta : ITransmission
     {
         return ior;
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
         return {};
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        return primeFullRefractiveDeltaSample(wi, u.z, dielectric_fresnel(s),
-                                              PRIME_FULL_OPENPBR_FLAG_ALL);
+        return primeFullRefractiveDeltaSample<Balanced>(wi, u.z, dielectric_fresnel(s),
+                                                        PRIME_FULL_OPENPBR_FLAG_ALL);
     }
 };
 public struct SolidState
@@ -59,18 +60,18 @@ public struct SolidContinuous : ITransmission
             primeFullOpenPbrMicrofacetDielectricMsCompensation(energy, distribution, wi.z, ior).xy
         };
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
-        Value v = solid_evaluate(wi, wo, s.alpha, s.ior);
+        Value v = solid_evaluate<Balanced>(wi, wo, s.alpha, s.ior);
         if (v.throughput.flags != 0)
             v.throughput.value *= primeFullOpenPbrIsTransmissive(v.throughput.flags)
                                       ? s.compensation.y
                                       : s.compensation.x;
         return v;
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        Proposal p = solid_sample(wi, u, s.alpha, s.ior);
+        Proposal p = solid_sample<Balanced>(wi, u, s.alpha, s.ior);
         if (p.throughput.flags != 0)
             p.throughput.value *= primeFullOpenPbrIsTransmissive(p.throughput.flags)
                                       ? s.compensation.y
@@ -88,14 +89,15 @@ public struct SolidMixed : ITransmission
             return { roughness * roughness, ior, float2(1) };
         return SolidContinuous.prepare(energy, roughness, ior, extinction, wi);
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
-        return s.alpha < 1.0e-4 || s.ior == 1 ? Value() : SolidContinuous.evaluate(wi, wo, s);
+        return s.alpha < 1.0e-4 || s.ior == 1 ? Value()
+                                              : SolidContinuous.evaluate<Balanced>(wi, wo, s);
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        return s.alpha < 1.0e-4 || s.ior == 1 ? SolidDelta.sample(wi, u, s.ior)
-                                              : SolidContinuous.sample(wi, u, s);
+        return s.alpha < 1.0e-4 || s.ior == 1 ? SolidDelta.sample<Balanced>(wi, u, s.ior)
+                                              : SolidContinuous.sample<Balanced>(wi, u, s);
     }
 };
 /// 粗糙度已排除delta，只允许IOR匹配产生直通。
@@ -108,13 +110,14 @@ public struct SolidRoughMatched : ITransmission
         return ior == 1 ? State(roughness * roughness, ior, float2(1))
                         : SolidContinuous.prepare(energy, roughness, ior, extinction, wi);
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
-        return s.ior == 1 ? Value() : SolidContinuous.evaluate(wi, wo, s);
+        return s.ior == 1 ? Value() : SolidContinuous.evaluate<Balanced>(wi, wo, s);
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        return s.ior == 1 ? SolidDelta.sample(wi, u, 1) : SolidContinuous.sample(wi, u, s);
+        return s.ior == 1 ? SolidDelta.sample<Balanced>(wi, u, 1)
+                          : SolidContinuous.sample<Balanced>(wi, u, s);
     }
 };
 public struct MatchedSolid : ITransmission
@@ -125,13 +128,13 @@ public struct MatchedSolid : ITransmission
     {
         return {};
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
         return {};
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        return SolidDelta.sample(wi, u, 1);
+        return SolidDelta.sample<Balanced>(wi, u, 1);
     }
 };
 public struct ThinDeltaState
@@ -147,14 +150,14 @@ public struct ThinDelta : ITransmission
     {
         return { ior, extinction };
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
         return {};
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
-        return primeFullThinWallDeltaSample(wi, u.z, dielectric_fresnel(s.ior), float3(1),
-                                            s.extinction, PRIME_FULL_OPENPBR_FLAG_ALL);
+        return primeFullThinWallDeltaSample<Balanced>(wi, u.z, dielectric_fresnel(s.ior), float3(1),
+                                                      s.extinction, PRIME_FULL_OPENPBR_FLAG_ALL);
     }
 };
 public struct ThinState
@@ -173,7 +176,7 @@ public struct ThinRough<G : IMeasure> : ITransmission
                        0.0, 1.0),
                  ior, extinction };
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
         bool transmitted = wo.z < 0;
         if (transmitted)
@@ -194,16 +197,23 @@ public struct ThinRough<G : IMeasure> : ITransmission
             dot(wi, normalize(wi + wo)), dielectric_fresnel(s.ior), float3(1), s.extinction);
         float reflection = primeFullOpenPbrSpectrumToWeight(rt.first),
               transmission = primeFullOpenPbrSpectrumToWeight(rt.second);
+        if (Balanced)
+        {
+            bool available = reflection + transmission > 0;
+            float probability = openpbr_primary::reflection_probability(reflection, transmission);
+            reflection = available ? probability : 0;
+            transmission = available ? 1 - probability : 0;
+        }
         float sum = reflection + transmission;
         if (sum != 0)
             v.pdf = b.pdf * (transmitted ? transmission : reflection) / sum;
         return v;
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
         G.State geometry = G.prepare_alpha(s.alpha);
         if (G.delta(geometry))
-            return ThinDelta.sample(wi, u, { s.ior, s.extinction });
+            return ThinDelta.sample<Balanced>(wi, u, { s.ior, s.extinction });
         PrimeFullOpenPbrReflectiveSampleBase b = G.sample(wi, u, geometry);
         Proposal p = b.bsdfSample;
         if (p.throughput.flags == 0)
@@ -212,6 +222,13 @@ public struct ThinRough<G : IMeasure> : ITransmission
             primeFullThinWallRt(b.microCosine, dielectric_fresnel(s.ior), float3(1), s.extinction);
         float reflection = primeFullOpenPbrSpectrumToWeight(rt.first),
               transmission = primeFullOpenPbrSpectrumToWeight(rt.second);
+        if (Balanced)
+        {
+            bool available = reflection + transmission > 0;
+            float probability = openpbr_primary::reflection_probability(reflection, transmission);
+            reflection = available ? probability : 0;
+            transmission = available ? 1 - probability : 0;
+        }
         float sum = reflection + transmission;
         if (sum == 0)
             return primeFullOpenPbrZeroSample();
@@ -240,11 +257,11 @@ public struct MatchedThin : ITransmission
     {
         return extinction;
     }
-    public static Value evaluate(float3 wi, float3 wo, State s)
+    public static Value evaluate<let Balanced : bool = false>(float3 wi, float3 wo, State s)
     {
         return {};
     }
-    public static Proposal sample(float3 wi, float3 u, State s)
+    public static Proposal sample<let Balanced : bool = false>(float3 wi, float3 u, State s)
     {
         Proposal p = primeFullOpenPbrZeroSample();
         float3 response = wi.z > 0 ? exp(-s / wi.z) : float3(0);
@@ -257,7 +274,8 @@ public struct MatchedThin : ITransmission
         return p;
     }
 };
-public Value solid_evaluate(float3 wi, float3 wo, float alpha, float ior)
+public Value solid_evaluate<let Balanced : bool = false>(float3 wi, float3 wo, float alpha,
+                                                         float ior)
 {
     Value result = {};
     PrimeFullOpenPbrMicrofacet microfacet = PrimeFullOpenPbrMicrofacet(float2(alpha));
@@ -296,6 +314,14 @@ public Value solid_evaluate(float3 wi, float3 wo, float alpha, float ior)
     }
     float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
     float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+    if (Balanced)
+    {
+        bool available = reflectionProbability + transmissionProbability > 0;
+        float probability =
+            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
+        reflectionProbability = available ? probability : 0;
+        transmissionProbability = available ? 1 - probability : 0;
+    }
     float probabilitySum = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
         return result;
@@ -314,7 +340,9 @@ public Value solid_evaluate(float3 wi, float3 wo, float alpha, float ior)
     return result;
 }
 
-public PrimeFullOpenPbrSample solid_sample(float3 wi, float3 randomValue, float alpha, float ior)
+public PrimeFullOpenPbrSample solid_sample<let Balanced : bool = false>(float3 wi,
+                                                                        float3 randomValue,
+                                                                        float alpha, float ior)
 {
     if (wi.z == 0)
         return primeFullOpenPbrZeroSample();
@@ -340,6 +368,14 @@ public PrimeFullOpenPbrSample solid_sample(float3 wi, float3 randomValue, float 
     {
         transmissionProbability = 0.0;
         reflection = float3(1.0);
+    }
+    if (Balanced)
+    {
+        bool available = reflectionProbability + transmissionProbability > 0;
+        float probability =
+            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
+        reflectionProbability = available ? probability : 0;
+        transmissionProbability = available ? 1 - probability : 0;
     }
     float probabilitySum = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)

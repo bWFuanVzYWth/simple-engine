@@ -158,7 +158,7 @@ void keyed_guide_main(uint3 id: SV_DispatchThreadID)
     Hit hit = {};
     hit.surface = { float3(0, 0, 2), float3(0, 0, -1), 0 };
     hit.capability = mode == 1 || mode == 2 ? openpbr::CAP_DELTA_SOLID_DIELECTRIC
-                     : mode == 6            ? openpbr::CAP_OPAQUE_DIELECTRIC
+                     : mode >= 6            ? openpbr::CAP_OPAQUE_DIELECTRIC
                                             : openpbr::CAP_DELTA_CONDUCTOR;
     hit.distance = 2;
     float3 direction = mode == 2 ? normalize(float3(0.9, 0, 0.4358899)) : float3(0, 0, 1);
@@ -166,7 +166,7 @@ void keyed_guide_main(uint3 id: SV_DispatchThreadID)
     GuideScene scene = { mode };
     KeyGuideVertex vertex = scene.key_vertex(hit, direction, incident);
     KeyGuideEndpoint keyed = trace_key_guide(scene, vertex, float3(0), direction, incident,
-                                             mode == 5 ? 1 : 2, mode == 6);
+                                             mode == 5 ? 1 : 2, mode >= 6, mode == 7);
     GuideEndpoint endpoint = keyed.endpoint;
     GuideProjection projection =
         project_guide(endpoint, camera(0), camera(-1), float2(0.5), uint2(800, 400), true);

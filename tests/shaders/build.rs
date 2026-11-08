@@ -272,6 +272,30 @@ fn main() -> Result<(), shader_build::Error> {
         target: Target::Spirv("spirv_1_4"),
         args: &["-fp-mode", "precise"],
     });
+    let keys = [131, 195, 2191, 2181, 132, 338, 658, 354, 674];
+    let outputs: Vec<_> = keys
+        .iter()
+        .map(|key| format!("primary-{key}.spv"))
+        .collect();
+    let defines: Vec<_> = keys
+        .iter()
+        .map(|key| format!("-DOPENPBR_FLOW={key}"))
+        .collect();
+    let arguments: Vec<_> = defines
+        .iter()
+        .map(|define| ["-fp-mode", "precise", define.as_str()])
+        .collect();
+    let mut recipes = Vec::from(recipes);
+    for (output, args) in outputs.iter().zip(&arguments) {
+        recipes.push(Recipe {
+            source: "shaders/primary_sampling.slang",
+            entry: "primary_sampling_main",
+            stage: "compute",
+            output,
+            target: Target::Spirv("spirv_1_4"),
+            args,
+        });
+    }
     build(
         &recipes,
         &[shader_library::root()],

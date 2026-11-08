@@ -4,18 +4,21 @@
 //! 共享 Slang 模块位于引擎 `shaders/pt/`，不读取应用材质编号或世界结构。
 //! GPU 功能只录制命令；设备、提交、完成证明及呈现由宿主接入层维护。
 //!
-//! 每个绝对样本依次执行 K1（solid delta 前缀）、K2（剩余路径）与 K3（合成和累积）。
-//! `pt.hit_transport` 的生产路径在 raygen 中查询实际 HitObject，按已准备的材质程序槽选择
-//! Hit Group，再经可选 SER 执行叶子 closest-hit。`pt.material_vertex` 的交接为 100B：
-//! 32B 应用材质上下文和 68B 数值输入；输出复用同一存储，仅 88B 有效结果被读取。
-//! 叶子只保留该材质 Flow 能消费的代码；选灯、RayQuery 阴影、累计路径与 RR 留在 raygen。
-//! 材质来源的读取和解码由各场景独立适配。未提供 HitObject 能力的设备可使用原 callable 路径。
-//! 共享输运包含 Beer、发光、NEE/MIS、OpenPBR 散射和 eta-aware RR。末顶点保留发光与 NEE，
-//! 达到反弹上限后不再散射；dielectric 事件耗尽显式失败。单份交接缓冲在批内逐样本复用。
+//! 实时普通PT依次执行共享首视线、独立确定性delta导引、随机输运和后处理。
+//! 首命中缓存由宿主定义，导引和每条输运路径从同一首表面重启，不共用delta后缀。
+//! `pt.hit_transport` 按准备好的材质程序选择Hit Group，经可选SER执行closest-hit。
+//! 缓存首表面通过同键callable执行；`pt.material_vertex`交接为88B，首面只输入样本号、
+//! 通道号与已完成路径的辐射和。材质解码、选灯、阴影、BSDF、MIS和roulette均在特化叶子中。
+//! 首面启发式按界面反射／进入内部平衡提案；漫反射与薄层SSS属于后者。
+//! 1 spp随机选组，2 spp对选择维度分层，单一组退化为两份样本。响应不改，MIS消费新密度。
+//! 后续反弹、离线参考及ReSTIR保留材质概率。离线入口不生成导引，逐样本追踪完整路径，
+//! 后处理仅负责累计。未启用HitObject能力的设备保留原callable兼容入口。
+//! 共享输运包含Beer、发光、NEE/MIS、OpenPBR和eta-aware RR；末顶点保留发光与NEE，
+//! 达到反弹上限后不再散射；dielectric事件耗尽显式失败。交接缓冲不按SPP倍增。
 //!
 //! `pt.denoise` 提供首表面 OpenPBR 方向 diffuse/specular 能量、世界法线和线性
 //! roughness，以及前向线性深度与无 jitter 的 previous-current 像素运动计算。
-//! K1 的 `IPrefixGuides` 在 alpha 接受后、delta 前缀消费前观察实际首命中；默认观察者
+//! 兼容入口的 `IPrefixGuides` 在 alpha 接受后、delta 前缀消费前观察实际首命中；默认观察者
 //! 在编译期消除，不增加材质翻译、资源或存储。该首表面接口保持原语义，不包含光学 PSR。
 //! `pt.reconstruction` 另提供独立规范 guide、PSR、刚体前态和反射运动；guide 使用自身
 //! 查询预算，不随照明 beta、吸收或 roulette 终止。第 N 次查询命中非 delta 或真实逃逸
@@ -38,6 +41,34 @@
 #![forbid(unsafe_code)]
 
 pub mod history;
+
+/// 实时首表面的重建采样策略；只调整界面反射与进入内部的提案选择。
+/// 后续反弹仍按材质概率采样；离线累计的任意批大小不使用此枚举。
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PrimarySampling {
+    /// 单条路径；两类有效贡献各以1/2概率选取，单一有效类别以概率1选取。
+    #[default]
+    Random,
+    /// 共用首视线的两条路径；选择维度各取一个半区，单一类别得到两个独立样本。
+    Separated,
+}
+
+impl PrimarySampling {
+    /// 每像素本帧的实际输运路径数。
+    pub const fn samples(self) -> u32 {
+        match self {
+            Self::Random => 1,
+            Self::Separated => 2,
+        }
+    }
+    /// 切换实时策略；不隐式修改路径预算、ReSTIR或重建参数。
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Random => Self::Separated,
+            Self::Separated => Self::Random,
+        }
+    }
+}
 
 #[cfg(feature = "vulkan")]
 pub mod gpu;

@@ -285,3 +285,19 @@ fn spatial_reconstruction_reduces_noise_with_identical_guides() -> Result {
     assert_eq!(row[3], 1.);
     Ok(())
 }
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn delta_only_guide_stops_at_the_first_rough_surface() -> Result {
+    let rows = run(
+        "keyed_guide_main",
+        include_bytes!(concat!(env!("OUT_DIR"), "/keyed_guide_main.spv")),
+        7,
+        5,
+    )?;
+    assert_eq!(&rows[0][..3], &[0., 0., 2.]);
+    assert_eq!(rows[1], [0., 0., 1., 1.]);
+    assert_eq!(rows[2][0], 2.);
+    assert_eq!(rows[4], [0., 0., 0., 0.]);
+    Ok(())
+}

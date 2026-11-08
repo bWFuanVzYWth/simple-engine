@@ -7,6 +7,7 @@ import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/contract/flags.slang";
 import "bsdf/openpbr/math/fresnel.slang";
 import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.primary_policy;
 
 public float3 primeFullCompactGuardedThinWallSeriesReciprocal(float3 roundTrip)
 {
@@ -37,7 +38,7 @@ public PrimeFullOpenPbrVecPair primeFullThinWallRt(float cosineTheta,
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample(
+public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool = false>(
     float3 wi, float randomEvent, PrimeFullOpenPbrSpecularFresnel specularFresnel,
     uint samplingFlags)
 {
@@ -61,6 +62,14 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample(
     {
         transmissionProbability = 0.0;
         reflection = float3(1.0);
+    }
+    if (Balanced)
+    {
+        float reflectionWeight =
+            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
+        bool available = reflectionProbability + transmissionProbability > 0;
+        reflectionProbability = available ? reflectionWeight : 0;
+        transmissionProbability = available ? 1 - reflectionWeight : 0;
     }
     float probabilitySum = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
@@ -96,7 +105,7 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample(
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullThinWallDeltaSample(
+public PrimeFullOpenPbrSample primeFullThinWallDeltaSample<let Balanced : bool = false>(
     float3 wi, float randomEvent, PrimeFullOpenPbrSpecularFresnel specularFresnel,
     float3 transmissionTint, float3 extinction, uint samplingFlags)
 {
@@ -116,6 +125,14 @@ public PrimeFullOpenPbrSample primeFullThinWallDeltaSample(
     if (!primeFullOpenPbrIsTransmissive(samplingFlags))
     {
         transmissionProbability = 0.0;
+    }
+    if (Balanced)
+    {
+        float reflectionWeight =
+            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
+        bool available = reflectionProbability + transmissionProbability > 0;
+        reflectionProbability = available ? reflectionWeight : 0;
+        transmissionProbability = available ? 1 - reflectionWeight : 0;
     }
     float probabilitySum = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)

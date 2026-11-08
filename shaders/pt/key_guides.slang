@@ -102,11 +102,9 @@ void set_key_guide_vertex(inout KeyGuideEndpoint result, KeyGuideVertex vertex)
 
 /// 与trace_guide相同的预算、PSR、候选回退及查询计数，首面材料只解码一次。
 /// firstReflection只选择首面的理想反射数值，不改变后续材质/随机域，不重解首面。
-public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(Scene scene, KeyGuideVertex first,
-                                                                float3 cameraOrigin,
-                                                                float3 cameraDirection,
-                                                                float4 initialMedium, uint budget,
-                                                                bool firstReflection)
+public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(
+    Scene scene, KeyGuideVertex first, float3 cameraOrigin, float3 cameraDirection,
+    float4 initialMedium, uint budget, bool firstReflection, bool deltaOnly = false)
 {
     KeyGuideEndpoint result = {};
     result.endpoint.incident = initialMedium;
@@ -121,7 +119,7 @@ public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(Scene scene, Key
     while (true)
     {
         bool discrete = (vertex.flags & KEY_GUIDE_DISCRETE) != 0;
-        if (!discrete && !(firstReflection && result.endpoint.queries == 1))
+        if (!discrete && (deltaOnly || !(firstReflection && result.endpoint.queries == 1)))
         {
             float3 position, normal;
             if (psr_surface(result.endpoint.psr, cameraOrigin, cameraDirection,

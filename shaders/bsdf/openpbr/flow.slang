@@ -7,6 +7,8 @@ __exported import bsdf.openpbr.flow_reference;
 #else
 __exported import bsdf.openpbr.flow_contract;
 import bsdf.openpbr.composition;
+import bsdf.openpbr.primary_composition;
+import bsdf.openpbr.primary_policy;
 import bsdf.openpbr.transmission_composition;
 import "bsdf/openpbr/math/frame.slang";
 import "bsdf/openpbr/math/microfacet_energy.slang";
@@ -127,7 +129,8 @@ internal Evaluation evaluate_transmission<Provider>(Provider energy, Material ma
         wi, primeFullOpenPbrOnbToLocal(frame, direction), state);
     return specialized_evaluation(v.throughput, v.pdf);
 }
-internal Sample consume_transmission<Provider, Consumer, let Directions : uint>(
+internal Sample
+consume_transmission<Provider, Consumer, let Directions : uint, let Primary : bool = false>(
     Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
     uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
     inout Consumer consumer)
@@ -147,19 +150,19 @@ internal Sample consume_transmission<Provider, Consumer, let Directions : uint>(
         transmitted.yzw * material.surface.w, wi);
     if ((Directions & evaluation_mask & 1u) != 0)
     {
-        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate(
+        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate<Primary>(
             wi, primeFullOpenPbrOnbToLocal(frame, first), state);
         consumer.consume(0, specialized_evaluation(v.throughput, v.pdf));
     }
     if ((Directions & evaluation_mask & 2u) != 0)
     {
-        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate(
+        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate<Primary>(
             wi, primeFullOpenPbrOnbToLocal(frame, second), state);
         consumer.consume(1, specialized_evaluation(v.throughput, v.pdf));
     }
     if (continuation)
         result = specialized_result<TransmissionCapability, TransmissionContinuous>(
-            openpbr_composition::Transmission.sample(wi, u, state), frame, view, incident,
+            openpbr_composition::Transmission.sample<Primary>(wi, u, state), frame, view, incident,
             transmitted);
     return result;
 }
@@ -239,6 +242,42 @@ public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Direct
         energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
         transmitted, consumer);
 #endif
+}
+/// 首表面独立提案；光源MIS使用同一混合密度，2 spp 对提案选择分层后取平均。
+public Batch shade_primary_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
+    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
+    uint samples, uint lane)
+    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+{
+    static_assert(Flow == SELECTED_FLOW, "primary recipe must match its callable entry");
+    u.z = openpbr_primary::selection(u.z, samples, lane);
+    BatchConsumer consumer = {};
+    Sample scattered;
+#ifdef COMPOSED_OPAQUE
+#if (SELECTED_VARIANT & 2048) && (SELECTED_FLOW & 11)
+    if (material.surface.y == 1)
+        scattered =
+            consume_closure<openpbr_composition::Metal, Provider, BatchConsumer, Directions>(
+                energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+                incident, consumer);
+    else
+        scattered =
+            consume_closure<openpbr_composition::PrimaryDielectric, Provider, BatchConsumer,
+                            Directions>(energy, material, normal, view, first, second,
+                                        evaluation_mask, u, continuation, incident, consumer);
+#else
+    scattered =
+        consume_closure<openpbr_composition::PrimaryOpaque, Provider, BatchConsumer, Directions>(
+            energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+            incident, consumer);
+#endif
+#else
+    scattered = consume_transmission<Provider, BatchConsumer, Directions, true>(
+        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
+        transmitted, consumer);
+#endif
+    return { consumer.first, consumer.second, scattered };
 }
 struct BatchConsumer : IFlowEvaluationConsumer
 {

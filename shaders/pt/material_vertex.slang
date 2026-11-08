@@ -37,6 +37,26 @@ public struct MaterialCall
                  data.path.eta_scale,
                  data.path.depth | (data.path.dielectric_events << 7u) };
     }
+    /// 首面输入只有样本身份、分离通道和已完成路径的辐射和；其余字段仅作为输出。
+    public static MaterialCall primaryInput(uint sample, uint lane, float3 radiance)
+    {
+        MaterialCall call;
+        call.origin_pixel = float3(asfloat(sample), asfloat(lane), 0);
+        call.radiance = radiance;
+        return call;
+    }
+    /// 首面叶子建立相机路径的不变量，避免调度器为常量初态搬运完整路径。
+    [mutating]
+    public void initializePrimary(float4 incident)
+    {
+        direction = 0;
+        throughput = 1;
+        medium = incident;
+        previous = 0;
+        previous_pdf = 0;
+        eta_scale = 1;
+        state = 0;
+    }
     [mutating]
     public void finishVertex(uint depth, uint events, uint status)
     {
@@ -93,9 +113,12 @@ VisibleLight visible_light<let Flow : uint, let Solar : bool, Scene : IFlowScene
 }
 
 /// 已解码的本次命中由一个材质入口消费；路径结果直接原位发布。
-public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : uint = 3>(
-    Scene scene, inout MaterialCall call, Hit hit, SurfaceMaterial material, float3 incoming,
-    Settings settings)
+public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : uint = 3,
+                           let Primary : bool = false>(Scene scene, inout MaterialCall call,
+                                                       Hit hit, SurfaceMaterial material,
+                                                       float3 incoming, Settings settings,
+                                                       uint primarySamples = 1,
+                                                       uint primaryLane = 0)
 {
     uint depth = call.state & 127u;
     uint events = (call.state >> 7u) & 127u;
@@ -132,10 +155,20 @@ public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
                                            scene.sample_light(hit.surface, sampler.light(depth)));
     }
     bool scatter = continuation && !limited;
-    openpbr::Batch bsdf = openpbr::shade_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
-        scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
-        lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
-        scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted);
+    openpbr::Batch bsdf;
+#if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
+    if (Primary)
+        bsdf = openpbr::shade_primary_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
+            scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
+            lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
+            scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
+            primarySamples, primaryLane);
+    else
+#endif
+        bsdf = openpbr::shade_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
+            scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
+            lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
+            scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted);
     if (Continuous && (LightMask & 1u) != 0 && sun.pdf > 0 && any(bsdf.first.response > 0))
         call.radiance +=
             call.throughput *
