@@ -147,6 +147,10 @@ void flow_discrete_main(uint3 id: SV_DispatchThreadID)
 
 public struct PrefixScene : ITraceScene
 {
+    public DeltaInterface delta_interface(Hit hit, float4 incident)
+    {
+        return { hit.surface.normal, incident, float3(1) };
+    }
     public SurfaceMaterial resolve(Hit hit, uint capability, float4 incident)
     {
         SurfaceMaterial result = {};

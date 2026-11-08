@@ -123,9 +123,22 @@ public interface IFlowScene : IScene
     SurfaceMaterial resolve_flow(Hit hit, uint flow, float4 incident);
 };
 
+/// 非发光delta solid的唯一界面数据；不存在颜色、粗糙度或连续lobe状态。
+public struct DeltaInterface
+{
+    public float3 normal;
+    public float4 transmitted;
+    public float3 filter;
+};
+public interface IDeltaPrefixScene
+{
+    DeltaInterface delta_interface(Hit hit, float4 incident);
+};
+
 /// 主查询仅供 raygen 使用；shade 只选择一次叶子 callable，resolve_hit 只调整实际能力。
 /// prefix=true 须证明当前表面为无发光的 delta solid dielectric，否则交给 shade。
-public interface ITraceScene : IScene
+public interface ITraceScene : IScene,
+                               IDeltaPrefixScene
 {
     bool intersect(float3 origin, float3 direction, out Hit hit);
     void resolve_hit(inout Hit hit, float4 incident);

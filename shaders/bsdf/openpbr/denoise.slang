@@ -3,6 +3,7 @@ module denoise;
 
 import bsdf.openpbr.api;
 import bsdf.openpbr.flow;
+import bsdf.openpbr.guide_composition;
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 import "bsdf/openpbr/math/microfacet_energy.slang";
@@ -112,7 +113,14 @@ public DenoiseAlbedos denoise_albedos_flow<let Flow : uint, Energy>(Energy energ
                                                                     float4 transmitted)
     where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
+#if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
+    openpbr_composition::GuideEnergy value = openpbr_composition::Guide.directional(
+        energy, material, abs(dot(normal, view)), incident, transmitted);
+    return { primeSanitizeDenoiseAlbedo(value.diffuse),
+             primeSanitizeDenoiseAlbedo(value.specular) };
+#else
     return denoise_albedos_impl<Flow, true>(energy, material, normal, view, incident, transmitted);
+#endif
 }
 
 }

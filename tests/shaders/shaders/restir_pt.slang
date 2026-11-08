@@ -19,7 +19,7 @@ StructuredBuffer<uint4> inputs;
 RWStructuredBuffer<float4> outputs;
 static const float PI = 3.14159265358979323846;
 
-/// mode 2/3 为 z=2 无限发光平面，其 NEE 只采样边长4的子区域；其余为常量环境。
+/// mode 2/3/10 为 z=2 无限发光平面，其 NEE 只采样边长4的子区域；10从双面灯背面接收光。
 /// mode 7/8 为 z=0/1 的 Lambert 发光腔体，禁用NEE/MIS，最多10次散射。
 /// variant 改变 primary 法线或横向位置，使双向 shift 的支持域/PDF 与源域不同。
 public struct LambertScene : IRestirScene
@@ -33,7 +33,7 @@ public struct LambertScene : IRestirScene
 
     public bool finiteLight()
     {
-        return mode == 2 || mode == 3;
+        return mode == 2 || mode == 3 || mode == 10;
     }
     public bool cavity()
     {
@@ -68,7 +68,8 @@ public struct LambertScene : IRestirScene
         Surface result = {};
         result.hit = hit;
         result.point.position = asfloat(hit.data.yzw);
-        result.point.normal = hit.data.x == 1 ? normal() : float3(0.0, 0.0, -1.0);
+        result.point.normal =
+            hit.data.x == 1 ? normal() : float3(0.0, 0.0, mode == 10 ? 1.0 : -1.0);
         result.wo = wo;
         result.emission = cavity() || hit.data.x == 2 ? float3(radiance) : float3(0.0);
         result.incident = float4(1.0, extinction, extinction, extinction);
@@ -92,6 +93,10 @@ public struct LambertScene : IRestirScene
     public geometry::SurfacePoint lightEndpoint(HitInfo hit, bool previous)
     {
         return loadSurface(hit, float3(0), previous).point;
+    }
+    public bool emissionSideSupported(Surface surface)
+    {
+        return mode == 10 || surface.frontFacing;
     }
     public InitialVertex shadeInitialVertex(Surface surface, InitialRequest request)
     {
@@ -168,7 +173,7 @@ public struct LambertScene : IRestirScene
                                                    float distance, int component)
     {
         return { evaluateBsdf(surface, direction, component),
-                 transmittance(surface, direction, distance) };
+                 transmittance(surface, direction, distance), surface.incident.x };
     }
     public EmitterEvaluation evaluateEmitter(Surface surface, float3 from, bool previous)
     {

@@ -152,6 +152,7 @@ public ReconnectionData traceReplayedPath<Scene : IRestirScene>(
             return result;
         result.rcPrevHit = primary.hit;
         result.rcPrevWo = primary.wo;
+        result.rcPrevIncident = primary.incident;
         result.pathThroughput = primaryThroughput;
         result.rcFootprintFactor = -1.0;
         return result;
@@ -244,6 +245,7 @@ public ReconnectionData traceReplayedPath<Scene : IRestirScene>(
                 return result;
             result.rcPrevHit = hit;
             result.rcPrevWo = next.wo;
+            result.rcPrevIncident = next.incident;
             result.pathThroughput = throughput;
             result.rcFootprintFactor =
                 !rough || incoming.rayFootprint < primaryRayFootprint * distanceThreshold

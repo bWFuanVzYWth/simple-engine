@@ -155,6 +155,15 @@ fn finite_light_reuse_preserves_area_measure() -> Result {
 
 #[test]
 #[ignore = "需要真实 Vulkan compute GPU"]
+fn two_sided_emitter_backface_reuse_preserves_integral() -> Result {
+    let samples = run(10, 0.2, 0.0002, 0.0)?;
+    mean_matches(&samples, ALBEDO.map(|value| value * RADIANCE), "backfaceRC");
+    assert!(samples.iter().any(|sample| sample[4][1] == 1.0));
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
 fn forced_nee_and_full_replay_share_unbiased_mis() -> Result {
     let samples = run(3, 2.0, 1e20, 0.0)?;
     mean_matches(&samples, ALBEDO.map(|value| value * RADIANCE), "mixedRC");

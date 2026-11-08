@@ -13,8 +13,9 @@ fn scalar_abi_matches_uncompressed_nv_buffers() {
     assert_eq!(offset_of!(PathReservoir, reconnection_hit), 36);
     assert_eq!(offset_of!(PathReservoir, reconnection_jacobian), 52);
     assert_eq!(offset_of!(PathReservoir, reconnection_wi), 68);
-    assert_eq!(size_of::<Reconnection>(), 44);
+    assert_eq!(size_of::<Reconnection>(), 60);
     assert_eq!(offset_of!(Reconnection, previous_wo), 28);
+    assert_eq!(offset_of!(Reconnection, previous_incident), 44);
     assert_eq!(size_of::<PrecomputedShift>(), 20);
     assert_eq!(size_of::<NeighborMask>(), 8);
 }
@@ -58,7 +59,7 @@ fn working_set_counts_padding_and_both_histories() {
         memory.counter,
     ];
     assert_eq!(allocations.into_iter().sum::<u64>(), memory.total);
-    assert_eq!(memory.total, 416 * u64::from(layout.elements()) + 4);
+    assert_eq!(memory.total, 464 * u64::from(layout.elements()) + 4);
 }
 
 #[test]

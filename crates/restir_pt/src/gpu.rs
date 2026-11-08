@@ -162,7 +162,7 @@ impl<B> Buffers<B> {
     pub const fn color_estimates(&self) -> Option<&[B; 2]> {
         self.color_estimates.as_ref()
     }
-    /// 分阶段重放的44B记录；两类重放均融合时不存在。
+    /// 分阶段重放的60B记录；两类重放均融合时不存在。
     pub fn reconnection(&self) -> Option<&B> {
         self.replay.as_ref().map(|replay| &replay.reconnection)
     }

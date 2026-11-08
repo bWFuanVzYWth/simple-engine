@@ -25,7 +25,9 @@ public PrimeFullOpenPbrFloatPair primeFullOpenPbrDielectricRsRp(float ior, float
         eta = 1.0 / eta;
     }
     float eta2 = eta * eta;
-    float t0 = cosineTheta * cosineTheta + eta2 - 1.0;
+    float t0 = cosineTheta * cosineTheta + (eta - 1.0) * (eta + 1.0);
+    if (t0 <= 0)
+        return { -1.0, 1.0 };
     float t1 = t0 > 0.0 ? sqrt(t0) : 0.0;
     // Multiply Rp's numerator and denominator by eta; IOR is strictly positive.
     float t2 = eta2 * cosineTheta;
@@ -64,12 +66,24 @@ public PrimeFullOpenPbrRefractResult primeFullOpenPbrDielectricRefract(float ior
         normal = -normal;
         inverseEta = ior;
     }
-    float t0 = 1.0 - (1.0 - cosineTheta * cosineTheta) * inverseEta * inverseEta;
+    float etaDifference = (1.0 - inverseEta) * (1.0 + inverseEta);
+    float scaledCosine = inverseEta * cosineTheta;
+    float t0 = scaledCosine * scaledCosine + etaDifference;
     PrimeFullOpenPbrRefractResult result;
     result.valid = t0 > 0.0 ? 1u : 0u;
     result.relativeIor = 1.0 / inverseEta;
-    result.wo = inverseEta * wi - (inverseEta * cosineTheta + sqrt(max(t0, 0.0))) * normal;
+    float root = sqrt(max(t0, 0.0));
+    float normalChange = t0 > 0 ? etaDifference / (root - scaledCosine) : scaledCosine;
+    result.wo = inverseEta == 1 ? wi : inverseEta * wi - normalChange * normal;
     return result;
+}
+
+/// 单位入射／出射方向及实际折射半向量的 Snell 恒等式；ior!=1。
+/// 消去 cos_o+cos_i/eta 在近匹配 IOR 处的相消，保留折射 Jacobian 的真实尖峰。
+public float primeFullOpenPbrRefractionDenominator(float eta, float cosineIncident,
+                                                   float cosineOutgoing)
+{
+    return ((1 - eta) * (1 + eta)) / (eta * eta * (cosineIncident / eta - cosineOutgoing));
 }
 
 float3 primeFullOpenPbrSchlickF82Tint(float3 f0, float3 f82, float3 f90, float weight,

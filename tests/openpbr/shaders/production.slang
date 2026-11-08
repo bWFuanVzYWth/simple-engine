@@ -1,5 +1,6 @@
 module production;
 import bsdf.openpbr.api;
+import bsdf.openpbr.denoise;
 
 struct Case
 {
@@ -28,6 +29,16 @@ void main(uint3 id: SV_DispatchThreadID)
         return;
     Case c = cases[id.x];
     openpbr::Energy energy = { energy_texture, energy_sampler };
+    if (c.u.w == 5.0)
+    {
+        openpbr::DenoiseAlbedos value = openpbr::denoise_albedos(
+            energy, c.material, float3(0, 0, 1), c.view.xyz, c.incident, c.transmitted);
+        uint i = id.x * 5;
+        output[i] = float4(value.diffuse, 0);
+        output[i + 1] = float4(value.specular, 0);
+        output[i + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
+        return;
+    }
     if (c.u.w == 1.0)
     {
         uint i = id.x * 5;

@@ -102,7 +102,7 @@ pub struct PathReservoir {
     pub reconnection_wi: [f32; 3],
 }
 
-/// 未压缩重放结果的 44B scalar ABI。
+/// 未压缩重放结果的 60B scalar ABI。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct Reconnection {
@@ -114,6 +114,8 @@ pub struct Reconnection {
     pub previous_wo: [f32; 3],
     /// Hybrid 可逆性检验的 footprint 因子。
     pub footprint_factor: f32,
+    /// 前缀实际到达该点的 IOR 与 RGB 消光系数。
+    pub previous_incident: [f32; 4],
 }
 
 /// paired 方向复用的 20B scalar ABI。
@@ -259,7 +261,7 @@ impl Layout {
         let Some(color_estimate) = n.checked_mul(if color_estimates { 12 } else { 0 }) else {
             return Err(Error::Overflow);
         };
-        let Some(reconnection) = q.checked_mul(44) else {
+        let Some(reconnection) = q.checked_mul(60) else {
             return Err(Error::Overflow);
         };
         let Some(reconnection_offsets) = q.checked_mul(4) else {

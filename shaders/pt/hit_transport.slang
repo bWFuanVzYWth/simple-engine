@@ -16,7 +16,6 @@ public interface IHitScene : IScene
 {
     RaytracingAccelerationStructure acceleration();
     uint program(HitObject object, float4 incident);
-    uint reorder_bits();
     bool guides_enabled();
 };
 
@@ -52,7 +51,8 @@ public float trace_hit_path<Scene : IHitScene, Guides : IHitGuides>(Scene provid
         found.SetShaderTableIndex(program + 1u);
         MaterialCall call = MaterialCall::input(data);
 #if PT_HIT_SER
-        ReorderThread(program, provider.reorder_bits());
+        // SBT记录已选择最终材质入口；让驱动按真实命中程序重排，不再把槽号当通用hint。
+        ReorderThread(found);
 #endif
         HitObject::Invoke(found, call);
         data.path = call.result();

@@ -32,18 +32,19 @@ public float primeFullOpenPbrMicrofacetD(PrimeFullOpenPbrMicrofacet microfacet, 
     return result * halfVector.z > 1.0e-20 ? result : 0.0;
 }
 
-float primeFullOpenPbrMicrofacetG2r(PrimeFullOpenPbrMicrofacet microfacet, float3 wi, float3 wo)
+/// G2/(4|cos_i|) 的约分形式；避免掠射时先产生无穷 lambda 再计算 0/0。
+public float primeFullOpenPbrReflectionFactor(PrimeFullOpenPbrMicrofacet microfacet, float3 wi,
+                                              float3 wo)
 {
-    if (wi.z < 0.0)
-    {
-        wi = -wi;
-        wo = -wo;
-    }
-    return 1.0 / (primeFullOpenPbrMicrofacetLambda(microfacet, -wi) +
-                  primeFullOpenPbrMicrofacetLambda(microfacet, wo));
+    float incident = abs(wi.z);
+    float outgoing = abs(wo.z);
+    float projectedIncident = length(float3(microfacet.alpha * wi.xy, wi.z));
+    float projectedOutgoing = length(float3(microfacet.alpha * wo.xy, wo.z));
+    float denominator = incident * projectedOutgoing + outgoing * projectedIncident;
+    return denominator > 0 ? 0.5 * outgoing / denominator : 0;
 }
 
-float primeFullOpenPbrLogGamma(float value)
+float primeFullOpenPbrStirlingCorrection(float value)
 {
     const float gam0 = 1.0 / 12.0;
     const float gam1 = 1.0 / 30.0;
@@ -52,12 +53,17 @@ float primeFullOpenPbrLogGamma(float value)
     const float gam4 = 22999.0 / 22737.0;
     const float gam5 = 29944523.0 / 19733142.0;
     const float gam6 = 109535241009.0 / 48264275462.0;
+    return gam0 /
+           (value +
+            gam1 /
+                (value +
+                 gam2 / (value + gam3 / (value + gam4 / (value + gam5 / (value + gam6 / value))))));
+}
+
+float primeFullOpenPbrLogGamma(float value)
+{
     return 0.5 * log(2.0 * PRIME_FULL_OPENPBR_PI) - value + (value - 0.5) * log(value) +
-           gam0 /
-               (value +
-                gam1 / (value +
-                        gam2 / (value +
-                                gam3 / (value + gam4 / (value + gam5 / (value + gam6 / value))))));
+           primeFullOpenPbrStirlingCorrection(value);
 }
 
 float primeFullOpenPbrGamma(float value)
@@ -68,8 +74,19 @@ float primeFullOpenPbrGamma(float value)
 
 float primeFullOpenPbrBeta(float first, float second)
 {
-    return primeFullOpenPbrGamma(first) * primeFullOpenPbrGamma(second) /
-           primeFullOpenPbrGamma(first + second);
+    float a = min(first, second);
+    float b = max(first, second);
+    if (a == 1)
+        return 1 / b;
+    if (b < 8)
+        return primeFullOpenPbrGamma(a) * primeFullOpenPbrGamma(b) / primeFullOpenPbrGamma(a + b);
+    // log Γ(b)-log Γ(a+b) 先代数约分，既不构造 Γ，也不相减两个巨大的 log Γ。
+    float r = a / b;
+    float log1p = r < 0.001 ? r * (1 - r * (0.5 - r / 3)) : log(1 + r);
+    float logGammaA = primeFullOpenPbrLogGamma(a + 5) -
+                      (log(a) + log(a + 1) + log(a + 2) + log(a + 3) + log(a + 4));
+    return exp(logGammaA - a * log(b) - (a + b - 0.5) * log1p + a +
+               primeFullOpenPbrStirlingCorrection(b) - primeFullOpenPbrStirlingCorrection(a + b));
 }
 
 public float primeFullOpenPbrMicrofacetG2t(PrimeFullOpenPbrMicrofacet microfacet, float3 wi,
@@ -130,6 +147,22 @@ public float primeFullOpenPbrMicrofacetPdfFromDistribution(PrimeFullOpenPbrMicro
     return 2.0 * distribution * dot(wi, halfVector) / (k * wi.z + lengthV);
 }
 
+/// 反射方向 PDF；消去微法线到方向的 Jacobian 中共同的 dot(wi,h)，包括其零极限。
+public float primeFullOpenPbrReflectionPdf(PrimeFullOpenPbrMicrofacet microfacet, float3 wi,
+                                           bool reflectOnly, float distribution)
+{
+    float k = 1;
+    if (reflectOnly)
+    {
+        float a = min(microfacet.alpha.x, microfacet.alpha.y);
+        float s = 1 + length(wi.xy);
+        float a2 = a * a;
+        float s2 = s * s;
+        k = (s2 - a2 * s2) / (s2 + a2 * wi.z * wi.z);
+    }
+    return distribution / (2 * (k * wi.z + length(float3(microfacet.alpha * wi.xy, wi.z))));
+}
+
 public struct PrimeFullOpenPbrReflectiveEvalBase
 {
     public float factor;
@@ -175,12 +208,9 @@ public PrimeFullOpenPbrReflectiveEvalBase primeFullOpenPbrReflectiveEvalBaseImpl
     halfVector *= rsqrt(lengthSquared);
     result.microCosine = dot(wi, halfVector);
     float distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
-    result.factor =
-        distribution * primeFullOpenPbrMicrofacetG2r(microfacet, wi, wo) / (4.0 * abs(wi.z));
+    result.factor = distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
     result.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
-    result.pdf = primeFullOpenPbrMicrofacetPdfFromDistribution(microfacet, wi, halfVector, true,
-                                                               distribution) /
-                 (4.0 * abs(result.microCosine));
+    result.pdf = primeFullOpenPbrReflectionPdf(microfacet, wi, true, distribution);
     return result;
 }
 
@@ -204,7 +234,6 @@ public PrimeFullOpenPbrReflectiveSampleBase primeFullOpenPbrReflectiveSampleBase
         return result;
     }
     float3 halfVector = float3(0.0, 0.0, 1.0);
-    float microfacetPdf = 1.0;
     float distribution = 1.0;
     if (Continuous || !primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet))
     {
@@ -213,7 +242,6 @@ public PrimeFullOpenPbrReflectiveSampleBase primeFullOpenPbrReflectiveSampleBase
             return result;
         }
         halfVector = primeFullOpenPbrMicrofacetSample(microfacet, wi, randomValue.xy, true);
-        microfacetPdf = primeFullOpenPbrMicrofacetPdf(microfacet, wi, halfVector, true);
         distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
     }
     else if ((samplingFlags & (checkFlags & PRIME_FULL_OPENPBR_FLAG_DELTA)) == 0u)
@@ -235,10 +263,10 @@ public PrimeFullOpenPbrReflectiveSampleBase primeFullOpenPbrReflectiveSampleBase
     }
     else
     {
-        result.bsdfSample.throughput.value = float3(
-            distribution * primeFullOpenPbrMicrofacetG2r(microfacet, wi, wo) / abs(4.0 * wi.z));
+        result.bsdfSample.throughput.value =
+            float3(distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo));
         result.bsdfSample.throughput.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
-        result.bsdfSample.pdf = microfacetPdf / (4.0 * abs(result.microCosine));
+        result.bsdfSample.pdf = primeFullOpenPbrReflectionPdf(microfacet, wi, true, distribution);
     }
     return result;
 }

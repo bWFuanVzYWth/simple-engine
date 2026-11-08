@@ -3,7 +3,7 @@
 //! 本 profile 对应 Falcor 9.0 `759aad03` 的 point、Hybrid、paired K=3、
 //! 一轮 spatial；不启用 reservoir compression、duplication map、decoupled shading 或 area reservoir。
 //! 初始候选、重放、shift/MIS 的 shader 由上层受控程序注入，本 crate 不解释材质或场景身份。
-//! reservoir/reconnection/precomputed 保持未压缩 80/44/20B scalar ABI。
+//! reservoir/reconnection/precomputed 保持未压缩 80/60/20B scalar ABI。
 //! 参考调度使用Compact；融合可消除reconnection与队列，保留相同采样和跨像素paired缓存。
 //!
 //! GPU 资源的真实所有者是唯一 Vulkan Context；本 crate 保存资源标识与唯一帧进度，

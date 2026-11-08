@@ -7,6 +7,14 @@ use simple_engine::{
 fn main() -> Result<(), shader_build::Error> {
     let mut recipes = vec![
         Recipe {
+            source: "shaders/numerical.slang",
+            entry: "main",
+            stage: "compute",
+            output: "numerical.spv",
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-fp-mode", "precise"],
+        },
+        Recipe {
             source: "shaders/production.slang",
             entry: "main",
             stage: "compute",

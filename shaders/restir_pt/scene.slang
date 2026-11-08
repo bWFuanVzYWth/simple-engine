@@ -45,6 +45,8 @@ public struct ConnectionEvaluation
 {
     public BsdfEvaluation bsdf;
     public float3 transmittance;
+    /// 第二端BSDF只消费连接段IOR；Beer已在transmittance中，固定后缀不重算。
+    public float incidentIor;
 };
 
 /// 发光命中端的专用结果；反向灯PDF与该端的材质/alias键一并求值。
@@ -140,8 +142,8 @@ public struct InitialVertex
 /// 默认 point-reservoir 所需的精确求交与材料操作。
 /// trace、sampleBsdf、evaluateBsdf 仅在 raygen 调用；材料适配器可在叶子 callable 前执行 SER。
 /// 重放以源 reservoir 的随机身份为准，previous 只选择几何/光照世代，不改变随机向量。
-/// 默认44B ReconnectionData只保存命中和wo；loadSurface须据稳定双侧身份精确恢复前驱介质。
-/// 无法从几何恢复介质的场景须另提供实际介质状态，不能把该布局用于任意嵌套体积。
+/// ReconnectionData保存前缀实际携带的介质；loadSurface只提供表面元数据与默认侧面状态，
+/// 不能用表面的面朝向代替路径介质。任意嵌套体积仍须由场景适配器维护其边界契约。
 public interface IRestirScene
 {
     Surface loadSurface(HitInfo hit, float3 wo, bool previous);
@@ -149,6 +151,9 @@ public interface IRestirScene
     Surface loadSurfaceFromOrigin(HitInfo hit, float3 origin, bool previous);
     /// 光端点只需要几何；不能为可见性或Jacobian执行材质/纹理/着色法线解码。
     geometry::SurfacePoint lightEndpoint(HitInfo hit, bool previous);
+    /// 已知发光端点在当前wo侧是否支持发光；与初采的侧面/覆盖规则相同。
+    /// 固定端点的纹素和发光强度已缓存，不得为侧面判断重复解码或采样。
+    bool emissionSideSupported(Surface surface);
     /// 设置真实路径介质并刷新cheap能力/hasNonDelta元数据；不读取BSDF或贴图，不覆盖raw capability。
     void setIncident(inout Surface surface, float4 medium);
     bool trace(float3 origin, float3 direction, bool previous, out HitInfo hit, out float distance);

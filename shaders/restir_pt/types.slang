@@ -26,7 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 
-/// Falcor 759aad03 默认 point ReSTIR PT 的未压缩中立ABI；scalar布局为80/44/20B。
+/// Falcor 759aad03 默认 point ReSTIR PT 的未压缩中立ABI；scalar布局为80/60/20B。
 /// identity的全0保留为无效，scene负责其余uint4编码、稳定性与重建，不保存宿主指针。
 module types;
 
@@ -611,13 +611,15 @@ public struct PathReservoir
     }
 }
 
-/// 44B前缀重放结果；pathThroughput不含连接顶点重算，wo指离开rc前顶点。
+/// 60B前缀重放结果；pathThroughput不含连接顶点重算，wo指离开rc前顶点。
 public struct ReconnectionData
 {
     public HitInfo rcPrevHit;
     public float3 pathThroughput;
     public float3 rcPrevWo;
     public float rcFootprintFactor;
+    /// 前缀实际到达该点的IOR与消光系数；仅凭该点材质和面朝向不能恢复。
+    public float4 rcPrevIncident;
 };
 
 /// 20B配对shift缓存；pathThroughput沿用NV命名，实际为目标域完整shift integrand。

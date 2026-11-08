@@ -100,7 +100,7 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
         inverseGeometry = distanceSquared / abs(dot(dstPrevious.point.normal, -direction));
     }
     // 这些拒绝仍须保留最终 G；上方 delta/indexing 拒绝沿用原有不写回语义。
-    if (rcHasPosition && rcIsEmissive && !pointLight && !rcSurface.frontFacing)
+    if (rcHasPosition && rcIsEmissive && !pointLight && !scene.emissionSideSupported(rcSurface))
         return rejectReconnection(jacobian, source.reconnectionJacobian, destinationGeometry);
 
     float distanceThreshold;
@@ -152,6 +152,7 @@ public float3 shiftPathReconnection<Scene : IRestirScene>(inout Scene scene, Shi
     float secondPdf = 0.5 / 3.14159265358979323846;
     if (needSecond)
     {
+        rcSurface.incident.x = connection.incidentIor;
         int secondComponent = rcSurface.supportBSDFIndexing && !rcIsNEE
                                   ? int(source.pathFlags.decodeBSDFComponent(false))
                                   : -1;
@@ -195,6 +196,7 @@ public float3 shiftPathFromReplay<Scene : IRestirScene>(
             jacobian = 0.0;
             return 0.0;
         }
+        scene.setIncident(previousSurface, replay.rcPrevIncident);
         throughput *=
             shiftPathReconnection(scene, settings, primaryRayFootprint, replay.rcFootprintFactor,
                                   jacobian, previousSurface, source, useNEE, useMIS, previous);

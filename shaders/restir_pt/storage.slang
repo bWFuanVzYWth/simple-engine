@@ -26,7 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 
-/// 显式80/44/20B raw ABI，避免structured float3的后端布局或scalarBlockLayout feature隐含前提。
+/// 显式80/60/20B raw ABI，避免structured float3的后端布局或scalarBlockLayout feature隐含前提。
 /// host按这些逻辑stride分配；index乘法与末端访问须在实际buffer容量内。无量化、打包损失或边界钳制。
 module storage;
 import restir_pt.types;
@@ -34,7 +34,7 @@ import restir_pt.types;
 namespace restir_pt
 {
 public static const uint RESERVOIR_STRIDE = 80;
-public static const uint RECONNECTION_STRIDE = 44;
+public static const uint RECONNECTION_STRIDE = 60;
 public static const uint PRECOMPUTED_STRIDE = 20;
 
 /// 五组连续uint4覆盖全部80B；拼接只解释位模式，不改变任何FP32精度。
@@ -112,39 +112,41 @@ public PathReservoir load_replay_source(RWByteAddressBuffer buffer, uint index)
     return source;
 }
 
-ReconnectionData unpack_reconnection(uint4 a, uint4 b, uint3 c)
+ReconnectionData unpack_reconnection(uint4 a, uint4 b, uint3 c, uint4 medium)
 {
     ReconnectionData result;
     result.rcPrevHit.data = a;
     result.pathThroughput = asfloat(b.xyz);
     result.rcPrevWo = asfloat(uint3(b.w, c.xy));
     result.rcFootprintFactor = asfloat(c.z);
+    result.rcPrevIncident = asfloat(medium);
     return result;
 }
 
-/// 从ByteAddressBuffer读取一份44B状态；末次Load3严格停在记录末端。
+/// 从ByteAddressBuffer读取一份60B状态；介质紧接原有44B几何和throughput。
 public ReconnectionData load_reconnection(ByteAddressBuffer buffer, uint index)
 {
     uint offset = index * RECONNECTION_STRIDE;
     return unpack_reconnection(buffer.Load4(offset), buffer.Load4(offset + 16u),
-                               buffer.Load3(offset + 32u));
+                               buffer.Load3(offset + 32u), buffer.Load4(offset + 44u));
 }
 
-/// 从RWByteAddressBuffer读取一份44B状态；保留全部float位模式。
+/// 从RWByteAddressBuffer读取一份60B状态；保留全部float位模式。
 public ReconnectionData load_reconnection(RWByteAddressBuffer buffer, uint index)
 {
     uint offset = index * RECONNECTION_STRIDE;
     return unpack_reconnection(buffer.Load4(offset), buffer.Load4(offset + 16u),
-                               buffer.Load3(offset + 32u));
+                               buffer.Load3(offset + 32u), buffer.Load4(offset + 44u));
 }
 
-/// 写入完整44B；不访问相邻记录，也不为16B事务增加填充。
+/// 写入完整60B；不访问相邻记录，也不为16B事务增加填充。
 public void store_reconnection(RWByteAddressBuffer buffer, uint index, ReconnectionData value)
 {
     uint offset = index * RECONNECTION_STRIDE;
     buffer.Store4(offset, value.rcPrevHit.data);
     buffer.Store4(offset + 16u, uint4(asuint(value.pathThroughput), asuint(value.rcPrevWo.x)));
     buffer.Store3(offset + 32u, uint3(asuint(value.rcPrevWo.yz), asuint(value.rcFootprintFactor)));
+    buffer.Store4(offset + 44u, asuint(value.rcPrevIncident));
 }
 
 PrecomputedShiftData unpack_precomputed(uint4 a, uint b)

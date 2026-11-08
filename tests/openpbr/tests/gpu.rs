@@ -547,6 +547,301 @@ fn flow_compositions_preserve_the_complete_supported_closure() -> Result {
 }
 
 #[test]
+#[ignore = "真实GPU；连续介电在掠射、临界角和低粗糙度下须保持有限吞吐"]
+fn continuous_dielectric_extreme_samples_remain_finite() -> Result {
+    let mut state = 0x71e4_926du32;
+    let mut uniform = || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (state >> 8) as f32 / 16777216.
+    };
+    for exiting in [false, true] {
+        let mut cases = Vec::new();
+        for _ in 0..262_144 {
+            let cosine = 10.0f32.powf(-6. * uniform());
+            let roughness = 10.0f32.powf(-1.999 * uniform());
+            let ior = if uniform() < 0.5 { 1.33 } else { 1.5 };
+            cases.push(Case {
+                material: Material::dielectric(roughness, None)?,
+                view: [(1. - cosine * cosine).sqrt(), 0., cosine, 0.],
+                u: [uniform(), uniform(), uniform(), 0.],
+                incident: Medium::new(if exiting { ior } else { 1. }, [0.; 3])?,
+                transmitted: Medium::new(if exiting { 1. } else { ior }, [0.; 3])?,
+            });
+        }
+        let rows = run_shader(&cases, FLOWS[3], true)?;
+        let mut peak = 0.;
+        let mut worst = 0;
+        for (index, row) in rows.iter().enumerate() {
+            assert!(
+                row[1].iter().all(|v| v.is_finite()),
+                "case={:?} row={row:?}",
+                cases[index]
+            );
+            if row[1][3] > 0. {
+                let weight = row[1][0] / row[1][3];
+                assert!(weight.is_finite(), "case={:?} row={row:?}", cases[index]);
+                if weight > peak {
+                    peak = weight;
+                    worst = index;
+                }
+            }
+        }
+        eprintln!(
+            "exiting={exiting} peak={peak} case={:?} row={:?}",
+            cases[worst], rows[worst]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "真实GPU；所有白名单组合在数值边界的原始内核不得产生非有限响应"]
+fn composed_kernels_are_finite_before_sanitization() -> Result {
+    let edge = f32::from_bits(1.0f32.to_bits() - 1);
+    let randoms = [
+        [0., 0., 0.],
+        [edge, edge, edge],
+        [0.5, 0.5, 0.5],
+        [0., edge, 0.5],
+        [edge, 0., 0.5],
+        [0.25, 0.75, 0.],
+    ];
+    let cosines = [0., 1e-8_f32, 1e-5, 0.001, 0.1, 0.5, edge, 1.];
+    let mut failures = 0;
+    let mut tested = 0;
+    for (profile, shader) in FLOWS.into_iter().enumerate() {
+        let mut unique = std::collections::HashSet::new();
+        let mut cases = Vec::new();
+        for seed in flow_cases(profile)? {
+            let key = (
+                seed.material.to_words(),
+                seed.incident.to_array().map(f32::to_bits),
+                seed.transmitted.to_array().map(f32::to_bits),
+            );
+            if !unique.insert(key) {
+                continue;
+            }
+            for cosine in cosines {
+                let mut c = seed.clone();
+                c.view = [(1. - cosine * cosine).sqrt(), 0., cosine, 0.];
+                for u in randoms {
+                    c.u = [u[0], u[1], u[2], 6.];
+                    cases.push(c.clone());
+                }
+                for outgoing in [-1., -0.5, -1e-5, 0., 1e-5, 0.5, 1.] {
+                    c.u = [(1.0f32 - outgoing * outgoing).sqrt(), 0., outgoing, 7.];
+                    cases.push(c.clone());
+                }
+            }
+        }
+        if matches!(profile, 0..=4 | 14 | 16) {
+            let mut state = 0x453e_196b_u32;
+            let mut uniform = || {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                (state >> 8) as f32 / 16777216.
+            };
+            for index in 0..16_384 {
+                let ior_a = if index % 4 == 0 {
+                    1.
+                } else {
+                    1. + 3. * uniform()
+                };
+                let ior_b = match index % 4 {
+                    0 => f32::from_bits(1.0f32.to_bits() + 1),
+                    1 => ior_a,
+                    _ => 1. + 3. * uniform(),
+                };
+                let cosine = if index % 3 == 0 && ior_a > ior_b {
+                    let critical = (1. - (ior_b / ior_a).powi(2)).sqrt();
+                    f32::from_bits(
+                        critical
+                            .to_bits()
+                            .saturating_add_signed((index / 3) % 3 - 1),
+                    )
+                } else {
+                    10.0f32.powf(-8. * uniform())
+                };
+                let roughness = if index % 8 == 0 {
+                    0.01
+                } else {
+                    10.0f32.powf(-4. * uniform())
+                };
+                let roughness = if profile >= 14 {
+                    roughness.max(0.01)
+                } else {
+                    roughness
+                };
+                let material = match profile {
+                    3 => Material::dielectric(roughness, None)?,
+                    4 => Material::dielectric(roughness, Some(10.0f32.powf(-4. * uniform())))?,
+                    _ => Material::opaque(
+                        [uniform(), uniform(), uniform()],
+                        roughness,
+                        ior_b,
+                        if profile == 2 {
+                            1.
+                        } else if profile >= 14 {
+                            uniform()
+                        } else {
+                            0.
+                        },
+                        if matches!(profile, 1 | 16) {
+                            uniform()
+                        } else {
+                            0.
+                        },
+                    )?,
+                };
+                let phi = 2. * std::f32::consts::PI * uniform();
+                let sine = (1. - cosine * cosine).sqrt();
+                cases.push(Case {
+                    material,
+                    view: [sine * phi.cos(), sine * phi.sin(), cosine, 0.],
+                    u: [uniform(), uniform(), uniform(), 6.],
+                    incident: Medium::new(ior_a, [0.; 3])?,
+                    transmitted: Medium::new(ior_b, [0.2; 3])?,
+                });
+            }
+        }
+        let rows = run_shader(&cases, shader, true)?;
+        let mut count = 0;
+        let mut interior_count = 0;
+        for (c, row) in cases.iter().zip(&rows) {
+            let valid_sample = c.u[3] == 6. && row[2][0].to_bits() != 0;
+            let sample_ok = !valid_sample
+                || row[0].iter().chain(&row[1]).all(|x| x.is_finite())
+                    && row[1].iter().all(|x| *x >= 0.)
+                    && (row[1][3] == 0. || row[1][..3].iter().all(|x| (x / row[1][3]).is_finite()));
+            let evaluated_ok =
+                (c.u[3] == 6. && !valid_sample) || row[3].iter().all(|x| x.is_finite() && *x >= 0.);
+            if !sample_ok || !evaluated_ok {
+                if count < 1 || c.view[2] != 0. && interior_count < 2 {
+                    eprintln!("profile={profile} case={c:?} row={row:?}");
+                }
+                interior_count += usize::from(c.view[2] != 0.);
+                count += 1;
+            }
+        }
+        tested += cases.len();
+        failures += count;
+        eprintln!(
+            "profile={profile} tested={} nonfinite={count} interior={interior_count}",
+            cases.len()
+        );
+    }
+    assert_eq!(failures, 0, "{tested} 个原始内核边界案例中发现非有限响应");
+    Ok(())
+}
+
+#[test]
+#[ignore = "真实GPU；透射遮蔽在 Gamma 溢出区域仍与独立 Beta 递推一致"]
+fn transmission_masking_matches_integer_beta_identities() -> Result {
+    let mut cases = Vec::new();
+    let mut expected = Vec::new();
+    for roughness in [0.01_f32, 0.2, 1.] {
+        let alpha = f64::from(roughness).powi(2);
+        for cosine in [1e-8_f32, 1e-4, 0.1, 1.] {
+            let sine = (1. - cosine * cosine).sqrt();
+            let a =
+                (1. + (1. + (alpha * f64::from(sine) / f64::from(cosine)).powi(2)).sqrt()) * 0.5;
+            for n in [1_u32, 2, 8, 32] {
+                let outgoing =
+                    (alpha / (alpha * alpha + 4. * f64::from(n * (n - 1))).sqrt()) as f32;
+                cases.push(Case {
+                    material: Material::dielectric(roughness, None)?,
+                    view: [sine, 0., cosine, 0.],
+                    u: [(1. - outgoing * outgoing).sqrt(), 0., -outgoing, 0.],
+                    incident: Medium::VACUUM,
+                    transmitted: Medium::VACUUM,
+                });
+                let mut value = 1. / a;
+                for k in 1..n {
+                    value *= f64::from(k) / (a + f64::from(k));
+                }
+                expected.push(value);
+            }
+        }
+    }
+    let rows = run_shader(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
+        false,
+    )?;
+    for ((case, row), expected) in cases.iter().zip(rows).zip(expected) {
+        let actual = f64::from(row[0][0]);
+        assert!(
+            actual.is_finite() && (actual - expected).abs() <= 3e-4 * expected + 1e-37,
+            "{case:?}: {actual} != {expected}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "真实GPU；反射的掠射极限须保留有限的解析响应"]
+fn reflection_masking_preserves_the_grazing_limit() -> Result {
+    let mut cases = Vec::new();
+    for roughness in [0.01, 0.1, 1.] {
+        for cosine in [0., 1e-8_f32, 1e-4] {
+            cases.push(Case {
+                material: Material::dielectric(roughness, None)?,
+                view: [(1. - cosine * cosine).sqrt(), 0., cosine, 0.],
+                u: [0.6, 0., 0.8, 1.],
+                incident: Medium::VACUUM,
+                transmitted: Medium::VACUUM,
+            });
+        }
+    }
+    let rows = run_shader(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
+        false,
+    )?;
+    for (case, row) in cases.iter().zip(rows) {
+        let alpha = f64::from(f32::from_bits(case.material.to_words()[3])).powi(2);
+        let ci = f64::from(case.view[2]);
+        let co = f64::from(case.u[2]);
+        let expected = if ci == 0. {
+            1. / (2. * alpha)
+        } else {
+            let li = (1. + (alpha * f64::from(case.view[0]) / ci).powi(2)).sqrt();
+            let lo = (1. + (alpha * f64::from(case.u[0]) / co).powi(2)).sqrt();
+            1. / (2. * ci * (li + lo))
+        };
+        assert!(
+            (f64::from(row[0][1]) / expected - 1.).abs() < 5e-6,
+            "{case:?}: {row:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要 Vulkan compute：RR方向能量组合与独立通用参考一致"]
+fn flow_guide_energy_preserves_supported_materials() -> Result {
+    for (profile, shader) in FLOWS.into_iter().enumerate() {
+        let mut cases: Vec<_> = flow_cases(profile)?.into_iter().step_by(16).collect();
+        for case in &mut cases {
+            case.u[3] = 5.;
+        }
+        let actual = run_shader(&cases, shader, true)?;
+        let reference = run(&cases)?;
+        for (index, (actual, reference)) in actual.iter().zip(&reference).enumerate() {
+            for row in 0..2 {
+                for channel in 0..3 {
+                    let (a, b) = (actual[row][channel], reference[row][channel]);
+                    assert!(
+                        a.is_finite() && b.is_finite() && (a - b).abs() <= 3e-5 * b.abs().max(1.),
+                        "profile={profile} case={index} row={row} channel={channel}: {a} != {b}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "需要 Vulkan compute：组合顶点共享准备与独立查询具有相同输出"]
 fn flow_batch_shares_preparation_without_changing_the_vertex() -> Result {
     for (profile, shared, separate) in [

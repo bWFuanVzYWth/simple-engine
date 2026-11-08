@@ -38,15 +38,21 @@ public BsdfSample material_sample<let Flow : uint>(Surface surface, pt::SurfaceM
     return result;
 }
 
-/// 沿连接方向的实际均匀介质Beer；非solid程序不包含穿界分支或transmitted读取。
+/// 连接段介质；非solid程序不包含穿界分支或transmitted读取。
+public float4 material_medium<let Flow : uint>(Surface surface, pt::SurfaceMaterial material,
+                                               float3 direction)
+{
+    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
+        dot(surface.wo, surface.point.normal) * dot(direction, surface.point.normal) < 0)
+        return material.transmitted;
+    return surface.incident;
+}
+
+/// 沿连接方向的实际均匀介质Beer。
 public float3 material_transmittance<let Flow : uint>(Surface surface, pt::SurfaceMaterial material,
                                                       float3 direction, float distance)
 {
-    float3 extinction = surface.incident.yzw;
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
-        dot(surface.wo, surface.point.normal) * dot(direction, surface.point.normal) < 0)
-        extinction = material.transmitted.yzw;
-    return exp(-extinction * distance);
+    return exp(-material_medium<Flow>(surface, material, direction).yzw * distance);
 }
 
 /// 重连第一端同时产生BSDF与Beer；第二端应使用纯evaluate_flow，不能为距离0搬运介质RGB。
@@ -58,7 +64,7 @@ public ConnectionEvaluation evaluate_connection<let Flow : uint>(Surface surface
     openpbr::Evaluation evaluated =
         openpbr::evaluate_flow<Flow>(energy, material.pbr, material_normal(surface, material),
                                      surface.wo, direction, surface.incident, material.transmitted);
-    return { { evaluated.response, evaluated.pdf },
-             material_transmittance<Flow>(surface, material, direction, distance) };
+    float4 medium = material_medium<Flow>(surface, material, direction);
+    return { { evaluated.response, evaluated.pdf }, exp(-medium.yzw * distance), medium.x };
 }
 }

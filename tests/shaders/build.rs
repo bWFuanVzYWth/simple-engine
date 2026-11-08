@@ -5,6 +5,12 @@ use simple_engine::shader_library;
 fn main() -> Result<(), shader_build::Error> {
     let recipes = [
         (
+            "shaders/cone.slang",
+            "cone_main",
+            "compute",
+            "cone_main.spv",
+        ),
+        (
             "shaders/fixed_mixture.slang",
             "fixed_mixture_main",
             "compute",

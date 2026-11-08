@@ -2,6 +2,7 @@
 module pt_scene_test;
 
 import pt.integrator;
+import pt_scene_reference;
 import geometry.ray;
 import bsdf.openpbr.api;
 import bsdf.openpbr.specialized;
@@ -73,8 +74,13 @@ public struct PaletteScene : IFlowScene
     }
 };
 
-public struct AttributeScene : IScene
+public struct AttributeScene : IScene, IDeltaPrefixScene
 {
+    public DeltaInterface delta_interface(Hit hit, float4 incident)
+    {
+        return { hit.surface.normal, float4(1, inputs[hit.identity.y + 2].xyz),
+                 hit.texel.xyz * inputs[hit.identity.y].xyz };
+    }
     public SurfaceMaterial resolve(Hit hit, uint capability, float4 incident)
     {
         float3 color = hit.texel.xyz * inputs[hit.identity.y].xyz;
@@ -162,7 +168,7 @@ void pt_scene_main(uint3 id: SV_DispatchThreadID)
         palette.path.depth = 1;
         attributes.path.depth = 1;
         process_flow<1155, PaletteScene>(PaletteScene(), palette, settings);
-        process_material<openpbr::CAP_OPAQUE_DIELECTRIC, true, true, AttributeScene>(
+        process_reference_material<openpbr::CAP_OPAQUE_DIELECTRIC, true, true, AttributeScene>(
             AttributeScene(), attributes, settings);
     }
     else
@@ -174,8 +180,7 @@ void pt_scene_main(uint3 id: SV_DispatchThreadID)
             attributes.path.depth = 64;
         }
         process_flow<272, PaletteScene>(PaletteScene(), palette, settings);
-        process_material<openpbr::CAP_DELTA_SOLID_DIELECTRIC, false, false, AttributeScene>(
-            AttributeScene(), attributes, settings);
+        process_delta_prefix(AttributeScene(), attributes, settings);
     }
     store_path(id.x * 14, palette.path);
     store_path(id.x * 14 + 7, attributes.path);

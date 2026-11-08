@@ -14,18 +14,6 @@ import "bsdf/openpbr/contract/flags.slang";
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public float primeFullCompactMicrofacetG2r(PrimeFullOpenPbrMicrofacet microfacet, float3 wi,
-                                           float3 wo)
-{
-    if (wi.z < 0.0)
-    {
-        wi = -wi;
-        wo = -wo;
-    }
-    return 1.0 / (primeFullOpenPbrMicrofacetLambda(microfacet, -wi) +
-                  primeFullOpenPbrMicrofacetLambda(microfacet, wo));
-}
-
 // 连续 core 仅供已证明 max(alpha)>=1e-4 且实际界面 ior!=1 的 solid 入口。
 // 通用入口保留原光滑／匹配 IOR 分流；连续物理公式与后处理共用。
 public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEval(
@@ -70,13 +58,15 @@ public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEvalContinuous(
     float distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
     if (reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION) != 0u)
     {
-        result.value = rt.first * distribution * primeFullCompactMicrofacetG2r(microfacet, wi, wo) /
-                       (4.0 * abs(wi.z));
+        result.value =
+            rt.first * distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
         result.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
     }
     else if (!reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION) != 0u)
     {
-        float denominator = primeFullOpenPbrSquare(microOutgoing + microIncident / etaPath) * wi.z;
+        float denominator = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                                etaPath, microIncident, microOutgoing)) *
+                            wi.z;
         result.value = rt.second * distribution *
                        primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
                        abs(microIncident * microOutgoing / denominator);
@@ -112,14 +102,15 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactRefractiveEvaluate
     float distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
     if (reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION) != 0u)
     {
-        result.throughput.value = rt.first * distribution *
-                                  primeFullCompactMicrofacetG2r(microfacet, wi, wo) /
-                                  (4.0 * abs(wi.z));
+        result.throughput.value =
+            rt.first * distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
         result.throughput.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
     }
     else if (!reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION) != 0u)
     {
-        float denominator = primeFullOpenPbrSquare(microOutgoing + microIncident / etaPath) * wi.z;
+        float denominator = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                                etaPath, microIncident, microOutgoing)) *
+                            wi.z;
         result.throughput.value = rt.second * distribution *
                                   primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
                                   abs(microIncident * microOutgoing / denominator);
@@ -142,7 +133,8 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactRefractiveEvaluate
             microfacetPdf / (4.0 * abs(microIncident)) * reflectionProbability / probabilitySum;
     else
     {
-        float denominator = primeFullOpenPbrSquare(microOutgoing + microIncident / etaPath);
+        float denominator = primeFullOpenPbrSquare(
+            primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
         result.pdf = microfacetPdf * abs(microOutgoing) / denominator * transmissionProbability /
                      probabilitySum;
     }
@@ -218,7 +210,8 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
         result.throughput.value = transmission;
         result.pdf = transmissionProbability / probabilitySum;
         float microOutgoing = dot(wo, halfVector);
-        float denominator = primeFullOpenPbrSquare(microOutgoing + microIncident / etaPath);
+        float denominator = primeFullOpenPbrSquare(
+            primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
         result.pdf *= microfacetPdf * abs(microOutgoing) / denominator;
         result.throughput.value = transmission * distribution *
                                   primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
@@ -237,9 +230,8 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
         result.throughput.value = reflection;
         result.pdf = reflectionProbability / probabilitySum;
         result.pdf *= microfacetPdf / (4.0 * abs(microIncident));
-        result.throughput.value = reflection * distribution *
-                                  primeFullCompactMicrofacetG2r(microfacet, wi, wo) /
-                                  abs(4.0 * wi.z);
+        result.throughput.value =
+            reflection * distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
         result.throughput.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
     }
     return result;
@@ -306,7 +298,8 @@ public float primeFullCompactRefractivePdfContinuous(float3 wi, float3 wo,
     {
         return microfacetPdf / (4.0 * abs(microIncident)) * reflectionProbability / probabilitySum;
     }
-    float denominator = primeFullOpenPbrSquare(microOutgoing + microIncident / etaPath);
+    float denominator = primeFullOpenPbrSquare(
+        primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
     return microfacetPdf * abs(microOutgoing) / denominator * transmissionProbability /
            probabilitySum;
 }
