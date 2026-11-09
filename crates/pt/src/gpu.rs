@@ -31,6 +31,9 @@ pub struct Programs<'a> {
     pub prefix: Option<RayShader<'a>>,
     /// K2：完整输运 raygen。
     pub transport: RayShader<'a>,
+    /// 可选实时2 spp双pass：先写第一条路径的未归一化辐射，再读取并完成第二条。
+    /// 两个入口复用同一绑定、Hit Group和callable；最后一个入口产出完整post输入。
+    pub transport_pair: Option<[RayShader<'a>; 2]>,
     /// 场景 miss。
     pub miss: RayShader<'a>,
     /// 场景几何命中重建。
@@ -54,6 +57,7 @@ pub struct Renderer {
     primary: Option<RayTracingPipeline>,
     prefix: Option<RayTracingPipeline>,
     transport: RayTracingPipeline,
+    transport_pair: Option<[RayTracingPipeline; 2]>,
     post: ComputePipeline,
     extent: [u32; 2],
 }
@@ -107,11 +111,29 @@ impl Renderer {
             programs.any_hit,
             programs.callables,
         )?;
+        let transport_pair = programs
+            .transport_pair
+            .map(|pair| {
+                let mut create = |raygen| {
+                    RayTracingPipeline::with_hit_groups(
+                        context,
+                        trace,
+                        raygen,
+                        programs.miss,
+                        &hits,
+                        programs.any_hit,
+                        programs.callables,
+                    )
+                };
+                Ok::<_, vulkan::Error>([create(pair[0])?, create(pair[1])?])
+            })
+            .transpose()?;
         let post = ComputePipeline::new(context, post, programs.post)?;
         Ok(Self {
             primary,
             prefix,
             transport,
+            transport_pair,
             post,
             extent,
         })
@@ -142,6 +164,15 @@ impl Renderer {
                 .map(|prefix| prefix.rebind(context, trace))
                 .transpose()?,
             transport: self.transport.rebind(context, trace)?,
+            transport_pair: self
+                .transport_pair
+                .map(|pair| {
+                    Ok::<_, vulkan::Error>([
+                        pair[0].rebind(context, trace)?,
+                        pair[1].rebind(context, trace)?,
+                    ])
+                })
+                .transpose()?,
             post: self.post.rebind(context, post)?,
             extent,
         })
@@ -154,9 +185,15 @@ impl Renderer {
             .into_iter()
             .chain(self.primary.map(Resource::from))
             .chain([self.transport.into(), self.post.into()])
+            .chain(
+                self.transport_pair
+                    .into_iter()
+                    .flatten()
+                    .map(Resource::from),
+            )
     }
 
-    /// 按兼容前缀、输运顺序返回驱动可执行统计；省略前缀时第一个向量为空，须显式启用native统计能力。
+    /// 按兼容前缀、单dispatch输运顺序返回驱动可执行统计；省略前缀时第一个向量为空，须显式启用native统计能力。
     /// 不执行GPU，不含首视线、独立guide和compute后处理；资源或查询错误原样返回。
     pub fn executable_statistics(
         &self,
@@ -171,6 +208,22 @@ impl Renderer {
         ])
     }
 
+    /// 两个实时输运入口各自的驱动可执行统计；未准备双pass时返回None。
+    /// 须显式启用native统计能力，不执行GPU；查询失败保留底层错误。
+    pub fn transport_pair_statistics(
+        &self,
+        context: &Context,
+    ) -> Result<Option<[Vec<vulkan::native::ExecutableStatistics>; 2]>, Error> {
+        self.transport_pair
+            .map(|pair| {
+                Ok([
+                    pair[0].executable_statistics(context)?,
+                    pair[1].executable_statistics(context)?,
+                ])
+            })
+            .transpose()
+    }
+
     /// 目标宽高；公共 HDR 按左上原点解释，宿主呈现转换单独执行。
     pub const fn extent(&self) -> [u32; 2] {
         self.extent
@@ -182,23 +235,34 @@ impl Renderer {
         self.record_inner(context, samples, None)
     }
 
-    /// 实时四阶段：首视线、可选确定性导引、输运、后处理。输运在一次dispatch中
-    /// 消费1 spp随机或2 spp分离策略；首命中和导引每帧只生成一次。
+    /// 实时四阶段：首视线、可选确定性导引、输运、后处理。
+    /// `split_transport`仅用于2 spp分离策略，须与绑定参数中的样本数一致；
+    /// 为true时使用预备的两个输运入口及中间可见性屏障，否则使用原单dispatch入口。
+    /// 首命中、导引和后处理每帧各执行至多一次。
     /// guide须与trace绑定相同的首命中ABI；调用者保活其资源。
     /// queries若提供须恰有六槽，依次包围首视线、输运和后处理；guide_queries须有两槽。
     ///
     /// # Errors
-    /// 未配置首视线、查询容量不符或录制失败时返回错误，不提交命令。
+    /// 未配置首视线或所请求的双pass、查询容量不符或录制失败时返回错误，不提交命令。
     pub fn record_realtime(
         &self,
         context: &mut Context,
         guide: Option<RayTracingPipeline>,
+        split_transport: bool,
         queries: Option<TimestampQueries>,
         guide_queries: Option<TimestampQueries>,
     ) -> Result<Recorded, Error> {
         let primary = self
             .primary
             .ok_or(vulkan::Error::InvalidArgument("未配置实时首视线"))?;
+        let transport = if split_transport {
+            self.transport_pair
+                .as_ref()
+                .ok_or(vulkan::Error::InvalidArgument("未配置实时双pass输运"))?
+                .as_slice()
+        } else {
+            std::slice::from_ref(&self.transport)
+        };
         if queries.is_some_and(|q| q.len() != 6) {
             return Err(vulkan::Error::InvalidArgument("实时PT timestamp须为六槽").into());
         }
@@ -233,8 +297,10 @@ impl Renderer {
         if let Some(q) = queries {
             commands.write_timestamp(q, 2)?;
         }
-        commands.trace(self.transport, self.extent)?;
-        commands.barrier();
+        for &pipeline in transport {
+            commands.trace(pipeline, self.extent)?;
+            commands.barrier();
+        }
         if let Some(q) = queries {
             commands.write_timestamp(q, 3)?;
             commands.write_timestamp(q, 4)?;

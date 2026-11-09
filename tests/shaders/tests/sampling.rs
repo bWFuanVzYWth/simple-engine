@@ -261,6 +261,52 @@ fn roulette_probability_has_no_survival_floor_or_upper_cap() -> Result {
 
 #[test]
 #[ignore = "需要真实 Vulkan compute GPU"]
+fn square_root_roulette_uses_eta_corrected_throughput() -> Result {
+    let cases: Vec<_> = RR_CASES
+        .into_iter()
+        .chain([([f32::MIN_POSITIVE; 3], 1.0), ([f32::MAX, 0.0, 0.0], 1.0)])
+        .collect();
+    let input: Vec<_> = cases
+        .iter()
+        .map(|&(beta, eta)| rr_input(beta, eta, [1.0f32.to_bits(), 2, 2, 2]))
+        .collect();
+    let output = execute(&[(PROBABILITY, &input)])?;
+    for (row, (beta, eta)) in output[0].iter().zip(cases) {
+        let expected = (beta.into_iter().map(f64::from).fold(0.0, f64::max) * f64::from(eta))
+            .sqrt()
+            .min(1.0);
+        let actual = f64::from(f32::from_bits(row[0]));
+        assert!(actual.is_finite() && (0.0..=1.0).contains(&actual));
+        assert!((actual - expected).abs() <= expected * 2e-6);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn square_root_roulette_reweight_preserves_the_uniform_integral() -> Result {
+    // 这些存活率落在积分网格边界，Bernoulli有限积分有精确的解析期望。
+    let cases = [
+        ([0.0; 3], 1.0),
+        ([1.0 / 65536.0, 0.0, 0.0], 1.0),
+        ([0.0625, 0.03125, 0.0], 1.0),
+        ([0.25, 0.125, 0.0625], 1.0),
+        ([0.25, 0.125, 0.0625], 4.0),
+        ([2.0, 1.0, 0.5], 1.0),
+    ];
+    let input: Vec<_> = cases
+        .iter()
+        .map(|&(beta, eta)| rr_input(beta, eta, [4096, 1, 0, 0]))
+        .collect();
+    let output = execute(&[(MEAN, &input)])?;
+    for (row, (expected, _)) in output[0].iter().zip(cases) {
+        assert_eq!([row[0], row[2], row[3]].map(f32::from_bits), expected);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
 fn roulette_preserves_the_finite_uniform_integral() -> Result {
     let input: Vec<_> = RR_CASES
         .iter()
@@ -280,14 +326,20 @@ fn dielectric_eta_compensation_preserves_the_roulette_metric() -> Result {
     let cases: Vec<_> = [0.5, 1.0, 1.33, 1.5, 2.0]
         .into_iter()
         .flat_map(|eta| [[1.0; 3], [0.125, 0.25, 0.5]].map(move |beta| (beta, eta)))
+        .flat_map(|(beta, eta)| [false, true].map(move |square_root| (beta, eta, square_root)))
         .collect();
     let input: Vec<_> = cases
         .iter()
-        .map(|&(beta, eta)| rr_input(beta, eta, [0; 4]))
+        .map(|&(beta, eta, square_root)| rr_input(beta, eta, [u32::from(square_root), 0, 0, 0]))
         .collect();
     let output = execute(&[(ETA, &input)])?;
-    for (row, (beta, _)) in output[0].iter().zip(cases) {
+    for (row, (beta, _, square_root)) in output[0].iter().zip(cases) {
         let expected = beta.into_iter().fold(0.0f32, f32::max);
+        let expected = if square_root {
+            expected.sqrt()
+        } else {
+            expected
+        };
         for channel in [0, 2] {
             assert!((f32::from_bits(row[channel]) - expected).abs() <= 2e-6);
         }

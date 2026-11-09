@@ -232,7 +232,7 @@ void denoise_prefix_main(uint3 id: SV_DispatchThreadID)
     with_guides.path.throughput = 1;
     with_guides.path.eta_scale = 1;
     TransportCall without_guides = with_guides;
-    Settings settings = { 0, 3, 8, 8 };
+    Settings settings = { 0, 3, 8, 8, false };
     float first, other_first;
     trace_prefix(PrefixScene(), with_guides, settings, first, PrefixGuides());
     trace_prefix(PrefixScene(), without_guides, settings, other_first);

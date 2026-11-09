@@ -169,7 +169,8 @@ public void process_reference_material<let Capability : uint, let Emissive : boo
         status = PATH_DONE;
     else if (path.depth + 1 >= 2)
     {
-        float survival = roulette_probability(path.throughput, path.eta_scale);
+        float survival =
+            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)

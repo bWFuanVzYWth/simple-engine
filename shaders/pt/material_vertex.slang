@@ -206,7 +206,8 @@ public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
         status = PATH_DONE;
     else if (depth + 1u >= 2u)
     {
-        float survival = roulette_probability(call.throughput, call.eta_scale);
+        float survival =
+            roulette_probability(call.throughput, call.eta_scale, settings.square_root_roulette);
         if (survival == 0 || (survival < 1 && sampler.roulette(depth) >= survival))
             status = PATH_DONE;
         else if (survival < 1)

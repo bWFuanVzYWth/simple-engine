@@ -106,7 +106,8 @@ public void process_delta_prefix<Scene>(Scene scene, inout TransportCall data, S
         status = PATH_DONE;
     else if (path.depth + 1 >= 2)
     {
-        float survival = roulette_probability(path.throughput, path.eta_scale);
+        float survival =
+            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)
@@ -381,7 +382,8 @@ public void process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
         status = PATH_DONE;
     else if (CompleteTransport && path.depth + 1 >= 2)
     {
-        float survival = roulette_probability(path.throughput, path.eta_scale);
+        float survival =
+            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)

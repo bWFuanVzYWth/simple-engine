@@ -161,7 +161,7 @@ void pt_scene_main(uint3 id: SV_DispatchThreadID)
     attributes.hit.identity.x = 0xffffffffu;
     attributes.hit.identity.y = base + 1;
     attributes.hit.texel = inputs[base];
-    Settings settings = { 17, 1, 8, 8 };
+    Settings settings = { 17, 1, 8, 8, false };
     uint mode = asuint(inputs[base + 3].w);
     if (mode == 0)
     {

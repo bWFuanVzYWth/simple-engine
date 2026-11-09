@@ -11,6 +11,7 @@
 //! 通道号与已完成路径的辐射和。材质解码、选灯、阴影、BSDF、MIS和roulette均在特化叶子中。
 //! 首面启发式按界面反射／进入内部平衡提案；漫反射与薄层SSS属于后者。
 //! 1 spp随机选组，2 spp对选择维度分层，单一组退化为两份样本。响应不改，MIS消费新密度。
+//! 性能档使用1 spp与线性轮盘；质量档使用2 spp与平方根轮盘，均保留eta补偿和存活重权。
 //! 后续反弹、离线参考及ReSTIR保留材质概率。离线入口不生成导引，逐样本追踪完整路径，
 //! 后处理仅负责累计。未启用HitObject能力的设备保留原callable兼容入口。
 //! 共享输运包含Beer、发光、NEE/MIS、OpenPBR和eta-aware RR；末顶点保留发光与NEE，
@@ -42,30 +43,30 @@
 
 pub mod history;
 
-/// 实时首表面的重建采样策略；只调整界面反射与进入内部的提案选择。
-/// 后续反弹仍按材质概率采样；离线累计的任意批大小不使用此枚举。
+/// 实时采样策略：共同选择首表面样本覆盖与后续路径的轮盘启发式。
+/// 后续BSDF仍按材质概率采样；离线累计的任意批大小不使用此枚举。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PrimarySampling {
-    /// 单条路径；两类有效贡献各以1/2概率选取，单一有效类别以概率1选取。
+pub enum SamplingStrategy {
+    /// 单条路径、线性轮盘；首面两类有效贡献各以1/2概率选取，单一类别以概率1选取。
     #[default]
-    Random,
-    /// 共用首视线的两条路径；选择维度各取一个半区，单一类别得到两个独立样本。
-    Separated,
+    Performance,
+    /// 共用首视线的两条路径、平方根轮盘；选择维度各取一个半区，单一类别得到两份样本。
+    Quality,
 }
 
-impl PrimarySampling {
+impl SamplingStrategy {
     /// 每像素本帧的实际输运路径数。
     pub const fn samples(self) -> u32 {
         match self {
-            Self::Random => 1,
-            Self::Separated => 2,
+            Self::Performance => 1,
+            Self::Quality => 2,
         }
     }
     /// 切换实时策略；不隐式修改路径预算、ReSTIR或重建参数。
     pub const fn next(self) -> Self {
         match self {
-            Self::Random => Self::Separated,
-            Self::Separated => Self::Random,
+            Self::Performance => Self::Quality,
+            Self::Quality => Self::Performance,
         }
     }
 }

@@ -91,6 +91,8 @@ public struct Settings
     public uint budget;
     public uint resolution;
     public uint dielectric_limit;
+    /// 对eta补偿后的吞吐量使用平方根轮盘；仅改变存活概率，存活路径仍除以该概率。
+    public bool square_root_roulette;
 };
 
 /// callable 交接的紧凑命中、路径和绝对样本身份；不允许嵌套 callable 或 TraceRay。

@@ -21,11 +21,16 @@ public bool roulette_applies(uint completed_scatters, uint minimum_completed_sca
     return completed_scatters >= minimum_completed_scatters;
 }
 
-/// p=clamp(maxRGB(throughput)*eta_scale,0,1)。p=0 结束，p=1 原样继续；两者均不取随机数。
+/// 线性策略p=clamp(maxRGB(throughput)*eta_scale,0,1)，平方根策略返回sqrt(p)。
+/// 平方根启发式来自Cycles path_state_continuation_probability；这里保留eta补偿。
+/// https://github.com/blender/blender/blob/0dc747e6a9277155ad85fc0644c4e0e17a4c0d20/intern/cycles/kernel/integrator/path_state.h#L273
+/// p=0 结束，p=1 原样继续；两者均不取随机数。
 /// 仅 0<p<1 时取独立均匀 u，以 u<p 决定存活，再调用 roulette_reweight。
-public float roulette_probability(float3 throughput, float eta_scale)
+public float roulette_probability(float3 throughput, float eta_scale, bool square_root = false)
 {
-    return clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
+    float probability =
+        clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
+    return square_root ? sqrt(probability) : probability;
 }
 
 /// 仅用于 0<p<1 的存活事件；条件贡献除以 p，保持期望。p=1 路径不需要调用。
