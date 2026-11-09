@@ -1,4 +1,5 @@
 /// ReSTIR PT 场景边界；距离为场景单位，RGB 沿用宿主的线性色域。
+/// 当前已冻结应用集成；保留引擎算法。状态、实验依据与适用限制见 restir_pt crate 模块文档。
 /// loadSurface 必须从稳定 HitInfo 恢复同一几何，不能将已失效的 primitive 身份解释为新版本。
 /// 历史几何已经失效时返回 hit 无效的零 Surface，由 shift 局部拒绝该路径。
 module scene;
