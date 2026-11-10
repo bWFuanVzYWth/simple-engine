@@ -3,12 +3,13 @@
 /// uint4 buffer 按 sibling pair 保存树；base 以 uint4 为单位。L 个灯有 L-1 对，根为 pair 0。
 /// 每至多四对一块：先存每对左右 center.xyz/power（32B），再存每对 child0/child1（8B）。
 /// 完整块160B；末块按实际对数紧存。叶目录起点 base+roundup(10*(L-1),8)/4，
-/// 每灯两项：lower.xyz/fallback edge²、upper.xyz/path。编码见 light_bvh::Tree::words。
+/// 每灯两项：lower.xyz/edge²、upper.xyz/path。编码见 light_bvh::Tree::words。
 /// child 高位标记叶且低位为原始灯索引，否则为 pair 索引；L<=1 时不读取树数据。
 /// 查询携带子树叶数 n，由固定 median 二分推导 n/2 与 n-n/2，不新增目录或身份映射。
 /// 任意朝向、非平面 quad 均合法；不能将该数量推导用于其他树拓扑。
 /// path 低 27 位按根到叶保存左右选择，高 5 位为深度；树最多 2^24 叶，深度最多 24。
 /// 以功率/距离平方选择分支，在 24-bit 随机格点上量化，且为每个后代保留至少一个格点。
+/// 叶子分母为质心距离²+(|v1-v0|²+|v3-v0|²)/4，平滑近灯与盒内查询；内部节点不平滑。
 module light_bvh;
 
 namespace pt
@@ -63,15 +64,7 @@ float2 light_bvh_metrics(StructuredBuffer<uint4> words, uint leaf_base, LightBvh
     if ((node.child & LIGHT_BVH_LEAF) != 0)
     {
         uint at = node.child & ~LIGHT_BVH_LEAF;
-        uint4 lower_record = words[leaf_base + 2u * at];
-        float3 lower = asfloat(lower_record.xyz);
-        float3 upper = asfloat(words[leaf_base + 2u * at + 1u].xyz);
-        delta = point - clamp(point, lower, upper);
-        float bounds_distance_squared = dot(delta, delta);
-        if (bounds_distance_squared > 0)
-            distance_squared = bounds_distance_squared;
-        if (distance_squared == 0)
-            distance_squared = asfloat(lower_record.w);
+        distance_squared += 0.25 * asfloat(words[leaf_base + 2u * at].w);
     }
     return float2(distance_squared, node.power);
 }

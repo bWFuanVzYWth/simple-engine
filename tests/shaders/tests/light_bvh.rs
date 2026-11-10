@@ -123,9 +123,8 @@ fn receiver_distance_changes_selection_and_reverse_pmf() -> Result {
         })
         .collect();
     let rows = run(&[tree], &queries)?;
-    // 两灯等功率，距接收点分别为 1 和 3，解析离散权重为 9:1；另一侧交换此比例。
-    let near_count = (f64::from(SELECTORS) * 0.9).round_ties_even() as u32;
-    let near = near_count as f32 * STEP;
+    // 单位正方形的平滑尺度为1/2，距离分母为1.5和9.5，解析权重为19:3。
+    let near = 19.0 / 22.0;
     for (receiver, batch) in rows.chunks(SAMPLES as usize).enumerate() {
         let pmf = if receiver == 0 {
             [near, 1.0 - near]
@@ -137,14 +136,13 @@ fn receiver_distance_changes_selection_and_reverse_pmf() -> Result {
             let selected = row[0] as usize;
             assert!(selected < 2, "选灯索引越界：{row:?}");
             hits[selected] += 1;
-            assert_eq!(row[1], pmf[selected].to_bits(), "前向 PMF 未匹配解析分布");
-            assert_eq!(
-                row[2],
-                pmf[index & 1].to_bits(),
-                "反向 PMF 未依赖同一接收点"
-            );
+            assert!((f32::from_bits(row[1]) - pmf[selected]).abs() <= STEP);
+            assert!((f32::from_bits(row[2]) - pmf[index & 1]).abs() <= STEP);
+            if selected == index & 1 {
+                assert_eq!(row[1], row[2], "正反向必须使用相同量化PMF");
+            }
         }
-        assert!((hits[0] as f32 / SAMPLES as f32 - pmf[0]).abs() <= 1.0 / SAMPLES as f32);
+        assert!((hits[0] as f32 / SAMPLES as f32 - pmf[0]).abs() <= STEP + 1.0 / SAMPLES as f32);
     }
     Ok(())
 }
@@ -189,7 +187,7 @@ fn half_selector_ties_round_to_even_in_selection_and_replay() -> Result {
 #[ignore = "需要 Vulkan compute；由 GPU 验收串行运行"]
 fn receiver_at_leaf_centroid_keeps_power_distribution_finite() -> Result {
     let tree = Tree::build(&[quad(1.0, 1.0), quad(1.0, 3.0)])?;
-    // 接收点恰为两个重合正方形的面积质心，距离评分须使用非零备用尺度。
+    // 接收点恰为两个重合正方形的面积质心，平滑尺度仍保持非零。
     let center = 0.5;
     let queries: Vec<_> = [(0.0, 0), (0.5, 1)]
         .map(|(sample, reverse)| Query {
@@ -209,6 +207,31 @@ fn receiver_at_leaf_centroid_keeps_power_distribution_finite() -> Result {
         assert_eq!(row[0], query.reverse);
         assert_eq!(row[1], expected.to_bits());
         assert_eq!(row[2], expected.to_bits());
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要 Vulkan compute；由 GPU 验收串行运行"]
+fn crossing_a_light_plane_keeps_selection_continuous() -> Result {
+    let tree = Tree::build(&[quad(1.0, 1.0), quad(3.0, 1.0)])?;
+    let queries: Vec<_> = [1.0 - 1e-4, 1.0, 1.0 + 1e-4]
+        .into_iter()
+        .flat_map(|x| {
+            [(0.25, 0), (0.95, 1)].map(move |(sample, reverse)| Query {
+                tree: 0,
+                point: [x, 0.5, 0.5],
+                sample,
+                reverse,
+            })
+        })
+        .collect();
+    let rows = run(&[tree], &queries)?;
+    for (row, query) in rows.iter().zip(&queries) {
+        assert_eq!(row[0], query.reverse);
+        assert_eq!(row[1], row[2]);
+        let expected = if query.reverse == 0 { 0.9 } else { 0.1 };
+        assert!((f32::from_bits(row[1]) - expected).abs() < 3e-5);
     }
     Ok(())
 }
@@ -255,34 +278,54 @@ fn rare_lights_retain_selector_support_and_matching_reverse_pmf() -> Result {
 
 #[test]
 #[ignore = "需要 Vulkan compute；由 GPU 验收串行运行"]
-fn median_subtrees_keep_uniform_support_across_partial_blocks() -> Result {
+fn median_subtrees_keep_full_support_across_partial_blocks() -> Result {
     let counts = [6, 7, 8, 9, 10, 127];
     let trees: Vec<_> = counts
         .map(|count| Tree::build(&vec![quad(1.0, 1.0); count]))
         .into_iter()
         .collect::<std::result::Result<_, _>>()?;
-    // 重合等功率灯使所有分支的距离相同；量化只允许少数格点误差，不能丢失奇数侧的叶。
+    // 奇数子树会让未平滑内部节点与平滑叶子成为兄弟；分布可以不均匀，但不能丢失叶子。
+    const SAMPLES: usize = 1024;
     let queries: Vec<_> = counts
         .into_iter()
         .enumerate()
         .flat_map(|(tree, count)| {
-            (0..count).map(move |light| Query {
-                tree,
-                point: [0.0, 0.5, 0.5],
-                sample: (light as f32 + 0.5) / count as f32,
-                reverse: light as u32,
-            })
+            (0..count)
+                .map(move |light| Query {
+                    tree,
+                    point: [0.0, 0.5, 0.5],
+                    sample: 0.5,
+                    reverse: light as u32,
+                })
+                .chain((0..SAMPLES).map(move |index| Query {
+                    tree,
+                    point: [0.0, 0.5, 0.5],
+                    sample: (index as f32 + 0.5) / SAMPLES as f32,
+                    reverse: u32::MAX,
+                }))
         })
         .collect();
     let rows = run(&trees, &queries)?;
-    let mut total = vec![0.0; counts.len()];
-    for (row, query) in rows.iter().zip(&queries) {
-        assert_eq!(row[0], query.reverse);
-        assert_eq!(row[1], row[2]);
-        let probability = f32::from_bits(row[1]);
-        assert!((probability - 1.0 / counts[query.tree] as f32).abs() <= 2.0 * STEP);
-        total[query.tree] += probability;
+    let mut offset = 0;
+    for count in counts {
+        let pmf: Vec<_> = rows[offset..offset + count]
+            .iter()
+            .map(|row| f32::from_bits(row[2]))
+            .collect();
+        assert!(pmf.iter().all(|&probability| probability >= STEP));
+        assert_eq!(pmf.iter().sum::<f32>(), 1.0);
+        let mut hits = vec![0; count];
+        for row in &rows[offset + count..offset + count + SAMPLES] {
+            let selected = row[0] as usize;
+            assert!(selected < count);
+            assert_eq!(row[1], pmf[selected].to_bits());
+            hits[selected] += 1;
+        }
+        for (hits, probability) in hits.into_iter().zip(pmf) {
+            assert!(hits > 0);
+            assert!((hits as f32 / SAMPLES as f32 - probability).abs() <= 1.0 / SAMPLES as f32);
+        }
+        offset += count + SAMPLES;
     }
-    assert!(total.into_iter().all(|probability| probability == 1.0));
     Ok(())
 }
