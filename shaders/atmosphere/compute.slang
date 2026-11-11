@@ -41,7 +41,7 @@ static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 7
 static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 71, B8 = 72, B9 = 73,
                   B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 80, B17 = 81,
                   B18 = 7, B19 = 83, B20 = 84, B21 = 8, B22 = 9, B23 = 10;
-#elif defined(ATM_STAGE_PROBE)
+#elif defined(ATM_STAGE_TERRAIN) || defined(ATM_STAGE_PROBE)
 static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 71, B8 = 72, B9 = 73,
                   B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 80, B17 = 81,
                   B18 = 7, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
@@ -880,4 +880,8 @@ void transport_probe(uint3 id: SV_DispatchThreadID)
     probe_outputs[2 * id.x] = result.light;
     probe_outputs[2 * id.x + 1] = result.transmittance;
 }
+#endif
+
+#if defined(ATM_STAGE_TERRAIN)
+#include "terrain_integrate.inc.slang"
 #endif

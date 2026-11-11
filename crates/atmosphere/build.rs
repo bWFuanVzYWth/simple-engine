@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|definition| [definition.as_str()])
         .collect();
-    let recipes: Vec<_> = stages
+    let mut recipes: Vec<_> = stages
         .iter()
         .enumerate()
         .map(|(index, (entry, _))| Recipe {
@@ -41,6 +41,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args: &arguments[index],
         })
         .collect();
+    if cfg!(feature = "native") {
+        for (source, entry, output, args) in [
+            (
+                "../../shaders/atmosphere/shadow_prepare.slang",
+                "shadow_prepare",
+                "shadow_prepare.spv",
+                &[][..],
+            ),
+            (
+                "../../shaders/atmosphere/shadow_demand.slang",
+                "shadow_demand",
+                "shadow_demand.spv",
+                &[][..],
+            ),
+            (
+                "../../shaders/atmosphere/compute.slang",
+                "terrain_integrate",
+                "terrain_integrate.spv",
+                &["-DATM_STAGE_TERRAIN=1"][..],
+            ),
+        ] {
+            recipes.push(Recipe {
+                source,
+                entry,
+                stage: "compute",
+                output,
+                target: Target::Spirv("spirv_1_3"),
+                args,
+            });
+        }
+    }
     build(&recipes, &["../../shaders"], &["src", "data"])?;
     Ok(())
 }

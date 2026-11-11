@@ -8,7 +8,7 @@
 //! SkyView 不含太阳盘，太阳直射和场景遮挡由上层积分器处理。
 //!
 //! 四波长传输后转换为 RGB；Aerial 的 RGB 透射是 solar 加权谱转换的近似，
-//! 不能代表任意入射光谱的精确逐波长衰减。模型不包含云、局部介质或地形遮挡。
+//! 不能代表任意入射光谱的精确逐波长衰减。晴空模型不含云或局部介质。启用 native 时，terrain 模块在同一物理场中积分地形遮挡。
 //! 来源与复现方式见 `data/README.md`。
 
 use bytemuck::{Pod, Zeroable};
@@ -22,6 +22,8 @@ pub mod gpu;
 pub mod native;
 #[cfg(any(feature = "gpu", feature = "native"))]
 mod shaders;
+#[cfg(feature = "native")]
+pub mod terrain;
 #[cfg(any(feature = "gpu", feature = "native"))]
 pub use shaders::{SHADERS, ShaderBinary};
 #[cfg(any(feature = "gpu", feature = "native", test))]

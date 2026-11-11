@@ -516,6 +516,28 @@ impl Atmosphere {
         fixed.into_iter().chain(scratch)
     }
 
+    /// 借用现有四波长模型与最终散射场，为同设备的地形体积光建立静态绑定。
+    /// # Errors
+    /// 设备不是本所有者的设备、参数缓冲分配或上传失败时返回错误。
+    pub fn terrain_model(
+        &self,
+        context: &mut Context,
+    ) -> Result<crate::terrain::TerrainModel, Error> {
+        crate::terrain::TerrainModel::new(
+            context,
+            &self.base,
+            [
+                storage(&self.data),
+                sampled(&self.tau),
+                sampled(&self.field.source),
+                sampled(&self.field.mean),
+                sampled(&self.field.ground),
+                Binding::Sampler(self.sampler),
+                sampled(&self.field.high),
+            ],
+        )
+    }
+
     /// 借用供积分器使用的原生资源，GPU 内容遵守模块的提交和复用约定。
     pub const fn bindings(&self) -> Bindings<'_> {
         Bindings {

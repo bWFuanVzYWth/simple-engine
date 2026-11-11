@@ -5,6 +5,7 @@
 
 | 材料 | 许可与声明 |
 | --- | --- |
+| Intel Outdoor Light Scattering 极线阴影剖面与深度重建，Intel Corporation | [Apache-2.0](LICENSES/intel-outdoor-light-scattering-Apache-2.0.txt)、[归属与修改](LICENSES/intel-outdoor-light-scattering-NOTICE.txt) |
 | PBRT-v4 FastOwen 采样代码，Matt Pharr、Wenzel Jakob、Greg Humphreys | [Apache-2.0](LICENSES/pbrt-Apache-2.0.txt)；版权保留于采样源码头部 |
 | RoboCute OpenPBR 内核、作者修正与能量表，RoboCute contributors | [Apache-2.0](LICENSES/robocute-Apache-2.0.txt)、[来源与版权](LICENSES/robocute-NOTICE.txt) |
 | NVIDIA Self Intersection Avoidance 射线数值代码 | [BSD-3-Clause 与版权](LICENSES/NVIDIA-self-intersection-avoidance.txt) |
@@ -14,3 +15,7 @@
 | Noto Sans SC 字体 | [来源](assets/fonts/README.md)、[SIL Open Font License 1.1](assets/fonts/OFL.txt) |
 
 外部 Rust 依赖保留各自的许可证和版权；实际版本见 `Cargo.lock`，许可信息见对应上游 crate。
+
+## 极线体积光
+
+旧 Prime PT 的极线阴影剖面源于 Intel Corporation 的 Outdoor Light Scattering（2017）。引擎移植了旧 Prime PT 的剖面积分，并参考 Intel 样例的深度重建处理洞口遮挡边缘。固定版本为 `3b31b3b8c1aaad8580dc7249b3b79f6c0993d7a8`。相关着色器源码头与该版本根许可列明 Apache-2.0。移植范围、修改和上游 README 的许可说明见随附通知。[来源与修改](LICENSES/intel-outdoor-light-scattering-NOTICE.txt) · [随附许可](LICENSES/intel-outdoor-light-scattering-Apache-2.0.txt) · [固定版本许可](https://github.com/GameTechDev/OutdoorLightScattering/blob/3b31b3b8c1aaad8580dc7249b3b79f6c0993d7a8/license.txt)

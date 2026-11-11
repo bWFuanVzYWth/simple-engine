@@ -1,0 +1,23 @@
+Outdoor Light Scattering Sample
+Copyright 2017 Intel Corporation
+Apache License, Version 2.0
+
+Intel 上游：https://github.com/GameTechDev/OutdoorLightScattering
+固定版本：3b31b3b8c1aaad8580dc7249b3b79f6c0993d7a8
+许可原件：license.txt（Git blob ef711e91101c61660faeaa2ba68e27e0f3afdafa）
+随附条款：intel-outdoor-light-scattering-Apache-2.0.txt，仅整理上游文本的行尾空白。
+
+来源与修改
+Intel 的 fx/LightScattering.fx 和 fx/RefineSampleLocations.fx 声明上述版权与 Apache-2.0。
+原样例沿极线遍历级联阴影图，用一维 min/max 层级加速，重建时按相机深度调整采样权重。
+旧 Prime PT（e0260fc462e746789bcebf8293de33aa915a1d07）将阴影图改为按需光追的
+世界空间环形网格，并用每条极线的阻挡深度剖面积分受光段。
+simple_engine 适配了极线与剖面算法，并参考 Intel 的深度重建，在硬件光追首命中处
+裁剪积分、按首命中深度重建近场辐亮度，按已提交帧渐进刷新。
+相关实现位于 shaders/atmosphere/epipolar.slang、shadow_profile.inc.slang、
+shadow_resolve.slang、terrain_integrate.inc.slang 和 terrain_composite.slang。
+
+上游提交 9ecf3c3 将许可更新为 Apache-2.0。readme.txt 末尾仍有早期的 BSD 说明，
+并单独列出 Media Elements 的使用限制。
+此处记录的是上述着色器源码头和固定版本根 license.txt 中的许可。
+适配范围为光散射代码；上游媒体、地形贴图和预编译样例由原项目另行提供。

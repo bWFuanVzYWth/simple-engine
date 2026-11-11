@@ -1,6 +1,6 @@
 //! 时间状态的独立失效契约；输入比较、存储替换和失效策略归应用所有者。
 //!
-//! 四个消费者分别接受历史。失效只清除指定消费者的有效位，不推进或回退随机样本、
+//! 各消费者分别接受历史。失效只清除指定消费者的有效位，不推进或回退随机样本、
 //! jitter、帧序号及GPU完成水位。录制失败或取消不能调用[`State::accept`]或
 //! [`State::accept_omission`]；
 //! 宿主提交事务成功后才发布新历史。路径、颜色、静态均值和重建之间没有隐式依赖。
@@ -42,6 +42,8 @@ pub enum History {
     Paths = 4,
     /// ReSTCV 像素颜色估计；不等同于路径赢家。
     Color = 8,
+    /// 地形体积光的太阳阻挡列、极线剖面与散射积分。
+    TerrainLight = 16,
 }
 
 /// 时间消费者集合，只能由有效消费者构造，不接受任意位模式。
@@ -51,8 +53,8 @@ pub struct Histories(u8);
 impl Histories {
     /// 没有消费者。
     pub const NONE: Self = Self(0);
-    /// 全部四个消费者；不包括随机身份、jitter 和曝光适应。
-    pub const ALL: Self = Self(15);
+    /// 全部消费者；不包括随机身份、jitter 和曝光适应。
+    pub const ALL: Self = Self(31);
 
     /// 单个消费者。
     pub const fn one(history: History) -> Self {
@@ -148,6 +150,7 @@ mod tests {
             History::Reconstruction,
             History::Paths,
             History::Color,
+            History::TerrainLight,
         ] {
             let mut state = State::new();
             state.accept(Histories::ALL);
@@ -160,6 +163,7 @@ mod tests {
                 History::Reconstruction,
                 History::Paths,
                 History::Color,
+                History::TerrainLight,
             ] {
                 assert_eq!(state.contains(other), other != selected);
             }

@@ -37,12 +37,21 @@ struct Image {
 }
 
 fn image(device: &wgpu::Device, label: &str, size: [u32; 3], format: wgpu::TextureFormat) -> Image {
+    let texture = device.create_texture(&image_descriptor(label, size, format));
+    output_image(texture)
+}
+
+fn image_descriptor(
+    label: &str,
+    size: [u32; 3],
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureDescriptor<'_> {
     let dimension = if size[2] == 1 {
         wgpu::TextureDimension::D2
     } else {
         wgpu::TextureDimension::D3
     };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
             width: size[0],
@@ -57,9 +66,7 @@ fn image(device: &wgpu::Device, label: &str, size: [u32; 3], format: wgpu::Textu
             | wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
-    });
-    let view = texture.create_view(&Default::default());
-    Image { texture, view }
+    }
 }
 
 struct Bank {
@@ -70,35 +77,44 @@ struct Bank {
 }
 
 impl Bank {
-    fn new(device: &wgpu::Device, p: &Parameters) -> Self {
-        let [heights, suns, _, _] = p.dims;
+    fn descriptors(p: &Parameters) -> [(&'static str, [u32; 3], wgpu::TextureFormat); 4] {
+        let [h, s, _, _] = p.dims;
         let low = p.offsets1[1];
-        Self {
-            source: image(
-                device,
+        [
+            (
                 "atmosphere source",
-                [suns * p.solve[1], low * p.solve[2], 1],
+                [s * p.solve[1], low * p.solve[2], 1],
                 wgpu::TextureFormat::Rgba16Float,
             ),
-            mean: image(
-                device,
+            (
                 "atmosphere mean",
-                [suns, heights, 1],
+                [s, h, 1],
                 wgpu::TextureFormat::Rgba32Float,
             ),
-            ground: image(
-                device,
+            (
                 "atmosphere ground",
-                [suns, 1, 1],
+                [s, 1, 1],
                 wgpu::TextureFormat::Rgba32Float,
             ),
-            high: image(
-                device,
+            (
                 "atmosphere high",
-                [suns * 5, heights - low + 1, 1],
+                [s * 5, h - low + 1, 1],
                 wgpu::TextureFormat::Rgba32Float,
             ),
+        ]
+    }
+    fn from_images([source, mean, ground, high]: [Image; 4]) -> Self {
+        Self {
+            source,
+            mean,
+            ground,
+            high,
         }
+    }
+    fn new(device: &wgpu::Device, p: &Parameters) -> Self {
+        Self::from_images(
+            Self::descriptors(p).map(|(label, size, format)| image(device, label, size, format)),
+        )
     }
     fn bytes(p: &Parameters) -> u64 {
         let [h, s, _, _] = p.dims.map(u64::from);
@@ -519,6 +535,78 @@ impl Atmosphere {
         cache: Option<&wgpu::PipelineCache>,
     ) -> Result<Self, Error> {
         let model = Model::new()?;
+        Self::from_model(device, queue, shaders, outputs, cache, model, None)
+    }
+
+    /// 为原生体积光共享同一份已求解散射场。四张输出依次为 optical depth、天空、空气辐亮度和透射。
+    /// 调用方提交初始化后，两端按同一设备队列顺序消费；物理场只建立一次。
+    /// # Errors
+    /// 输出格式、设备容量、分配或原生资源创建失败时返回错误。
+    #[cfg(feature = "native")]
+    pub fn with_terrain_model(
+        context: &mut vulkan::interop::WgpuContext,
+        shaders: Shaders,
+        outputs: [&vulkan::interop::SampledTexture; 4],
+    ) -> Result<(Self, crate::terrain::TerrainModel), Error> {
+        use vulkan::native::{Binding, Sampler};
+        let model = Model::new()?;
+        let p = model.parameters;
+        let data = context.buffer(
+            "atmosphere physical input",
+            bytemuck::cast_slice(&model.data),
+            wgpu::BufferUsages::STORAGE,
+        )?;
+        let mut images = Vec::with_capacity(4);
+        for (label, size, format) in Bank::descriptors(&p) {
+            images.push(context.sampled_texture(&image_descriptor(label, size, format))?);
+        }
+        let images: [_; 4] = images
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("四张固定散射场纹理"));
+        let bank = Bank::from_images(images.each_ref().map(|i| output_image(i.texture().clone())));
+        let sampler = Sampler::new(context.native(), true)?;
+        let [src, mean, ground, high] = images.map(Binding::SampledTexture);
+        let fields = crate::terrain::TerrainModel::new(
+            context.native(),
+            &p,
+            [
+                Binding::SharedBuffer(data.clone()),
+                Binding::SampledTexture(outputs[0].clone()),
+                src,
+                mean,
+                ground,
+                Binding::Sampler(sampler),
+                high,
+            ],
+        )?;
+        let [optical_depth, sky, aerial_light, aerial_transmittance] =
+            outputs.map(|o| o.texture().clone());
+        let atmosphere = Self::from_model(
+            context.device(),
+            context.queue(),
+            shaders,
+            Some(Outputs {
+                optical_depth,
+                sky,
+                aerial_light,
+                aerial_transmittance,
+            }),
+            context.pipeline_cache(),
+            model,
+            Some((data.buffer().clone(), bank)),
+        )?;
+        Ok((atmosphere, fields))
+    }
+
+    fn from_model(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shaders: Shaders,
+        outputs: Option<Outputs>,
+        cache: Option<&wgpu::PipelineCache>,
+        model: Model,
+        shared: Option<(wgpu::Buffer, Bank)>,
+    ) -> Result<Self, Error> {
         let p = model.parameters;
         let limits = device.limits();
         let incident_bytes = 4 * u64::from(p.dims[1]) * u64::from(p.solve[0]) * 16;
@@ -550,15 +638,17 @@ impl Atmosphere {
                 cache,
             })
         });
-        let data = buffer(
-            device,
-            "atmosphere physical input",
-            model.data.len() as u64 * 16,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-        queue.write_buffer(&data, 0, bytemuck::cast_slice(&model.data));
+        let (data, field) = shared.unwrap_or_else(|| {
+            let data = buffer(
+                device,
+                "atmosphere physical input",
+                model.data.len() as u64 * 16,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            );
+            queue.write_buffer(&data, 0, bytemuck::cast_slice(&model.data));
+            (data, Bank::new(device, &p))
+        });
         let tau = output_image(outputs.optical_depth);
-        let field = Bank::new(device, &p);
         let sky = output_image(outputs.sky);
         let aerial_light = output_image(outputs.aerial_light);
         let aerial_t = output_image(outputs.aerial_transmittance);
