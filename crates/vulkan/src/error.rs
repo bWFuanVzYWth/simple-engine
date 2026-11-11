@@ -18,6 +18,9 @@ pub enum Error {
     /// CPU 资源描述或上传暂存无法申请容量。
     #[error("Vulkan 资源暂存分配失败")]
     Allocation(#[from] std::collections::TryReserveError),
+    /// 无法为地形显存列创建驱动回收线程。
+    #[error("创建 Vulkan 显存回收线程失败")]
+    RetirementWorker(#[source] std::io::Error),
     /// Vulkan 驱动调用返回失败状态。
     #[error("Vulkan 调用失败：{0}")]
     Vulkan(#[from] vk::Result),

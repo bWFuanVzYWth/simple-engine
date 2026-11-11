@@ -58,6 +58,38 @@ impl Bounds {
         self.maximum
     }
 
+    /// `self \ other` 的至多六个互不重叠的非空半开盒，按轴顺序返回。
+    ///
+    /// 仅比较端点，不计算跨度或体积，因此也支持 i64 两端；不分配或遍历内部网格。
+    pub fn difference(self, other: Self) -> impl ExactSizeIterator<Item = Self> {
+        let mut boxes = [self; 6];
+        let mut count = 0;
+        let low = std::array::from_fn::<_, 3, _>(|i| self.minimum[i].max(other.minimum[i]));
+        let high = std::array::from_fn::<_, 3, _>(|i| self.maximum[i].min(other.maximum[i]));
+        if (0..3).any(|i| low[i] >= high[i]) {
+            count = 1;
+        } else {
+            let mut middle = self;
+            for axis in 0..3 {
+                if middle.minimum[axis] < low[axis] {
+                    let mut slab = middle;
+                    slab.maximum[axis] = low[axis];
+                    boxes[count] = slab;
+                    count += 1;
+                    middle.minimum[axis] = low[axis];
+                }
+                if high[axis] < middle.maximum[axis] {
+                    let mut slab = middle;
+                    slab.minimum[axis] = high[axis];
+                    boxes[count] = slab;
+                    count += 1;
+                    middle.maximum[axis] = high[axis];
+                }
+            }
+        }
+        boxes.into_iter().take(count)
+    }
+
     /// 区块与边界是否有正体积交集；相切不算相交。
     pub const fn intersects(self, chunk: Chunk) -> bool {
         if chunk.lod > 30 {

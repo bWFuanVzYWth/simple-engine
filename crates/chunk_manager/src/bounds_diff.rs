@@ -41,33 +41,10 @@ impl BoundsDiff {
     }
 
     fn append(&mut self, source: Bounds, other: Bounds, enter: bool) {
-        let minimum = source.minimum();
-        let maximum = source.maximum();
-        let low: [i64; 3] = std::array::from_fn(|axis| minimum[axis].max(other.minimum()[axis]));
-        let high: [i64; 3] = std::array::from_fn(|axis| maximum[axis].min(other.maximum()[axis]));
-        if (0..3).any(|axis| low[axis] >= high[axis]) {
-            self.push(minimum, maximum, enter);
-            return;
-        }
-        let mut middle_min = minimum;
-        let mut middle_max = maximum;
-        for axis in 0..3 {
-            let mut upper = middle_max;
-            upper[axis] = low[axis];
-            self.push(middle_min, upper, enter);
-            let mut lower = middle_min;
-            lower[axis] = high[axis];
-            self.push(lower, middle_max, enter);
-            middle_min[axis] = low[axis];
-            middle_max[axis] = high[axis];
-        }
-    }
-
-    fn push(&mut self, minimum: [i64; 3], maximum: [i64; 3], enter: bool) {
-        if (0..3).all(|axis| minimum[axis] < maximum[axis]) {
+        for bounds in source.difference(other) {
             self.slabs[self.len] = Slab {
-                minimum,
-                maximum,
+                minimum: bounds.minimum(),
+                maximum: bounds.maximum(),
                 enter,
             };
             self.len += 1;
@@ -107,6 +84,21 @@ impl BoundsDiff {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn subtraction_keeps_extreme_endpoints_without_overflow() {
+        let outer = Bounds::new([i64::MIN; 3], [i64::MAX; 3]).unwrap();
+        let inner = Bounds::new([-1; 3], [1; 3]).unwrap();
+        let parts: Vec<_> = outer.difference(inner).collect();
+        assert_eq!(parts.len(), 6);
+        for (i, a) in parts.iter().enumerate() {
+            for b in parts.iter().skip(i + 1).chain(std::iter::once(&inner)) {
+                assert!((0..3).any(|axis| a.maximum()[axis] <= b.minimum()[axis]
+                    || b.maximum()[axis] <= a.minimum()[axis]));
+            }
+        }
+        assert_eq!(outer.difference(outer).len(), 0);
+    }
 
     fn points(bounds: Bounds) -> BTreeSet<[i64; 3]> {
         let mut result = BTreeSet::new();

@@ -250,10 +250,10 @@ impl Parameters {
         rgb
     }
     /// 大气外均匀太阳盘的线性 Rec.2020 辐亮度，单位 W m⁻² sr⁻¹。
-    /// 按源模型以法向辐照度除以太阳盘立体角；可在初始化时计算并由应用缓存。
+    /// 法向辐照度除以投影立体角 π sin²(半角)；方向采样 PDF 使用未投影立体角。
     pub fn sun_radiance_rgb(&self) -> [f32; 3] {
-        let half_sine = (0.5 * self.sun[2]).sin();
-        let solid_angle = 4.0 * std::f32::consts::PI * half_sine * half_sine;
+        let sine = self.sun[2].sin();
+        let solid_angle = std::f32::consts::PI * sine * sine;
         self.solar_irradiance_rgb().map(|v| v / solid_angle)
     }
 }

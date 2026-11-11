@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn uniform_solar_disk_integrates_to_normal_irradiance() {
+    let mut p = Model::new().unwrap().parameters;
+    // 较大半角能区分投影立体角与未投影立体角，不只测试太阳的小角近似。
+    p.sun[2] = 0.5;
+    let radiance = p.sun_radiance_rgb();
+    let irradiance = p.solar_irradiance_rgb();
+    let steps = 4096;
+    let step = f64::from(p.sun[2]) / f64::from(steps);
+    let integral: f64 = (0..steps)
+        .map(|i| {
+            let angle = (f64::from(i) + 0.5) * step;
+            2.0 * std::f64::consts::PI * angle.sin() * angle.cos() * step
+        })
+        .sum();
+    for i in 0..3 {
+        assert!(
+            (f64::from(radiance[i]) * integral - f64::from(irradiance[i])).abs()
+                < f64::from(irradiance[i].abs()) * 1e-6
+        );
+    }
+}
+
+#[test]
 fn cancelled_record_rebuilds_the_same_view() {
     let model = Model::new().unwrap();
     let mut frame = FrameState::new(model.parameters);

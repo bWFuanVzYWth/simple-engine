@@ -10,9 +10,12 @@ default = []
 dlss_rr = ["dep:cc"]
 
 [build-dependencies]
+shader_build = { path = "../shader_build" }
 cc = { version = "1", optional = true }
 
 [dependencies]
+scene_cache = { path = "../scene_cache" }
+bytemuck.workspace = true
 blake3.workspace = true
 thiserror.workspace = true
 # KHR OMM 尚未发布到 crates.io；固定官方绑定，旧绑定仅用于 wgpu HAL 交接。

@@ -31,8 +31,9 @@
 //! | `chunk_manager` | 预算驱动的 3D LOD 区块规划、异步状态与资源所有权 |
 //! | `scene_cache` | 场景资源目录、属性槽与增量发布事务 |
 //! | `hash_dag` | 64 叉体素 DAG、批量读写、区域展开与 CPU 射线 |
-//! | `light_bvh` | quad 光源的空间功率树、选择及反向 PMF |
-//! | `light_sampling` | 任意quad面积采样及资源期发光纹理alias |
+//! | `light_bvh` | quad 光源树的底层构建 |
+//! | `light_sampling` | 统一光源树、面积与纹理 alias、活动灯目录 |
+//! | `opacity` | 精确 texel 对齐的二值 OMM 准备与 bird 遍历 |
 //! | `sip_hash` / `perlin_noise` | SipHash 与批量梯度噪声；缓存和地形策略由应用持有 |
 //! | `gpu_log` | 进程日志与错误计数，无 GPU 依赖 |
 //! | `wgpu` / `webgpu` | wgpu API；后者选择 WebGPU backend 与 WGSL 输入 |
@@ -112,3 +113,6 @@ pub use voxel_mesh;
 pub use vulkan;
 #[cfg(feature = "wgpu")]
 pub use wgpu;
+
+#[cfg(feature = "opacity")]
+pub use opacity;

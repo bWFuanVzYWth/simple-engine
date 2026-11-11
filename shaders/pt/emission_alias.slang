@@ -1,6 +1,6 @@
 /// 资源期EmitterAlias的静态裁剪texel分布；不写表或查询宿主。
 module emission_alias;
-__exported import pt.light_sampling;
+__exported import pt.light_area;
 
 namespace pt
 {

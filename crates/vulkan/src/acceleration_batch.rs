@@ -15,6 +15,68 @@ pub struct TriangleBlasInput<'a> {
     pub opacity: Option<(OpacityMicromap, &'a [u32])>,
 }
 
+/// 从已校验的紧凑 quad 位置流构建的一个 BLAS。每个 quad 产生 012、023 两个 primitive。
+#[derive(Clone, Copy, Debug)]
+pub struct QuadBlasInput<'a> {
+    /// 非空局部坐标流；宿主只需保留到录制返回。
+    pub quads: &'a scene_cache::ResidentQuads,
+    /// 该区发布的设备列；全部输出在同一计算调用中生成。
+    pub output: QuadOutput,
+    /// 与普通三角形输入相同的 opaque 标志。
+    pub opaque: bool,
+    /// 同设备 OMM 和每个半面的索引，顺序与输出 primitive 一致。
+    pub opacity: Option<(OpacityMicromap, &'a [u32])>,
+}
+
+/// 原生设备输出的区域切片，每列起点以 quad 为单位。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuadOutput {
+    /// 统一的 quad 槽起点。
+    pub first: u32,
+    /// 区域坐标，供已知几何重建或体素来源查询。
+    pub region: [i32; 3],
+    /// 每 quad 三个 uint4 的表面属性。
+    pub attributes: Option<crate::native::Buffer>,
+    /// 每 quad 一个非零 uint2 跨帧身份。
+    pub identities: Option<crate::native::Buffer>,
+    /// 连续顶点，每 quad 四条 16B 记录，xyz 用于 BLAS，前三角的 w 保存区域坐标。
+    pub vertices: Option<crate::native::Buffer>,
+    /// 每 quad 一个 int4 的体素来源（世界格坐标与表面标记）。
+    pub cells: Option<crate::native::Buffer>,
+}
+impl QuadOutput {
+    pub(crate) fn columns(self) -> [(Option<crate::native::Buffer>, u64, u64); 4] {
+        [
+            (self.attributes, 48, 0),
+            (self.identities, 8, 0),
+            (self.vertices, 64, 0),
+            (self.cells, 16, 0),
+        ]
+    }
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Sources<'a> {
+    Triangles(&'a [TriangleBlasInput<'a>]),
+    Quads(&'a [QuadBlasInput<'a>]),
+    Uploaded(
+        &'a [QuadBlasInput<'a>],
+        &'a [crate::terrain_upload::Uploaded],
+    ),
+}
+impl Sources<'_> {
+    pub(crate) const fn len(self) -> usize {
+        match self {
+            Self::Triangles(v) => v.len(),
+            Self::Quads(v) | Self::Uploaded(v, _) => v.len(),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Positions<'a> {
+    Triangles(&'a [[[f32; 3]; 3]]),
+    Quads(&'a scene_cache::ResidentQuads),
+}
+
 /// 批构建的主机阶段；录制型入口不提交或等待，`total_ns` 另含标识管理成本。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BuildTiming {
@@ -50,6 +112,25 @@ pub struct BuildTiming {
     pub pool_idle_bytes: u64,
 }
 
+impl BuildTiming {
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.total_ns += other.total_ns;
+        self.validation_ns += other.validation_ns;
+        self.upload_ns += other.upload_ns;
+        self.alloc_ns += other.alloc_ns;
+        self.record_ns += other.record_ns;
+        self.submit_wait_ns += other.submit_wait_ns;
+        self.blas_count += other.blas_count;
+        self.input_bytes += other.input_bytes;
+        self.backing_bytes += other.backing_bytes;
+        self.scratch_bytes = self.scratch_bytes.max(other.scratch_bytes);
+        self.allocation_bytes = self.allocation_bytes.max(other.allocation_bytes);
+        self.pool_hits += other.pool_hits;
+        self.pool_misses += other.pool_misses;
+        self.pool_idle_bytes = other.pool_idle_bytes;
+    }
+}
+
 /// 全部构建完成的 BLAS，输出次序与输入相同；标识由唯一 Context 保活。
 #[derive(Debug)]
 pub struct TriangleBlasBatch {
@@ -70,7 +151,10 @@ pub struct TriangleSceneBatch {
 }
 
 pub(crate) struct ResolvedBlas<'a> {
-    pub(crate) triangles: &'a [[[f32; 3]; 3]],
+    pub(crate) positions: Positions<'a>,
+    pub(crate) destinations: [u64; 4],
+    pub(crate) uploaded: Option<u64>,
+    pub(crate) region: [i32; 3],
     pub(crate) opaque: bool,
     pub(crate) opacity: Option<(&'a MicromapData, OpacityMicromap, &'a [u32])>,
 }
@@ -79,6 +163,9 @@ struct Plan {
     count: u32,
     vertices: u32,
     vertex_offset: usize,
+    expanded_offset: Option<usize>,
+    identity_offset: Option<usize>,
+    sorted_opacity: Option<usize>,
     index_offset: Option<usize>,
 }
 
@@ -86,6 +173,7 @@ struct BatchResources<'a> {
     device: &'a Device,
     pool: &'a mut BufferPool,
     input: Option<Buffer>,
+    expanded: Option<Buffer>,
     scratch: Option<Buffer>,
     blases: Vec<BlasData>,
 }
@@ -112,6 +200,7 @@ impl<'a> BatchResources<'a> {
             device,
             pool,
             input: None,
+            expanded: None,
             scratch: None,
             blases,
         })
@@ -122,8 +211,7 @@ impl Drop for BatchResources<'_> {
     fn drop(&mut self) {
         if self.device.is_quarantined() {
             std::mem::forget(std::mem::take(&mut self.blases));
-            std::mem::forget(self.input.take());
-            std::mem::forget(self.scratch.take());
+            // Buffer 的 Vulkan 销毁为显式操作，隔离设备上的句柄不再回池。
             return;
         }
         for blas in self.blases.drain(..) {
@@ -131,6 +219,9 @@ impl Drop for BatchResources<'_> {
         }
         if let Some(buffer) = self.input.take() {
             self.pool.give(self.device, Class::Input, buffer);
+        }
+        if let Some(buffer) = self.expanded.take() {
+            self.pool.give(self.device, Class::Expanded, buffer);
         }
         if let Some(buffer) = self.scratch.take() {
             self.pool.give(self.device, Class::Scratch, buffer);
@@ -143,13 +234,11 @@ fn nanos(started: Instant) -> u64 {
 }
 
 fn triangle_bytes(triangles: &[[[f32; 3]; 3]]) -> &[u8] {
-    // f32 数组连续且无 padding；只借用原数组，不创建新的 float 值或改变对齐。
-    unsafe { std::slice::from_raw_parts(triangles.as_ptr().cast::<u8>(), size_of_val(triangles)) }
+    bytemuck::cast_slice(triangles)
 }
 
 fn index_bytes(indices: &[u32]) -> &[u8] {
-    // u32 数组连续且无 padding，映射复制按字节进行。
-    unsafe { std::slice::from_raw_parts(indices.as_ptr().cast::<u8>(), size_of_val(indices)) }
+    bytemuck::cast_slice(indices)
 }
 
 struct Queries {
@@ -234,6 +323,7 @@ impl BlasData {
         timestamps: bool,
         mode: BatchMode,
         pool: &mut BufferPool,
+        expansion: Option<&crate::quad_expansion::Expansion>,
     ) -> Result<BatchOutput, Error> {
         let started = Instant::now();
         let mut timing = BuildTiming {
@@ -269,29 +359,68 @@ impl BlasData {
         let mut plans = Vec::new();
         plans.try_reserve_exact(inputs.len())?;
         let mut input_len = 0_usize;
+        let mut expanded_len = 0usize;
+        let mut sorted_bytes = 0usize;
+        let mut largest = None;
         for input in inputs {
-            let count = u32::try_from(input.triangles.len())
-                .map_err(|_| Error::InvalidArgument("三角形数量过多"))?;
+            let (triangles, bytes, expanded_offset) = match input.positions {
+                Positions::Triangles(v) => {
+                    if v.iter().flatten().flatten().any(|v| !v.is_finite()) {
+                        return Err(Error::InvalidArgument("BLAS 坐标非有限"));
+                    }
+                    (v.len(), size_of_val(v), None)
+                }
+                Positions::Quads(v) => {
+                    if expansion.is_none() {
+                        return Err(Error::InvalidArgument("地形展开管线尚未准备"));
+                    }
+                    let count = v.positions().headers().len();
+                    if count > u32::MAX as usize / 18 {
+                        return Err(Error::InvalidArgument("quad展开寻址超过32位"));
+                    }
+                    let offset = expanded_len;
+                    if input.destinations[2] == 0 {
+                        expanded_len = count
+                            .checked_mul(64)
+                            .and_then(|n| offset.checked_add(n))
+                            .ok_or(Error::InvalidArgument("quad 展开缓冲溢出"))?;
+                    }
+                    if largest.is_none_or(|(_, previous)| count > previous) {
+                        largest = Some((plans.len(), count));
+                    }
+                    (count * 2, v.positions().bytes(), Some(offset))
+                }
+            };
+            let count =
+                u32::try_from(triangles).map_err(|_| Error::InvalidArgument("三角形数量过多"))?;
             let vertices = count
-                .checked_mul(3)
+                .checked_mul(if expanded_offset.is_some() { 2 } else { 3 })
                 .ok_or(Error::InvalidArgument("顶点数量过多"))?;
-            if count == 0
-                || u64::from(count) > properties.max_primitive_count
-                || input
-                    .triangles
-                    .iter()
-                    .flatten()
-                    .flatten()
-                    .any(|v| !v.is_finite())
-            {
+            if count == 0 || u64::from(count) > properties.max_primitive_count {
                 return Err(Error::InvalidArgument("BLAS 为空、坐标非有限或数量超限"));
+            }
+            let previous_len = input_len;
+            if input.uploaded.is_some() {
+                input_len = 0;
             }
             let vertex_offset = input_len;
             input_len = input_len
-                .checked_add(size_of_val(input.triangles))
+                .checked_add(bytes)
                 .ok_or(Error::InvalidArgument("批输入大小溢出"))?;
+            let identity_offset = if let Positions::Quads(v) = input.positions
+                && input.destinations[1] != 0
+                && !v.consecutive()
+            {
+                let offset = input_len;
+                input_len = input_len
+                    .checked_add(size_of_val(v.explicit_tokens()))
+                    .ok_or(Error::InvalidArgument("身份字节数溢出"))?;
+                Some(offset)
+            } else {
+                None
+            };
             let index_offset = if let Some((map, _, indices)) = input.opacity {
-                map.validate_indices(indices, input.triangles.len())?;
+                map.validate_indices(indices, triangles)?;
                 let offset = input_len;
                 input_len = input_len
                     .checked_add(size_of_val(indices))
@@ -300,12 +429,27 @@ impl BlasData {
             } else {
                 None
             };
+            let sorted_opacity = if expanded_offset.is_some() && index_offset.is_some() {
+                let at = sorted_bytes;
+                sorted_bytes = sorted_bytes
+                    .checked_add(triangles * 4)
+                    .ok_or(Error::InvalidArgument("OMM 分组输出溢出"))?;
+                Some(at)
+            } else {
+                None
+            };
             plans.push(Plan {
                 count,
                 vertices,
                 vertex_offset,
+                expanded_offset,
+                identity_offset,
+                sorted_opacity,
                 index_offset,
             });
+            if input.uploaded.is_some() {
+                input_len = previous_len;
+            }
         }
         timing.input_bytes = input_len as u64;
         timing.validation_ns = nanos(stage);
@@ -316,30 +460,78 @@ impl BlasData {
         let input_len = input_len
             .checked_add(3)
             .ok_or(Error::InvalidArgument("批输入对齐溢出"))?;
-        resources.input = Some(resources.pool.take(device, Class::Input, input_len)?);
-        let input = resources.input.as_ref().expect("已取得批输入分配");
-        timing.allocation_bytes = input.allocation_bytes();
-        let input_address = input.address(device);
+        if timing.input_bytes != 0 {
+            resources.input = Some(resources.pool.take(device, Class::Input, input_len)?);
+        }
+        if let Some((_, count)) = largest {
+            let total = count
+                .checked_mul(24)
+                .and_then(|indices| expanded_len.checked_add(indices))
+                .and_then(|bytes| bytes.checked_add(sorted_bytes))
+                .and_then(|bytes| bytes.checked_add(15))
+                .ok_or(Error::InvalidArgument("quad 设备缓冲溢出"))?;
+            resources.expanded = Some(resources.pool.take(device, Class::Expanded, total)?);
+        }
+        let expanded_address = resources
+            .expanded
+            .as_ref()
+            .map_or(0, |b| b.address(device).next_multiple_of(16));
+        let index_address = expanded_address + expanded_len as u64;
+        let opacity_address = index_address + largest.map_or(0, |(_, n)| n as u64 * 24);
+        let vertex_address = |input: &ResolvedBlas, offset: usize| {
+            if input.destinations[2] != 0 {
+                input.destinations[2]
+            } else {
+                expanded_address + offset as u64
+            }
+        };
+        let input = resources.input.as_ref();
+        timing.allocation_bytes = input.map_or(0, Buffer::allocation_bytes)
+            + resources
+                .expanded
+                .as_ref()
+                .map_or(0, Buffer::allocation_bytes);
+        let input_address = input.map_or(0, |b| b.address(device));
         let padding = ((4 - input_address % 4) % 4) as usize;
+        let source_address =
+            |s: &ResolvedBlas| s.uploaded.unwrap_or(input_address + padding as u64);
         timing.alloc_ns += nanos(stage);
         let stage = Instant::now();
         let mut writes = Vec::new();
         writes.try_reserve_exact(
             inputs
                 .len()
-                .checked_mul(2)
+                .checked_mul(5)
                 .ok_or(Error::InvalidArgument("批输入数溢出"))?,
         )?;
         for (input, plan) in inputs.iter().zip(&plans) {
-            writes.push((
-                plan.vertex_offset + padding,
-                triangle_bytes(input.triangles),
-            ));
+            if input.uploaded.is_some() {
+                continue;
+            }
+            let offset = plan.vertex_offset + padding;
+            match input.positions {
+                Positions::Triangles(v) => writes.push((offset, triangle_bytes(v))),
+                Positions::Quads(v) => {
+                    if let Some(offset) = plan.identity_offset {
+                        writes.push((offset + padding, bytemuck::cast_slice(v.explicit_tokens())));
+                    }
+                    let v = v.positions();
+                    let surfaces = offset + size_of_val(v.headers());
+                    writes.push((offset, index_bytes(v.headers().as_flattened())));
+                    writes.push((surfaces, index_bytes(v.surfaces().as_flattened())));
+                    writes.push((
+                        surfaces + size_of_val(v.surfaces()),
+                        index_bytes(v.payload()),
+                    ));
+                }
+            }
             if let (Some(offset), Some((_, _, indices))) = (plan.index_offset, input.opacity) {
                 writes.push((offset + padding, index_bytes(indices)));
             }
         }
-        input.write_slices(device, &writes)?;
+        if let Some(input) = input {
+            input.write_slices(device, &writes)?;
+        }
         timing.upload_ns = nanos(stage);
 
         let stage = Instant::now();
@@ -355,15 +547,34 @@ impl BlasData {
             let mut data = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                 .vertex_format(vk::Format::R32G32B32_SFLOAT)
                 .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: input_address + (padding + plan.vertex_offset) as u64,
+                    device_address: plan.expanded_offset.map_or(
+                        source_address(input) + plan.vertex_offset as u64,
+                        |offset| vertex_address(input, offset),
+                    ),
                 })
-                .vertex_stride(12)
+                .vertex_stride(if plan.expanded_offset.is_some() {
+                    16
+                } else {
+                    12
+                })
                 .max_vertex(plan.vertices - 1)
                 .index_type(vk::IndexType::NONE_KHR);
+            if plan.expanded_offset.is_some() {
+                data = data.index_type(vk::IndexType::UINT32).index_data(
+                    vk::DeviceOrHostAddressConstKHR {
+                        device_address: index_address,
+                    },
+                );
+            }
             if let (Some(offset), Some((map, _, _))) = (plan.index_offset, input.opacity) {
                 *opacity = vk::AccelerationStructureTrianglesOpacityMicromapKHR::default()
                     .index_type(vk::IndexType::UINT32)
-                    .index_buffer(input_address + (padding + offset) as u64)
+                    .index_buffer(
+                        plan.sorted_opacity
+                            .map_or(source_address(input) + offset as u64, |at| {
+                                opacity_address + at as u64
+                            }),
+                    )
                     .index_stride(4)
                     .micromap(map.raw());
                 data = data.push(opacity);
@@ -475,15 +686,95 @@ impl BlasData {
                 }
                 device.raw.cmd_pipeline_barrier(
                     command,
-                    vk::PipelineStageFlags::HOST,
-                    vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                    vk::PipelineStageFlags::HOST
+                        | vk::PipelineStageFlags::TRANSFER
+                        | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+                        | vk::PipelineStageFlags::COMPUTE_SHADER
+                        | vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                    vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                        | vk::PipelineStageFlags::COMPUTE_SHADER,
                     vk::DependencyFlags::empty(),
                     &[vk::MemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::HOST_WRITE)
-                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
+                        .src_access_mask(
+                            vk::AccessFlags::HOST_WRITE
+                                | vk::AccessFlags::TRANSFER_WRITE
+                                | vk::AccessFlags::SHADER_READ
+                                | vk::AccessFlags::SHADER_WRITE,
+                        )
+                        .dst_access_mask(
+                            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                        )],
                     &[],
                     &[],
                 );
+                if let Some((index_writer, _)) = largest {
+                    let program = expansion.expect("压缩输入已经校验设备程序");
+                    for (number, (plan, source)) in plans.iter().zip(inputs).enumerate() {
+                        if let Some(offset) = plan.expanded_offset {
+                            let Positions::Quads(resident) = source.positions else {
+                                unreachable!("展开范围只能属于 quad 输入")
+                            };
+                            let stream = resident.positions();
+                            let count = plan.count / 2;
+                            let header = source_address(source) + plan.vertex_offset as u64;
+                            let [attrs, ids, _, cells] = source.destinations;
+                            let id_src = plan
+                                .identity_offset
+                                .map_or(0, |at| source_address(source) + at as u64);
+                            let opacity = plan.index_offset.zip(plan.sorted_opacity).map_or(
+                                [0; 2],
+                                |(src, dst)| {
+                                    [
+                                        source_address(source) + src as u64,
+                                        opacity_address + dst as u64,
+                                    ]
+                                },
+                            );
+                            program.record(
+                                device,
+                                command,
+                                crate::quad_expansion::QuadDispatch {
+                                    addresses: [
+                                        header,
+                                        header
+                                            + size_of_val(stream.headers()) as u64
+                                            + size_of_val(stream.surfaces()) as u64,
+                                        vertex_address(source, offset),
+                                        attrs,
+                                        ids,
+                                        if number == index_writer {
+                                            index_address
+                                        } else {
+                                            0
+                                        },
+                                        cells,
+                                        id_src,
+                                    ],
+                                    count,
+                                    region: source.region,
+                                    first_token: resident.first_token(),
+                                    opacity,
+                                },
+                            );
+                        }
+                    }
+                    device.raw.cmd_pipeline_barrier(
+                        command,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                            | vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+                            | vk::PipelineStageFlags::COMPUTE_SHADER
+                            | vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[vk::MemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
+                            )],
+                        &[],
+                        &[],
+                    );
+                }
                 if let Some(queries) = &queries {
                     device.raw.cmd_write_timestamp(
                         command,
@@ -523,6 +814,7 @@ impl BlasData {
             timing.record_ns = nanos(stage);
             raw_buffers = BuildBuffers {
                 input: resources.input.take(),
+                expanded: resources.expanded.take(),
                 scratch: resources.scratch.take(),
             };
             None
@@ -534,6 +826,7 @@ impl BlasData {
                 command,
                 BuildBuffers {
                     input: resources.input.take(),
+                    expanded: resources.expanded.take(),
                     scratch: resources.scratch.take(),
                 },
             ))

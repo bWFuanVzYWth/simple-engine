@@ -33,6 +33,12 @@ use std::{
 };
 use wgpu::hal::api::Vulkan;
 
+#[path = "native_light_tree.rs"]
+mod light_tree;
+pub use light_tree::DeviceLightTree;
+#[path = "terrain_flight.rs"]
+mod terrain_flight;
+
 #[path = "timestamp.rs"]
 mod timestamp;
 pub use timestamp::TimestampQueries;
@@ -123,6 +129,10 @@ pub struct Context {
     pub(crate) device: Device,
     pub(crate) life: Life<Native, BuildBuffers>,
     as_pool: BufferPool,
+    buffer_retirement: Option<crate::buffer_retirement::BufferRetirement>,
+    quad_expansion: Option<crate::quad_expansion::Expansion>,
+    light_builder: Option<crate::quad_expansion::Expansion>,
+    terrain_flights: Vec<terrain_flight::Submitted>,
     pipeline_cache: Option<crate::pipeline_cache::Native>,
     checkpoints: Option<checkpoints::Checkpoints>,
 }
@@ -238,9 +248,42 @@ impl Context {
             device,
             life: Life::new(owner),
             as_pool: BufferPool::default(),
+            buffer_retirement: None,
+            quad_expansion: None,
+            light_builder: None,
+            terrain_flights: Vec::new(),
             pipeline_cache: None,
             checkpoints: None,
         })
+    }
+
+    /// 在设备准备阶段创建压缩 quad 展开程序与大显存列回收线程；重复调用复用它们。
+    /// # Errors
+    /// 计算管线创建或底层设备失败时不发布程序。
+    pub fn prepare_quad_expansion(&mut self) -> Result<(), Error> {
+        if self.buffer_retirement.is_none() {
+            // SAFETY: Drop 在任何返回路径上都先关闭并 join 线程，随后才释放宿主设备和 loader。
+            self.buffer_retirement = Some(
+                unsafe { crate::buffer_retirement::BufferRetirement::new(&self.device) }
+                    .map_err(Error::RetirementWorker)?,
+            );
+        }
+        if self.quad_expansion.is_none() {
+            self.quad_expansion = Some(crate::quad_expansion::Expansion::new(
+                &self.device,
+                self.pipeline_cache(),
+            )?);
+        }
+        if self.light_builder.is_none() {
+            self.light_builder = Some(crate::quad_expansion::Expansion::with_shader(
+                &self.device,
+                self.pipeline_cache(),
+                include_bytes!(concat!(env!("OUT_DIR"), "/light_build.spv")),
+                c"build_level",
+                88,
+            )?);
+        }
+        Ok(())
     }
 
     /// 启用本设备独占的管线缓存。调用者提供应用私有、可信的可再生缓存目录。
@@ -343,8 +386,11 @@ impl Context {
             pipeline_statistics: self.device.pipeline_statistics,
         }
     }
-    /// native backing allocation 字节数，包含 AS 分配池闲置显存。
+    /// native backing allocation 字节数，包含 AS 池及交给驱动回收线程、尚未确认释放的分配。
     pub fn allocated_bytes(&self) -> u64 {
+        if let Some(retirement) = &self.buffer_retirement {
+            retirement.account(&self.device);
+        }
         self.device.buffer_bytes.load(Ordering::Relaxed)
     }
 
@@ -361,6 +407,11 @@ impl Context {
     /// 不包含 AS backing 或 pool idle；这些和结果均已计入 [`Self::allocated_bytes`]。
     pub fn as_build_memory(&self) -> crate::AsBuildMemory {
         let mut result = crate::AsBuildMemory::default();
+        for flight in &self.terrain_flights {
+            let (bytes, buffers) = flight.memory();
+            result.inflight_bytes += bytes;
+            result.inflight_buffers += buffers;
+        }
         for (_, record) in self.life.records() {
             let (bytes, buffers) = record.buffers().memory();
             match record.state() {
@@ -418,7 +469,14 @@ impl Context {
     }
     fn discard(&mut self, key: Key) {
         if let Some(data) = self.life.take_resource(key) {
-            data.recycle(&self.device, &mut self.as_pool);
+            match (data, &mut self.buffer_retirement) {
+                (Data::Buffer(buffer), Some(queue)) => {
+                    if let Err(mut immediate) = queue.enqueue(&self.device, buffer) {
+                        immediate.destroy(&self.device);
+                    }
+                }
+                (other, _) => other.recycle(&self.device, &mut self.as_pool),
+            }
         }
     }
     fn active(&self, key: Key) -> Result<(), Error> {
@@ -433,8 +491,7 @@ impl Context {
         }
         Ok(())
     }
-    fn build_record(&mut self, roots: Vec<Key>, buffers: BuildBuffers) -> Result<RecordId, Error> {
-        let record = Record::new(Vec::new(), Vec::new(), roots, buffers);
+    fn insert_build_record(&mut self, record: Record) -> Result<RecordId, Error> {
         match self.life.insert_record(record) {
             Ok(id) => Ok(id),
             Err((error, record)) => {
@@ -559,13 +616,24 @@ impl Context {
         inputs: &[crate::TriangleBlasInput<'_>],
         timestamps: bool,
     ) -> Result<crate::TriangleBlasBatch, Error> {
-        self.prepare_triangle_blas_batch(inputs, timestamps, false)
-            .map(|(batch, _)| batch)
+        self.prepare_triangle_blas_batch(
+            crate::acceleration::Sources::Triangles(inputs),
+            timestamps,
+            false,
+        )
+        .map(|(batch, _)| batch)
     }
 
     pub(crate) fn record_triangle_blas_batch(
         &mut self,
         inputs: &[crate::TriangleBlasInput<'_>],
+    ) -> Result<crate::interop::PreparedBlasBatch, Error> {
+        self.record_blas_inputs(crate::acceleration::Sources::Triangles(inputs))
+    }
+
+    pub(crate) fn record_blas_inputs(
+        &mut self,
+        inputs: crate::acceleration::Sources<'_>,
     ) -> Result<crate::interop::PreparedBlasBatch, Error> {
         let (batch, commands) = self.prepare_triangle_blas_batch(inputs, false, true)?;
         Ok(crate::interop::PreparedBlasBatch {
@@ -576,13 +644,47 @@ impl Context {
     }
 
     fn resolve_blas_inputs<'a>(
+        device: &Device,
         life: &'a Life<Native, BuildBuffers>,
-        inputs: &[crate::TriangleBlasInput<'a>],
+        inputs: crate::acceleration::Sources<'a>,
     ) -> Result<Vec<ResolvedBlas<'a>>, Error> {
         let mut resolved = Vec::new();
         resolved.try_reserve_exact(inputs.len())?;
-        for input in inputs {
-            let opacity = if let Some((id, indices)) = input.opacity {
+        use crate::acceleration::{Positions, Sources};
+        let mut writes = Vec::new();
+        for i in 0..inputs.len() {
+            let mut destinations = [0; 4];
+            let mut region = [0; 3];
+            let (positions, opaque, opacity) = match inputs {
+                Sources::Triangles(v) => (
+                    Positions::Triangles(v[i].triangles),
+                    v[i].opaque,
+                    v[i].opacity,
+                ),
+                Sources::Quads(v) | Sources::Uploaded(v, _) => {
+                    let src = &v[i];
+                    region = src.output.region;
+                    let count = src.quads.positions().headers().len() as u64;
+                    for (j, (target, stride, base)) in src.output.columns().into_iter().enumerate()
+                    {
+                        let Some(target) = target else { continue };
+                        life.active(target.key)?;
+                        let Data::Buffer(data) = life.resource(target.key)? else {
+                            return Err(Error::InvalidArgument("quad 输出不是 buffer"));
+                        };
+                        let start = base + u64::from(src.output.first) * stride;
+                        let end = start + count * stride;
+                        if end > target.len() {
+                            return Err(Error::InvalidArgument("quad 输出槽超过设备缓冲范围"));
+                        }
+                        writes.try_reserve(1)?;
+                        writes.push((target.key, start, end));
+                        destinations[j] = data.address(device) + start;
+                    }
+                    (Positions::Quads(src.quads), src.opaque, src.opacity)
+                }
+            };
+            let opacity = if let Some((id, indices)) = opacity {
                 life.active(id.key)?;
                 let Data::Micromap(map) = life.resource(id.key)? else {
                     return Err(Error::InvalidArgument("OMM 标识类型无效"));
@@ -592,17 +694,36 @@ impl Context {
                 None
             };
             resolved.push(ResolvedBlas {
-                triangles: input.triangles,
-                opaque: input.opaque,
+                positions,
+                uploaded: if let Sources::Uploaded(_, staged) = inputs {
+                    let b = staged[i].buffer;
+                    life.active(b.key)?;
+                    let Data::Buffer(data) = life.resource(b.key)? else {
+                        return Err(Error::InvalidArgument("地形源不是设备缓冲"));
+                    };
+                    Some(data.address(device))
+                } else {
+                    None
+                },
+                destinations,
+                region,
+                opaque,
                 opacity,
             });
+        }
+        writes.sort_unstable();
+        if writes
+            .windows(2)
+            .any(|w| w[0].0 == w[1].0 && w[0].2 > w[1].1)
+        {
+            return Err(Error::InvalidArgument("quad 输出切片重叠"));
         }
         Ok(resolved)
     }
 
     fn prepare_triangle_blas_batch(
         &mut self,
-        inputs: &[crate::TriangleBlasInput<'_>],
+        inputs: crate::acceleration::Sources<'_>,
         timestamps: bool,
         record_only: bool,
     ) -> Result<
@@ -613,7 +734,36 @@ impl Context {
         Error,
     > {
         let started = std::time::Instant::now();
-        let resolved = Self::resolve_blas_inputs(&self.life, inputs)?;
+        let resolved = Self::resolve_blas_inputs(&self.device, &self.life, inputs)?;
+        let mut access = Vec::new();
+        let mut uses = Vec::new();
+        if let crate::acceleration::Sources::Quads(v) | crate::acceleration::Sources::Uploaded(v, _) =
+            inputs
+            && record_only
+        {
+            let mut buffers = Vec::new();
+            buffers.try_reserve_exact(
+                v.len()
+                    .checked_mul(5)
+                    .ok_or(Error::InvalidArgument("输出列数量溢出"))?,
+            )?;
+            buffers.extend(
+                v.iter()
+                    .flat_map(|v| v.output.columns())
+                    .filter_map(|(b, _, _)| b),
+            );
+            if let crate::acceleration::Sources::Uploaded(_, staged) = inputs {
+                buffers.extend(staged.iter().map(|s| s.buffer));
+            }
+            buffers.sort_unstable_by_key(|b| b.key);
+            buffers.dedup_by_key(|b| b.key);
+            access.try_reserve_exact(buffers.len())?;
+            uses.try_reserve_exact(buffers.len())?;
+            for b in buffers {
+                access.push(Op::Access(b.into()));
+                uses.push(b.key);
+            }
+        }
         let mut blases = Vec::new();
         let mut roots = Vec::new();
         blases.try_reserve_exact(inputs.len())?;
@@ -631,6 +781,7 @@ impl Context {
                 BatchMode::Sync
             },
             &mut self.as_pool,
+            self.quad_expansion.as_ref(),
         )?;
         drop(resolved);
         let mut timing = output.timing;
@@ -659,7 +810,7 @@ impl Context {
             }
         }
         let commands = if let Some((raw, buffers)) = pending {
-            match self.build_record(roots, buffers) {
+            match self.insert_build_record(Record::new(access, uses, roots, buffers)) {
                 Ok(key) => Some(crate::interop::CommandBuffer::recorded(raw, key)),
                 Err(error) => {
                     for blas in blases {
@@ -689,7 +840,152 @@ impl Context {
         inputs: &[crate::TriangleBlasInput<'_>],
         instances: &[crate::TriangleInstance<crate::BatchBlas>],
     ) -> Result<crate::TriangleSceneBatch, Error> {
+        self.scene_batch(
+            crate::acceleration::Sources::Triangles(inputs),
+            instances,
+            false,
+            None,
+        )
+    }
+
+    /// 在同一命令中把紧凑 quad 展开到设备临时缓冲，构建 BLAS，再构建 TLAS。
+    /// 同步宿主返回时均已完成，输入顺序和两个半面的编号保持不变。
+    /// # Errors
+    /// 展开管线未准备、输入无效、设备或分配失败时，保留已有场景。
+    pub fn quad_scene_batch(
+        &mut self,
+        inputs: &[crate::QuadBlasInput<'_>],
+        instances: &[crate::TriangleInstance<crate::BatchBlas>],
+    ) -> Result<crate::TriangleSceneBatch, Error> {
+        self.scene_batch(
+            crate::acceleration::Sources::Quads(inputs),
+            instances,
+            false,
+            None,
+        )
+    }
+
+    /// 向借入的原生宿主队列提交地形展开、BLAS 与 TLAS，后续追踪按同队列顺序观察新场景。
+    /// GPU 完成 fence 之前由 Context 保活输入、scratch、输出及全部加速结构。
+    /// # Errors
+    /// 输入、设备或提交失败保留上个场景。只支持由调用方独占队列的原生宿主。
+    pub fn enqueue_quad_scene(
+        &mut self,
+        inputs: &[crate::QuadBlasInput<'_>],
+        instances: &[crate::TriangleInstance<crate::BatchBlas>],
+    ) -> Result<crate::TriangleSceneBatch, Error> {
+        self.scene_batch(
+            crate::acceleration::Sources::Quads(inputs),
+            instances,
+            true,
+            None,
+        )
+    }
+    /// 按本帧可用字节提交区域。超额包分帧上传；返回 None 时旧覆盖继续渲染且不能提交候选目录。
+    /// # Errors
+    /// 同 [`Self::enqueue_quad_scene`]；帧预算必须来自此渲染所有者，暂存 buffer 参与 collect。
+    pub fn stream_quad_scene(
+        &mut self,
+        uploads: &mut crate::TerrainUploads,
+        available: usize,
+        inputs: &[crate::QuadBlasInput<'_>],
+        instances: &[crate::TriangleInstance<crate::BatchBlas>],
+    ) -> Result<Option<crate::TriangleSceneBatch>, Error> {
+        use crate::{acceleration::Sources, terrain_upload::Progress};
+        let tail = instances
+            .len()
+            .checked_mul(64)
+            .ok_or(Error::InvalidArgument("TLAS 实例容量溢出"))?;
+        let staged = uploads.advance(self, inputs, available, tail)?;
+        let scene = match staged {
+            Progress::Direct => self.scene_batch(Sources::Quads(inputs), instances, true, None)?,
+            Progress::Staged { start, buffers } => {
+                if !buffers.is_empty() {
+                    let window = &inputs[start..start + buffers.len()];
+                    let (batch, _, _) =
+                        self.scene_parts(Sources::Uploaded(window, &buffers), None, true, None)?;
+                    uploads.remember(window, &batch)?;
+                }
+                let Some(built) = uploads.ready(inputs.len(), tail)? else {
+                    return Ok(None);
+                };
+                let mut current = Vec::new();
+                current.try_reserve_exact(instances.len())?;
+                let mut existing = Vec::new();
+                existing.try_reserve_exact(instances.len())?;
+                for i in instances {
+                    let id = match i.geometry {
+                        crate::BatchBlas::Existing(id) => id,
+                        crate::BatchBlas::New(k) => *built
+                            .blases
+                            .get(k)
+                            .ok_or(Error::InvalidArgument("新BLAS下标越界"))?,
+                    };
+                    current.push(crate::TriangleInstance {
+                        geometry: id,
+                        transform: i.transform,
+                        custom_index: i.custom_index,
+                    });
+                    existing.push(crate::TriangleInstance {
+                        geometry: crate::BatchBlas::Existing(id),
+                        transform: i.transform,
+                        custom_index: i.custom_index,
+                    });
+                }
+                let buffer = if tail > uploads.limit() {
+                    let bytes = self.instance_payload(&current)?;
+                    let Some(b) = uploads.instance_buffer(self, &bytes)? else {
+                        return Ok(None);
+                    };
+                    Some(b)
+                } else {
+                    None
+                };
+                let mut scene =
+                    self.scene_batch(Sources::Triangles(&[]), &existing, true, buffer)?;
+                scene.blas = built;
+                scene
+            }
+        };
+        uploads.clear();
+        Ok(Some(scene))
+    }
+
+    fn scene_batch(
+        &mut self,
+        inputs: crate::acceleration::Sources<'_>,
+        instances: &[crate::TriangleInstance<crate::BatchBlas>],
+        queued: bool,
+        instance_buffer: Option<Buffer>,
+    ) -> Result<crate::TriangleSceneBatch, Error> {
+        let (blas, top, tlas_prepare_ns) =
+            self.scene_parts(inputs, Some(instances), queued, instance_buffer)?;
+        Ok(crate::TriangleSceneBatch {
+            blas,
+            top: top.expect("请求了 TLAS"),
+            tlas_prepare_ns,
+        })
+    }
+
+    fn scene_parts(
+        &mut self,
+        inputs: crate::acceleration::Sources<'_>,
+        top_input: Option<&[crate::TriangleInstance<crate::BatchBlas>]>,
+        queued: bool,
+        instance_buffer: Option<Buffer>,
+    ) -> Result<
+        (
+            crate::TriangleBlasBatch,
+            Option<crate::AccelerationStructure>,
+            u64,
+        ),
+        Error,
+    > {
+        let instances = top_input.unwrap_or(&[]);
         self.device.ensure_active()?;
+        if queued {
+            self.poll_terrain()?;
+        }
         for instance in instances {
             match instance.geometry {
                 crate::BatchBlas::Existing(blas) => {
@@ -714,14 +1010,24 @@ impl Context {
         let elapsed = |instant: std::time::Instant| {
             u64::try_from(instant.elapsed().as_nanos()).unwrap_or(u64::MAX)
         };
+        let instance_address = instance_buffer
+            .map(|b| -> Result<u64, Error> { Ok(b.data(self)?.address(&self.device)) })
+            .transpose()?;
         let device = &self.device;
         let pool = &mut self.as_pool;
         let life = &mut self.life;
-        let result = immediate(device, |command| {
+        let encode = |command| {
             let preparation = std::time::Instant::now();
-            let resolved = Self::resolve_blas_inputs(life, inputs)?;
+            let resolved = Self::resolve_blas_inputs(device, life, inputs)?;
             let validation_ns = elapsed(preparation);
-            let output = BlasData::batch(device, &resolved, false, BatchMode::Raw(command), pool)?;
+            let output = BlasData::batch(
+                device,
+                &resolved,
+                false,
+                BatchMode::Raw(command),
+                pool,
+                self.quad_expansion.as_ref(),
+            )?;
             drop(resolved);
             timing = output.timing;
             timing.validation_ns = timing.validation_ns.saturating_add(validation_ns);
@@ -738,6 +1044,10 @@ impl Context {
                         return Err(error.into());
                     }
                 }
+            }
+            if top_input.is_none() {
+                preparation_ns = elapsed(preparation);
+                return Ok(());
             }
             let tlas_started = std::time::Instant::now();
             let mut resolved = Vec::new();
@@ -759,8 +1069,13 @@ impl Context {
                     },
                 ));
             }
-            let (data, buffers) =
-                AccelerationData::record_instances_raw(device, &resolved, pool, command)?;
+            let (data, buffers) = AccelerationData::record_instances_raw(
+                device,
+                &resolved,
+                pool,
+                instance_address,
+                command,
+            )?;
             drop(resolved);
             tlas_buffers = buffers;
             match life.insert_resource(Data::Acceleration(data)) {
@@ -773,11 +1088,49 @@ impl Context {
             tlas_prepare_ns = elapsed(tlas_started);
             preparation_ns = elapsed(preparation);
             Ok(())
-        });
+        };
+        let mut raw = None;
+        let result = if queued {
+            terrain_flight::Recording::record(device, encode).map(|recorded| raw = Some(recorded))
+        } else {
+            immediate(device, encode)
+        };
+        let result = if let Some(raw) = raw {
+            let buffers = [blas_buffers, tlas_buffers];
+            self.submit_terrain(raw, buffers, |op| {
+                if let Some(top) = top {
+                    op.keepalive(top.into())?;
+                }
+                for &blas in &blases {
+                    op.keepalive(blas.into())?;
+                }
+                if let Some(buffer) = instance_buffer {
+                    op.access(buffer.into())?;
+                }
+                if let crate::acceleration::Sources::Quads(v)
+                | crate::acceleration::Sources::Uploaded(v, _) = inputs
+                {
+                    for b in v
+                        .iter()
+                        .flat_map(|v| v.output.columns())
+                        .filter_map(|(b, _, _)| b)
+                    {
+                        op.access(b.into())?;
+                    }
+                }
+                if let crate::acceleration::Sources::Uploaded(_, staged) = inputs {
+                    for s in staged {
+                        op.access(s.buffer.into())?;
+                    }
+                }
+                Ok(())
+            })
+        } else {
+            blas_buffers.recycle(&self.device, &mut self.as_pool);
+            tlas_buffers.recycle(&self.device, &mut self.as_pool);
+            result
+        };
         timing.submit_wait_ns = elapsed(started).saturating_sub(preparation_ns);
-        // immediate 在返回错误前也确认队列可安全清理；未提交分支不读取这些缓冲。
-        blas_buffers.recycle(device, pool);
-        tlas_buffers.recycle(device, pool);
         if let Err(error) = result {
             if let Some(top) = top {
                 self.discard(top.key);
@@ -787,19 +1140,51 @@ impl Context {
             }
             return Err(error);
         }
-        timing.pool_idle_bytes = pool.stats().idle_bytes;
+        timing.pool_idle_bytes = self.as_pool.stats().idle_bytes;
         timing.total_ns = elapsed(started);
-        Ok(crate::TriangleSceneBatch {
-            blas: crate::TriangleBlasBatch { blases, timing },
-            top: top.expect("场景批成功时已有 TLAS"),
+        Ok((
+            crate::TriangleBlasBatch { blases, timing },
+            top,
             tlas_prepare_ns,
-        })
+        ))
     }
 
     pub(crate) fn record_acceleration_instances(
         &mut self,
         instances: &[crate::TriangleInstance],
     ) -> Result<crate::interop::PreparedTlas, Error> {
+        self.record_instances_from(instances, None)
+    }
+    pub(crate) fn instance_payload(
+        &self,
+        instances: &[crate::TriangleInstance],
+    ) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(
+            instances
+                .len()
+                .checked_mul(64)
+                .ok_or(Error::InvalidArgument("TLAS 字节数溢出"))?,
+        )?;
+        for i in instances {
+            self.active(i.geometry.key)?;
+            let geometry = self.blas(i.geometry)?;
+            bytes.extend_from_slice(&crate::acceleration::instance_bytes(&ResolvedInstance {
+                geometry,
+                transform: i.transform,
+                custom_index: i.custom_index,
+            })?);
+        }
+        Ok(bytes)
+    }
+    pub(crate) fn record_instances_from(
+        &mut self,
+        instances: &[crate::TriangleInstance],
+        input: Option<Buffer>,
+    ) -> Result<crate::interop::PreparedTlas, Error> {
+        let address = input
+            .map(|b| -> Result<u64, Error> { Ok(b.data(self)?.address(&self.device)) })
+            .transpose()?;
         let mut resolved = Vec::new();
         resolved.try_reserve_exact(instances.len())?;
         let mut roots = Vec::new();
@@ -818,8 +1203,12 @@ impl Context {
                 },
             ));
         }
-        let (data, raw, buffers) =
-            AccelerationData::record_instances(&self.device, &resolved, &mut self.as_pool)?;
+        let (data, raw, buffers) = AccelerationData::record_instances(
+            &self.device,
+            &resolved,
+            &mut self.as_pool,
+            address,
+        )?;
         drop(resolved);
         let key = match self.insert(Data::Acceleration(data)) {
             Ok(key) => key,
@@ -829,7 +1218,12 @@ impl Context {
             }
         };
         roots.push(key);
-        let record = match self.build_record(roots, buffers) {
+        let record = match self.insert_build_record(Record::new(
+            input.into_iter().map(|b| Op::Access(b.into())).collect(),
+            input.into_iter().map(|b| b.key).collect(),
+            roots,
+            buffers,
+        )) {
             Ok(record) => record,
             Err(error) => {
                 self.discard(key);
@@ -855,13 +1249,15 @@ impl Context {
             key: self.insert(Data::Acceleration(data))?,
         })
     }
-    pub(crate) fn opacity_micromap(
+    /// 同步构建精确二值 OMM；支持原生与 wgpu 设备，返回后释放输入借用和暂存。
+    /// 逻辑设备须启用 KHR OMM。Context 管理其生命周期，BLAS 自动保留依赖；
+    /// 尚未被 BLAS 引用的表须作为 collect 的根保活。失败保留原有资源。
+    /// # Errors
+    /// 不支持、输入或设备失败返回来源；无法确认完成时隔离在途资源。
+    pub fn opacity_micromap(
         &mut self,
         maps: &[crate::OpacityMap<'_>],
     ) -> Result<crate::OpacityMicromap, Error> {
-        if self.device._owner.is_none() {
-            return Err(Error::Unsupported("OMM 构建需要 wgpu 设备"));
-        }
         let data = MicromapData::new(&self.device, maps)?;
         let count = data.map_count();
         Ok(crate::OpacityMicromap {
@@ -969,7 +1365,8 @@ impl Context {
     /// 撤销发布时已有的命令；后续 collect 不扩充其等待集合，未来帧不延长旧版寿命。
     /// 仍存在的版本可重新发布；完整依赖遍历仅在本方法执行。
     /// 直接借用真实资源的邻接，只遍历可达边，不复制全图或存续组的等待集合。
-    /// 闭包计划失败后不提交退役更新；本方法不等待 GPU。
+    /// 闭包计划失败后不提交退役更新。地形设备把已完成 GPU 使用的大缓冲移交有界回收线程。
+    /// 显式传空根时还会收齐该线程的释放回执，全程不等待 GPU。
     /// # Errors
     /// 根或依赖的归属/版本无效时返回错误；资源、记录及退役状态不变。
     /// 设备已失效时拒绝发布和回收，保留在途资源交由析构清理。
@@ -986,6 +1383,11 @@ impl Context {
         })?;
         self.recycle_unkept(&plan.keep)?;
         self.retire_ready();
+        if roots.is_empty()
+            && let Some(queue) = &mut self.buffer_retirement
+        {
+            queue.drain(&self.device);
+        }
         Ok(())
     }
 
@@ -1007,9 +1409,7 @@ impl Context {
                 slot,
                 generation,
             };
-            if let Some(data) = self.life.take_resource(key) {
-                data.recycle(&self.device, &mut self.as_pool);
-            }
+            self.discard(key);
         }
         Ok(())
     }
@@ -1035,6 +1435,7 @@ impl Context {
         let owner = self.owner();
         std::mem::forget(std::mem::replace(&mut self.life, Life::new(owner)));
         std::mem::forget(std::mem::take(&mut self.as_pool));
+        std::mem::forget(std::mem::take(&mut self.terrain_flights));
         std::mem::forget(self.pipeline_cache.take());
         std::mem::forget(self.device._owner.take());
         std::mem::forget(self.device.wgpu_queue.take());
@@ -1045,6 +1446,7 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        drop(self.buffer_retirement.take());
         if self
             .life
             .records()
@@ -1059,18 +1461,74 @@ impl Drop for Context {
             }
         }
         let owner = self.owner();
+        for flight in self.terrain_flights.drain(..) {
+            flight.release(&self.device, &mut self.as_pool);
+        }
         let life = std::mem::replace(&mut self.life, Life::new(owner));
         let resources = life.into_shutdown(|record| record.into_buffers().destroy(&self.device));
         for mut resource in resources {
             resource.destroy(&self.device);
         }
         self.as_pool.destroy(&self.device);
+        if let Some(mut expansion) = self.quad_expansion.take() {
+            expansion.destroy(&self.device);
+        }
+        if let Some(mut builder) = self.light_builder.take() {
+            builder.destroy(&self.device);
+        }
         if let Some(cache) = self.pipeline_cache.take() {
             cache.destroy(&self.device);
         }
     }
 }
 impl WgpuContext {
+    /// 把互不重叠的旧缓冲前缀复制到新缓冲；同队列按序提交并保活两代，不等待 GPU。
+    /// # Errors
+    /// 缓冲未激活、源/目标别名、范围无效、分配或队列提交失败时返回错误。
+    pub fn copy_buffer_prefixes(&mut self, copies: &[(Buffer, Buffer, u64)]) -> Result<(), Error> {
+        if copies.is_empty() {
+            return Ok(());
+        }
+        self.drain_completed();
+        let context = &mut self.native;
+        let mut operations = Commands::new(context)?;
+        let mut raw = Vec::new();
+        raw.try_reserve_exact(copies.len())?;
+        for (i, &(src, dst, bytes)) in copies.iter().enumerate() {
+            if bytes == 0
+                || copies[..i].iter().any(|&(_, written, _)| dst == written)
+                || !bytes.is_multiple_of(4)
+                || bytes > src.len().min(dst.len())
+                || copies.iter().any(|(source, _, _)| *source == dst)
+            {
+                return Err(Error::InvalidArgument("设备前缀复制范围无效"));
+            }
+            operations.access(src.into())?;
+            operations.access(dst.into())?;
+            raw.push((src.data(context)?.raw, dst.data(context)?.raw, bytes));
+        }
+        let commands = crate::interop::record(&context.device, "copy terrain columns", |cmd| {
+            unsafe {
+                memory_barrier(&context.device, cmd);
+                for &(src, dst, bytes) in &raw {
+                    context.device.raw.cmd_copy_buffer(
+                        cmd,
+                        src,
+                        dst,
+                        &[vk::BufferCopy::default().size(bytes)],
+                    );
+                }
+                memory_barrier(&context.device, cmd);
+            }
+            Ok(())
+        })?;
+        let record = operations.finish(context)?;
+        self.submit([crate::interop::CommandBuffer::recorded(
+            commands, record.key,
+        )])?;
+        Ok(())
+    }
+
     /// 独占借入唯一 native owner。
     pub fn native(&mut self) -> &mut Context {
         self.drain_completed();

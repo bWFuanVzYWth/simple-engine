@@ -30,6 +30,7 @@ chunk_manager = ["dep:chunk_manager"]
 scene_cache = ["dep:scene_cache"]
 light_bvh = ["dep:light_bvh"]
 light_sampling = ["dep:light_sampling"]
+opacity = ["dep:opacity"]
 hash_dag = ["dep:hash_dag"]
 sip_hash = ["dep:sip_hash"]
 perlin_noise = ["dep:perlin_noise", "sip_hash"]
@@ -57,6 +58,7 @@ restir_pt = { path = "crates/restir_pt", optional = true }
 atmosphere = { path = "crates/atmosphere", optional = true, default-features = false }
 light_bvh = { path = "crates/light_bvh", optional = true }
 light_sampling = { path = "crates/light_sampling", optional = true }
+opacity = { path = "crates/opacity", optional = true }
 color = { path = "crates/color", optional = true }
 camera = { path = "crates/camera", optional = true }
 rectangle_decomposition = { path = "crates/rectangle_decomposition", optional = true }
@@ -87,6 +89,7 @@ members = [
     "crates/atmosphere",
     "crates/light_bvh",
     "crates/light_sampling",
+    "crates/opacity",
     "crates/scene_cache",
     "crates/color",
     "crates/camera",

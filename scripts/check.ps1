@@ -53,7 +53,7 @@ try {
     switch ($Suite) {
         'cpu' {
             Invoke-Step 'format' (Find-Bash) @('scripts/check_format.sh')
-            $packages = @('-p', 'camera', '-p', 'color', '-p', 'input', '-p', 'frame_loop', '-p', 'ui', '-p', 'render2d', '-p', 'hash_dag', '-p', 'sip_hash', '-p', 'perlin_noise', '-p', 'rectangle_decomposition', '-p', 'voxel_mesh', '-p', 'chunk_manager', '-p', 'light_bvh', '-p', 'shader_build', '-p', 'gpu_log', '-p', 'gpu_test')
+            $packages = @('-p', 'camera', '-p', 'color', '-p', 'input', '-p', 'frame_loop', '-p', 'ui', '-p', 'render2d', '-p', 'hash_dag', '-p', 'sip_hash', '-p', 'perlin_noise', '-p', 'rectangle_decomposition', '-p', 'voxel_mesh', '-p', 'chunk_manager', '-p', 'light_bvh', '-p', 'light_sampling', '-p', 'opacity', '-p', 'shader_build', '-p', 'gpu_log', '-p', 'gpu_test')
             Invoke-Cargo 'test' (@('test', '--locked', '--lib') + $packages)
             Invoke-Cargo 'clippy' (@('clippy', '--locked', '--all-targets') + $packages)
             Invoke-Cargo 'chunk-manager-lifecycle' @('test', '--locked', '-p', 'chunk_manager', '--tests')
@@ -81,6 +81,8 @@ try {
                 @{ Name = 'cpu'; Features = 'color,voxel_mesh,hash_dag,light_bvh' },
                 @{ Name = 'chunk-manager'; Features = 'chunk_manager' },
                 @{ Name = 'scene-cache'; Features = 'scene_cache' },
+                @{ Name = 'light-sampling'; Features = 'light_sampling' },
+                @{ Name = 'opacity'; Features = 'opacity' },
                 @{ Name = 'sip-hash'; Features = 'sip_hash' },
                 @{ Name = 'perlin-noise'; Features = 'perlin_noise' },
                 @{ Name = 'input'; Features = 'input' },
@@ -125,8 +127,8 @@ try {
                 $metadata = (& cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json)
                 if ($LASTEXITCODE -ne 0) { throw '无法读取工作区文档目标' }
                 $targets = @($metadata.packages | ForEach-Object { $_.targets } | Where-Object { $_.kind -contains 'lib' -or $_.kind -contains 'rlib' })
-                $webPackages = @('simple_engine', 'camera', 'color', 'gpu_log', 'hash_dag', 'sip_hash', 'perlin_noise', 'input', 'rectangle_decomposition', 'voxel_mesh', 'chunk_manager', 'light_bvh', 'render2d', 'ui')
-                $webArgs = @('doc', '--locked', '--target', 'wasm32-unknown-unknown', '--no-deps', '--features', 'simple_engine/camera,simple_engine/color,simple_engine/display,simple_engine/gpu_log,simple_engine/hash_dag,simple_engine/perlin_noise,simple_engine/input_recording,simple_engine/voxel_mesh,simple_engine/chunk_manager,simple_engine/light_bvh,simple_engine/shader_library')
+                $webPackages = @('simple_engine', 'camera', 'color', 'gpu_log', 'hash_dag', 'sip_hash', 'perlin_noise', 'input', 'rectangle_decomposition', 'voxel_mesh', 'chunk_manager', 'light_bvh', 'light_sampling', 'opacity', 'render2d', 'ui')
+                $webArgs = @('doc', '--locked', '--target', 'wasm32-unknown-unknown', '--no-deps', '--features', 'simple_engine/camera,simple_engine/color,simple_engine/display,simple_engine/gpu_log,simple_engine/hash_dag,simple_engine/perlin_noise,simple_engine/input_recording,simple_engine/voxel_mesh,simple_engine/chunk_manager,simple_engine/light_bvh,simple_engine/light_sampling,simple_engine/opacity,simple_engine/shader_library')
                 foreach ($package in $webPackages) { $webArgs += @('-p', $package) }
                 $env:RUSTDOCFLAGS += ' -Z unstable-options --show-coverage --output-format json'
                 Invoke-Cargo 'coverage' @('doc', '--locked', '--workspace', '--lib', '--all-features', '--no-deps')

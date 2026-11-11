@@ -42,6 +42,7 @@ pub struct AsBuildMemory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Class {
     Input,
+    Expanded,
     Scratch,
     Backing,
 }
@@ -49,7 +50,10 @@ pub(crate) enum Class {
 impl Class {
     fn usage(self) -> vk::BufferUsageFlags {
         (match self {
-            Self::Input => vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            Self::Input | Self::Expanded => {
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::STORAGE_BUFFER
+            }
             Self::Scratch => vk::BufferUsageFlags::STORAGE_BUFFER,
             Self::Backing => vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
         }) | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -62,7 +66,7 @@ impl Class {
                     | vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT
             }
-            Self::Scratch | Self::Backing => vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            Self::Expanded | Self::Scratch | Self::Backing => vk::MemoryPropertyFlags::DEVICE_LOCAL,
         }
     }
 }

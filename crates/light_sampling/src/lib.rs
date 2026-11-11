@@ -1,6 +1,7 @@
-//! 离散功率 alias 表与任意 quad 的两三角面积采样协议。
+//! 光源采样统一入口：软化叶节点的功率距离 BVH、灯面 alias 与活动光源目录。
 //!
-//! 本 crate 不拥有纹理、材质、光源身份或设备，不决定发光功率和发射侧。
+//! 资源准备算法不拥有纹理、材质或设备，不决定发光功率和发射侧。
+//! [`registry`] 可选地维护活动槽与反查身份；应用负责 GPU 发布与完成边界。
 //! 调用方按真实发光面的面积、亮度及侧数提供相对权重；双面灯仍是一份几何。
 //! 所有者 [`AliasTable`] 独占不可变结果；构建串行执行，不隐藏线程、调度或递归。
 //! [`QuadArea`] 是面积分布的固定值，不复制四角或保留输入借用。
@@ -8,15 +9,18 @@
 //! 正反向概率以同一个 24-bit 均匀整数选择器为准。正权至少获得一个选择器，
 //! 因而不会承诺与理想浮点权重完全成比例；MIS 须使用编码中的实际 PMF。
 //! 对应 shader 为 `shaders/pt/light_sampling.slang`，独立于场景和 BSDF。
-//! [`emitter`]补充资源期纹理texel裁剪与静态alias；不决定空间距离proposal或可见性。
+//! [`emitter`]补充资源期纹理texel裁剪与静态alias；与 [`bvh`] 的位置提案组合；可见性仍由输运查询决定。
 
 #![forbid(unsafe_code)]
 
 mod alias;
 pub mod emitter;
 mod quad;
+pub mod registry;
 
 pub use alias::{AliasSample, AliasTable};
+/// 功率距离 BVH；叶节点软化和正反向 24-bit PMF 遵循同一协议。
+pub use light_bvh as bvh;
 pub use quad::QuadArea;
 
 /// CPU 与 shader 共享的均匀整数选择器总数。

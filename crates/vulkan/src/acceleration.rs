@@ -11,8 +11,11 @@ mod batch;
 #[cfg(test)]
 #[path = "acceleration_validation.rs"]
 mod validation;
-pub(crate) use batch::{BatchMode, ResolvedBlas};
-pub use batch::{BuildTiming, TriangleBlasBatch, TriangleBlasInput, TriangleSceneBatch};
+pub(crate) use batch::{BatchMode, Positions, ResolvedBlas, Sources};
+pub use batch::{
+    BuildTiming, QuadBlasInput, QuadOutput, TriangleBlasBatch, TriangleBlasInput,
+    TriangleSceneBatch,
+};
 
 #[path = "acceleration_record.rs"]
 mod recorded;
@@ -225,7 +228,7 @@ fn validate_instance(m: &[[f32; 4]; 3], custom_index: u32) -> Result<(), Error> 
     Ok(())
 }
 
-fn instance_bytes(instance: &ResolvedInstance<'_>) -> Result<[u8; 64], Error> {
+pub(crate) fn instance_bytes(instance: &ResolvedInstance<'_>) -> Result<[u8; 64], Error> {
     let m = &instance.transform;
     validate_instance(m, instance.custom_index)?;
     let mut bytes = [0; 64];

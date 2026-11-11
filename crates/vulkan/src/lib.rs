@@ -62,6 +62,7 @@
 mod acceleration;
 mod buffer;
 mod buffer_pool;
+mod buffer_retirement;
 mod context;
 mod error;
 mod graph;
@@ -75,6 +76,7 @@ mod micromap;
 pub mod native;
 mod owner;
 mod pipeline_cache;
+mod quad_expansion;
 mod record_ids;
 #[cfg(all(feature = "dlss_rr", target_os = "windows"))]
 mod recovery;
@@ -85,16 +87,18 @@ pub mod streamline;
 #[cfg(all(feature = "dlss_rr", target_os = "windows"))]
 mod streamline_interop;
 mod submission;
+mod terrain_upload;
+pub use terrain_upload::{ColumnUpload, TerrainUploads};
 
 pub use acceleration::{
-    AccelerationStructure, BatchBlas, BuildTiming, TriangleBlas, TriangleBlasBatch,
-    TriangleBlasInput, TriangleInstance, TriangleSceneBatch,
+    AccelerationStructure, BatchBlas, BuildTiming, QuadBlasInput, QuadOutput, TriangleBlas,
+    TriangleBlasBatch, TriangleBlasInput, TriangleInstance, TriangleSceneBatch,
 };
 pub(crate) use ash::{khr, vk};
 pub use buffer_pool::{AsBuildMemory, AsPoolStats};
 pub(crate) use context::{Device, Instance, PhysicalDevice};
 pub use error::Error;
-pub use micromap::{OPACITY_FULLY_OPAQUE, OpacityMap, OpacityMicromap};
+pub use micromap::{OPACITY_FULLY_OPAQUE, OPACITY_UNKNOWN, OpacityMap, OpacityMicromap};
 pub(crate) use shader::ShaderModule;
 pub use submission::FailureKind as DeviceFailure;
 

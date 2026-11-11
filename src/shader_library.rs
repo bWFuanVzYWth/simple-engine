@@ -30,14 +30,17 @@
 //! | `pt.z_sobol` | 固定 domain 的分层 Morton 排列、二维 Sobol 与 FastOwen；支持范围由调用方校验 |
 //! | `pt.binary_sobol` | 专用 S8 binary nested 原语；定向 3D 保护四点半区投影，接受 scalar 两点退化，非通用高维采样器 |
 //! | `pt.roulette` | etaScale 更新、maxRGB 存活概率与重加权；启动散射次数由积分器选择 |
-//! | `pt.light_bvh` | SoA quad 功率距离树、24 位选灯及同接收点的反向离散 PMF |
+//! | `pt.guide_output` | 共享天空、表面、反射导引写入与 FP16 HDR 输入边界 |
+//! | `pt.pixel_transport` | 一／二样本和分离 lane 的外层 PT 循环 |
+//! | `pt.light_sampling` | 叶节点软化的位置树、均匀／纹理发光 alias、连接射线与正反向 PDF |
+//! | `pt.light_bvh` / `pt.light_area` | 统一光源采样的树与面积底层数值协议 |
 //! | `pt.bsdf` | 单面 Lambertian eval／PDF／sample，方向指离开表面，PDF 为立体角量度 |
 //! | `pt.mis` | 两种策略各一个样本的 power heuristic，两个 PDF 使用相同量度 |
 //! | `geometry.ray` | 三角形重建及散射／连接射线；只有单位方向的 t 才表示距离 |
 //! | `geometry.camera` | 左上原点 pinhole 射线、正 view-Z 投影与像素 jitter；使用输出 aspect、输入 extent |
 //! | `voxel.dag` | 64 叉 DAG 叶查询、祖先缓存与整数 DDA；资源、坐标映射和叶策略由调用者提供 |
 //!
-//! CPU 光源树的构建与 words 布局见可选 `light_bvh` crate。共享积分器不读取游戏场景；
+//! CPU 光源树的构建与 words 布局见 `light_sampling::bvh`。共享积分器不读取游戏场景；
 //! 使用底层数值模块的其他积分器可自行选择 NEE、随机域、RR 与路径预算。
 //! 重建的图像格式、场景对应和历史由接入层维护；可选 `vulkan::streamline` 封装 SDK，
 //! 应用仍负责设备接入、提交和完成证明。空间核不能替代时域重建质量验收。

@@ -33,10 +33,7 @@ use ash::vk::TaggedStructure as _;
 use ash_wgpu::vk::Handle as _;
 use std::{
     ffi::CStr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{atomic::AtomicU64, mpsc},
 };
 use wgpu::hal::api::Vulkan;
 
@@ -700,7 +697,7 @@ impl WgpuContext {
 
     /// 本 crate 显式申请的 buffer/image/AS/SBT 及池闲置 allocation，不含 wgpu 和驱动内部分配。
     pub fn allocated_native_bytes(&self) -> u64 {
-        self.native.device.buffer_bytes.load(Ordering::Relaxed)
+        self.native.allocated_bytes()
     }
 
     /// 完整初始化的共享 storage buffer；其余用途由 usage 指定。
@@ -984,6 +981,89 @@ impl WgpuContext {
     ) -> Result<PreparedBlasBatch, Error> {
         self.drain_completed();
         self.native.record_triangle_blas_batch(inputs)
+    }
+
+    /// 只录制压缩 quad 展开与 BLAS 构建，不等待 GPU。按返回顺序与 TLAS 命令共同提交。
+    /// 完成或取消前，命令记录独占本批上传、设备展开和 AS scratch 缓冲。
+    /// # Errors
+    /// 展开管线未准备、输入无效、分配或设备失败时不返回部分标识。
+    pub fn record_quad_blas_batch(
+        &mut self,
+        inputs: &[crate::QuadBlasInput<'_>],
+    ) -> Result<PreparedBlasBatch, Error> {
+        self.drain_completed();
+        self.native
+            .record_blas_inputs(crate::acceleration::Sources::Quads(inputs))
+    }
+    /// 使用帧预算推进 BLAS 输入。返回 None 时尚有未完成的上传；只有完整批次才开始 GPU 构建。
+    /// # Errors
+    /// 与 [`Self::record_quad_blas_batch`] 相同。GPU 在途命令和暂存根分别由 Context 和 uploads 保持。
+    pub fn stream_quad_blas_batch(
+        &mut self,
+        uploads: &mut crate::TerrainUploads,
+        available: usize,
+        inputs: &[crate::QuadBlasInput<'_>],
+        instance_count: usize,
+    ) -> Result<Option<PreparedBlasBatch>, Error> {
+        use crate::{acceleration::Sources, terrain_upload::Progress};
+        self.drain_completed();
+        let tail = instance_count
+            .checked_mul(64)
+            .ok_or(Error::InvalidArgument("TLAS 实例容量溢出"))?;
+        let staged = uploads.advance(&mut self.native, inputs, available, tail)?;
+        match staged {
+            Progress::Direct => self
+                .native
+                .record_blas_inputs(Sources::Quads(inputs))
+                .map(Some),
+            Progress::Staged { start, buffers } => {
+                if !buffers.is_empty() {
+                    let window = &inputs[start..start + buffers.len()];
+                    let batch = self
+                        .native
+                        .record_blas_inputs(Sources::Uploaded(window, &buffers))?;
+                    self.submit([batch.commands])?;
+                    uploads.remember(
+                        window,
+                        &crate::TriangleBlasBatch {
+                            blases: batch.blases,
+                            timing: batch.timing,
+                        },
+                    )?;
+                }
+                let Some(built) = uploads.ready(inputs.len(), tail)? else {
+                    return Ok(None);
+                };
+                let mut batch = self.native.record_blas_inputs(Sources::Triangles(&[]))?;
+                batch.blases = built.blases;
+                batch.timing = built.timing;
+                Ok(Some(batch))
+            }
+        }
+    }
+
+    /// 使用本次 BLAS 准备预留的实例额度录制 TLAS；目录本身超额时按帧上传并在最后一帧构建。
+    /// # Errors
+    /// 实例归属、变换、容量、录制或设备失败均返回错误，None 表示继续渲染旧覆盖。
+    pub fn stream_acceleration_instances(
+        &mut self,
+        uploads: &mut crate::TerrainUploads,
+        instances: &[crate::TriangleInstance],
+    ) -> Result<Option<PreparedTlas>, Error> {
+        let size = instances
+            .len()
+            .checked_mul(64)
+            .ok_or(Error::InvalidArgument("TLAS 实例字节数溢出"))?;
+        if size <= uploads.limit() {
+            return self.record_acceleration_instances(instances).map(Some);
+        }
+        let bytes = self.native.instance_payload(instances)?;
+        let Some(buffer) = uploads.instance_buffer(&mut self.native, &bytes)? else {
+            return Ok(None);
+        };
+        self.native
+            .record_instances_from(instances, Some(buffer))
+            .map(Some)
     }
 
     /// 复制实例并录制 TLAS，不提交或等待；空实例生成可追踪的空 TLAS。

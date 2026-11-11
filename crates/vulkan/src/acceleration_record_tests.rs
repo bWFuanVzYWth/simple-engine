@@ -177,3 +177,27 @@ fn build_temporaries_return_only_after_reported_completion() -> Result<(), Error
     crate::acceleration::validation::finish()?;
     Ok(())
 }
+
+#[test]
+#[ignore = "真实 Vulkan；在途复制保活大列，空根收齐驱动释放回执"]
+fn retired_columns_survive_copy_and_return_their_allocation() -> Result<(), Error> {
+    use crate::{interop, native::Buffer};
+    crate::acceleration::validation::start();
+    let mut ctx = pollster::block_on(interop::WgpuContext::new())?;
+    ctx.native().prepare_quad_expansion()?;
+    let initial = ctx.allocated_native_bytes();
+    let src = Buffer::mapped_device_local(ctx.native(), 32 << 20)?;
+    let dest = Buffer::mapped_device_local(ctx.native(), 32 << 20)?;
+    src.write(ctx.native(), 0, &[7, 13, 29, 61])?;
+    ctx.copy_buffer_prefixes(&[(src, dest, 4)])?;
+    ctx.native().collect(&[dest.into()])?;
+    interop::wait(&ctx.native_ref().device, None)?;
+    let mut read = [0; 4];
+    dest.read(ctx.native(), 0, &mut read)?;
+    assert_eq!(read, [7, 13, 29, 61]);
+    ctx.native().collect(&[])?;
+    assert_eq!(ctx.allocated_native_bytes(), initial);
+    drop(ctx);
+    crate::acceleration::validation::finish()?;
+    Ok(())
+}

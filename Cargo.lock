@@ -1351,6 +1351,8 @@ dependencies = [
 name = "light_sampling"
 version = "0.1.0"
 dependencies = [
+ "light_bvh",
+ "scene_cache",
  "thiserror 2.0.21",
 ]
 
@@ -1822,6 +1824,13 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "opacity"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "openpbr"
@@ -2626,6 +2635,7 @@ dependencies = [
  "input",
  "light_bvh",
  "light_sampling",
+ "opacity",
  "openpbr",
  "perlin_noise",
  "pt",
@@ -3134,9 +3144,12 @@ dependencies = [
  "ash 0.38.0+1.3.281",
  "ash 0.38.0+1.4.352",
  "blake3",
+ "bytemuck",
  "cc",
  "log",
  "pollster",
+ "scene_cache",
+ "shader_build",
  "thiserror 2.0.21",
  "vstd",
  "wgpu",

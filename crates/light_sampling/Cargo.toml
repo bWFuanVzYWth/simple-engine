@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+light_bvh = { path = "../light_bvh" }
+scene_cache = { path = "../scene_cache" }
 
 [lints]
 workspace = true

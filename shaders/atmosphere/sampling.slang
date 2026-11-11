@@ -300,4 +300,22 @@ public AerialSample aerial_sample(Texture3D<float4> light, Texture3D<float4> tra
         lerp(float3(1), saturate(transmittance.SampleLevel(sampler, coordinate, 0).xyz), weight);
     return result;
 }
+/// 均匀太阳盘的法向辐照度除以投影立体角；半角在 (0, pi/2)。
+/// 选择太阳方向的 PDF 仍使用未投影立体角，不能复用本归一化。
+public float3 solar_radiance(Params p, Texture2D<float4> opticalDepth, SamplerState sampler,
+                             float3 direction, float3 scale)
+{
+    float4 spectrum = p.solar * view_transmittance(p, opticalDepth, sampler, direction);
+    float3 rgb = spectrum.x * p.rgb[0].xyz + spectrum.y * p.rgb[1].xyz + spectrum.z * p.rgb[2].xyz +
+                 spectrum.w * p.rgb[3].xyz;
+    float sine = sin(p.sun.z);
+    return rgb * scale / (PI * sine * sine);
+}
+
+/// 在同一个线性 Rec.2020 空间合成 L + T * 背景；应用决定介质准入与非负裁剪。
+public float3 composite_aerial(AerialSample sample, float3 background)
+{
+    return sample.radiance + sample.transmittance * background;
+}
+
 }

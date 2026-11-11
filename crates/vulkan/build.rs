@@ -1,6 +1,28 @@
-//! 仅显式 dlss_rr feature 构建受控的 Windows Streamline bridge。
+//! 构建原生地形准备内核及可选的 Windows Streamline bridge。
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    shader_build::build(
+        &[
+            shader_build::Recipe {
+                source: "shaders/expand_quads.slang",
+                entry: "expand_quads",
+                stage: "compute",
+                output: "expand_quads.spv",
+                target: shader_build::Target::Spirv("spirv_1_4"),
+                args: &["-fp-mode", "precise"],
+            },
+            shader_build::Recipe {
+                source: "../../shaders/pt/light_build.slang",
+                entry: "build_level",
+                stage: "compute",
+                output: "light_build.spv",
+                target: shader_build::Target::Spirv("spirv_1_4"),
+                args: &["-fp-mode", "precise"],
+            },
+        ],
+        &["../../shaders"],
+        &[],
+    )?;
     println!("cargo:rerun-if-env-changed=STREAMLINE_SDK");
     #[cfg(feature = "dlss_rr")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

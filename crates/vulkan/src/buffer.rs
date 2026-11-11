@@ -14,6 +14,14 @@ impl Buffer {
     pub(crate) const fn allocation_bytes(&self) -> u64 {
         self.allocated_bytes
     }
+    /// # Safety
+    /// raw 是创建该 buffer 和专用分配的活动设备，调用方独占两者，所有宿主映射和 GPU 访问均已结束。
+    pub(crate) unsafe fn destroy_handles(&mut self, raw: &ash::Device) {
+        unsafe {
+            raw.destroy_buffer(self.raw, None);
+            raw.free_memory(self.memory, None);
+        }
+    }
 
     pub(crate) fn new(
         device: &Device,
@@ -168,10 +176,8 @@ impl Buffer {
 
 impl Destroy for Buffer {
     fn destroy(&mut self, device: &Device) {
-        unsafe {
-            device.raw.destroy_buffer(self.raw, None);
-            device.raw.free_memory(self.memory, None);
-        }
+        // SAFETY: guard 回滚从未提交的分配，或由 Context 在最后一次访问结束后移交。
+        unsafe { self.destroy_handles(&device.raw) };
         device
             .buffer_bytes
             .fetch_sub(self.allocated_bytes, Ordering::Relaxed);

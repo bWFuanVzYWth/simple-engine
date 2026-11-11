@@ -6,6 +6,11 @@ use ash::vk::TaggedStructure as _;
 pub const OPACITY_FULLY_OPAQUE: u32 =
     vk::OpacityMicromapSpecialIndexKHR::FULLY_OPAQUE.as_raw() as u32;
 
+/// 未准入精确 OMM 的三角形仍交给 any-hit／RayQuery candidate 覆盖测试。
+/// 不使用强制二值模式时，UNKNOWN_OPAQUE 保留 non-opaque 行为。
+pub const OPACITY_UNKNOWN: u32 =
+    vk::OpacityMicromapSpecialIndexKHR::FULLY_UNKNOWN_OPAQUE.as_raw() as u32;
+
 /// 一个三角形的精确 2-state opacity 数据；本类型不推断纹理、UV 或 alpha 阈值。
 /// 细分与 bit 顺序须对应实际 BLAS 三角形的同一有序顶点。
 #[derive(Clone, Copy)]
@@ -120,7 +125,7 @@ impl MicromapData {
                 device_address: (scratch.address(device) + padding) & !padding,
             },
         );
-        let command = crate::interop::record(device, "OMM build", |command| unsafe {
+        crate::native::immediate(device, |command| unsafe {
             barrier(
                 device,
                 command,
@@ -142,9 +147,6 @@ impl MicromapData {
             );
             Ok(())
         })?;
-        // wait 失败也先确认全队列完成，否则保留在途 input/scratch/OMM。
-        let submitted = device.submit([command])?;
-        crate::interop::wait(device, Some(submitted))?;
         Ok(result.finish())
     }
 
@@ -234,12 +236,11 @@ impl Encoded {
 }
 
 fn validate_indices(count: usize, indices: &[u32]) -> Result<(), Error> {
-    if indices
-        .iter()
-        .any(|&index| index != OPACITY_FULLY_OPAQUE && index as usize >= count)
-    {
+    if indices.iter().any(|&index| {
+        index != OPACITY_FULLY_OPAQUE && index != OPACITY_UNKNOWN && index as usize >= count
+    }) {
         return Err(Error::InvalidArgument(
-            "OMM index 未引用有效 map 或 fully opaque special",
+            "OMM index 未引用有效 map 或 opaque/unknown special",
         ));
     }
     Ok(())
@@ -313,8 +314,8 @@ mod tests {
     }
 
     #[test]
-    fn primitive_indices_accept_maps_and_fully_opaque_only() {
-        assert!(validate_indices(3, &[2, 0, 2, OPACITY_FULLY_OPAQUE, 1]).is_ok());
+    fn primitive_indices_accept_maps_and_supported_special_states() {
+        assert!(validate_indices(3, &[2, 0, 2, OPACITY_FULLY_OPAQUE, OPACITY_UNKNOWN, 1]).is_ok());
         assert!(validate_indices(1, &[1]).is_err());
         assert!(validate_indices(1, &[u32::MAX]).is_err());
     }

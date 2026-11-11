@@ -5,18 +5,22 @@ use super::*;
 #[derive(Default)]
 pub(crate) struct BuildBuffers {
     pub(crate) input: Option<Buffer>,
+    pub(crate) expanded: Option<Buffer>,
     pub(crate) scratch: Option<Buffer>,
 }
 
 impl BuildBuffers {
     pub(crate) fn destroy(mut self, device: &Device) {
-        for buffer in [&mut self.input, &mut self.scratch].into_iter().flatten() {
+        for buffer in [&mut self.input, &mut self.expanded, &mut self.scratch]
+            .into_iter()
+            .flatten()
+        {
             buffer.destroy(device);
         }
     }
 
     pub(crate) fn memory(&self) -> (u64, usize) {
-        [&self.input, &self.scratch]
+        [&self.input, &self.expanded, &self.scratch]
             .into_iter()
             .filter_map(|buffer| buffer.as_ref())
             .fold((0, 0), |(bytes, count), buffer| {
@@ -25,6 +29,9 @@ impl BuildBuffers {
     }
 
     pub(crate) fn recycle(mut self, device: &Device, pool: &mut BufferPool) {
+        if let Some(expanded) = self.expanded.take() {
+            pool.give(device, Class::Expanded, expanded);
+        }
         if let Some(input) = self.input.take() {
             pool.give(device, Class::Input, input);
         }
@@ -64,8 +71,9 @@ impl AccelerationData {
         device: &Device,
         instances: &[(TriangleBlas, ResolvedInstance<'_>)],
         pool: &mut BufferPool,
+        uploaded: Option<u64>,
     ) -> Result<(Self, wgpu::CommandBuffer, BuildBuffers), Error> {
-        Self::record_instances_with(device, instances, pool, |encode| {
+        Self::record_instances_with(device, instances, pool, uploaded, |encode| {
             crate::interop::record(device, "TLAS build", encode)
         })
     }
@@ -74,9 +82,10 @@ impl AccelerationData {
         device: &Device,
         instances: &[(TriangleBlas, ResolvedInstance<'_>)],
         pool: &mut BufferPool,
+        uploaded: Option<u64>,
         command: vk::CommandBuffer,
     ) -> Result<(Self, BuildBuffers), Error> {
-        Self::record_instances_with(device, instances, pool, |encode| encode(command))
+        Self::record_instances_with(device, instances, pool, uploaded, |encode| encode(command))
             .map(|(data, (), buffers)| (data, buffers))
     }
 
@@ -84,6 +93,7 @@ impl AccelerationData {
         device: &Device,
         instances: &[(TriangleBlas, ResolvedInstance<'_>)],
         pool: &mut BufferPool,
+        uploaded: Option<u64>,
         record: impl FnOnce(&dyn Fn(vk::CommandBuffer) -> Result<(), Error>) -> Result<C, Error>,
     ) -> Result<(Self, C, BuildBuffers), Error> {
         let properties = properties(device)?;
@@ -103,7 +113,9 @@ impl AccelerationData {
         let mut bottoms = Vec::new();
         bottoms.try_reserve_exact(instances.len())?;
         for (id, instance) in instances {
-            bytes.extend_from_slice(&instance_bytes(instance)?);
+            if uploaded.is_none() {
+                bytes.extend_from_slice(&instance_bytes(instance)?);
+            }
             bottoms.push(*id);
         }
         if bytes.is_empty() {
@@ -115,23 +127,30 @@ impl AccelerationData {
             buffers: BuildBuffers::default(),
             structure: None,
         };
-        resources.buffers.input = Some(
-            resources.pool.take(
-                device,
-                Class::Input,
-                bytes
-                    .len()
-                    .checked_add(15)
-                    .ok_or(Error::InvalidArgument("实例输入对齐溢出"))?,
-            )?,
-        );
-        let input = resources.buffers.input.as_ref().expect("已取得实例输入");
-        let address = input.address(device);
-        let padding = ((16 - address % 16) % 16) as usize;
-        input.write_slices(device, &[(padding, &bytes)])?;
+        let address = if let Some(address) = uploaded {
+            address
+        } else {
+            resources.buffers.input = Some(
+                resources.pool.take(
+                    device,
+                    Class::Input,
+                    bytes
+                        .len()
+                        .checked_add(15)
+                        .ok_or(Error::InvalidArgument("实例输入对齐溢出"))?,
+                )?,
+            );
+            let input = resources.buffers.input.as_ref().expect("已取得实例输入");
+            let address = input.address(device);
+            let padding = ((16 - address % 16) % 16) as usize;
+            if count != 0 {
+                input.write_slices(device, &[(padding, &bytes)])?;
+            }
+            address + padding as u64
+        };
         let data = vk::AccelerationStructureGeometryInstancesDataKHR::default().data(
             vk::DeviceOrHostAddressConstKHR {
-                device_address: address + padding as u64,
+                device_address: address,
             },
         );
         let geometries = [vk::AccelerationStructureGeometryKHR::default()

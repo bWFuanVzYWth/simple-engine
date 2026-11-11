@@ -11,6 +11,9 @@ static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 /// 容量、资源事务或活动身份输入无效。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// quad 含非有限坐标。
+    #[error("quad 坐标必须有限")]
+    Position,
     /// 索引、槽范围或所有者／世代／身份计数耗尽。
     #[error("场景资源索引、槽范围或身份计数耗尽")]
     Capacity,
@@ -30,6 +33,12 @@ pub enum Error {
 
 mod slots;
 pub use slots::Slots;
+mod producer;
+mod quads;
+pub use producer::{Producer, ProducerError};
+pub use quads::{
+    PackedQuads, ProjectedRectangle, QuadEncoder, QuadOrder, QuadSurface, ResidentQuads,
+};
 mod geometry;
 pub use geometry::{
     GeometryDirectory, GeometryPublication, GeometryRecord, GeometrySource, GeometryUpdate,
@@ -38,10 +47,41 @@ pub use geometry::{
 /// 资源替换身份序列；0保留为无效值，不因目录压缩或槽复用而复活。
 pub struct Identities {
     next: u32,
+    next_quad: u64,
     owner: u64,
     generation: u64,
 }
+/// 事务预留给一个区域的非零身份区间，独占移交给并行匹配内核。
+pub struct QuadIds(pub(crate) std::ops::Range<u64>);
+/// 一个未发布事务的并行身份分配器。每个区域只执行一次原子预留，逐面匹配使用私有区间。
+pub struct QuadIssuer(AtomicU64);
+impl QuadIssuer {
+    /// 预留最多 count 个身份。溢出保留原水位。
+    pub fn reserve(&self, count: usize) -> Result<QuadIds, Error> {
+        let count = count as u64;
+        let first = self
+            .0
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                v.checked_add(count)
+            })
+            .map_err(|_| Error::Capacity)?;
+        Ok(QuadIds(first..first + count))
+    }
+}
 impl Identities {
+    /// 在独占目录事务中临时借出并行分配能力，所有分片结束后一次归还水位。
+    pub fn with_quad_issuer<R>(&mut self, work: impl FnOnce(&QuadIssuer) -> R) -> R {
+        let ids = QuadIssuer(AtomicU64::new(self.next_quad));
+        let result = work(&ids);
+        self.next_quad = ids.0.into_inner();
+        result
+    }
+    /// 预留该区域最多需要的新身份；已有面的匹配结果允许留下未使用的编号。
+    pub fn reserve_quads(&mut self, count: usize) -> Result<QuadIds, Error> {
+        let begin = self.next_quad;
+        self.next_quad = begin.checked_add(count as u64).ok_or(Error::Capacity)?;
+        Ok(QuadIds(begin..self.next_quad))
+    }
     /// 预留非零身份；溢出返回错误，不回绕。
     pub fn take(&mut self) -> Result<u32, Error> {
         let id = self.next;
@@ -147,6 +187,7 @@ impl<T> Cache<T> {
             slots: Slots::new(owner),
             identities: Identities {
                 next: 1,
+                next_quad: 1,
                 owner,
                 generation: 0,
             },
@@ -161,6 +202,10 @@ impl<T> Cache<T> {
         self.entries.as_slice()
     }
 
+    /// 独占借用已发布记录的应用净荷。调用方仅可移交附属 CPU 数据，须保持目录顺序和已分配的槽区间。
+    pub fn entries_mut(&mut self) -> &mut [T] {
+        &mut self.entries
+    }
     /// 当前目录与空闲范围的显式保留容量，不含T拥有的间接数据或GPU内存。
     pub const fn retained_bytes(&self) -> usize {
         self.entries.capacity() * size_of::<T>() + self.slots.retained_bytes()
@@ -176,6 +221,7 @@ impl<T> Cache<T> {
             slots: self.slots.copy()?,
             identities: Identities {
                 next: self.identities.next,
+                next_quad: self.identities.next_quad,
                 owner: self.owner,
                 generation: self.generation,
             },
