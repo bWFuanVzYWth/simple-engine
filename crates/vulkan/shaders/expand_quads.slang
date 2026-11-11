@@ -16,84 +16,19 @@ struct Expansion
     int region_y;
     int region_z;
     uint mask;
-    uint *source_opacity;
-    uint *sorted_opacity;
 };
 [[vk::push_constant]]
 ConstantBuffer<Expansion> parameters;
 
-groupshared uint3 sort_keys[64];
-uint spread(uint v)
-{
-    v = (v | (v << 8u)) & 0x0f00fu;
-    v = (v | (v << 4u)) & 0x0c30c3u;
-    return (v | (v << 2u)) & 0x249249u;
-}
-uint3 order_key(uint q, uint lane)
-{
-    uint shape = parameters.headers[2u * q], surface = parameters.headers[2u * q + 1u];
-    uint layout = parameters.headers[2u * parameters.count + 16u * (surface & 0x7fffffffu)];
-    uint code;
-    if ((surface >> 31u) != 0u)
-    {
-        uint3 p = uint3(shape, shape >> 6u, shape >> 12u) & 63u;
-        code = spread(p.x) | (spread(p.y) << 1u) | (spread(p.z) << 2u);
-    }
-    else if ((shape >> 31u) == 0u)
-    {
-        uint axis = layout & 3u;
-        uint3 p = uint3(shape, shape >> 6u, shape >> 12u) & 63u;
-        p[axis] += (shape >> 30u) & 1u;
-        p[(axis + 1u) % 3u] += (((shape >> 18u) & 63u) + 1u) / 2u;
-        p[(axis + 2u) % 3u] += (((shape >> 24u) & 63u) + 1u) / 2u;
-        p = min(p, 63u);
-        code = spread(p.x) | (spread(p.y) << 1u) | (spread(p.z) << 2u);
-    }
-    else
-    {
-        code = parameters.payload[shape & 0x1fffffffu];
-    }
-    return uint3(((code >> 9u) << 16u) | (layout >> 16u), surface, ((code & 511u) << 6u) | lane);
-}
-bool precedes(uint3 a, uint3 b)
-{
-    return a.x < b.x || (a.x == b.x && (a.y < b.y || (a.y == b.y && a.z < b.z)));
-}
-
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void expand_quads(uint3 tid: SV_DispatchThreadID, uint lane: SV_GroupIndex)
+void expand_quads(uint3 tid: SV_DispatchThreadID)
 {
     uint slot = parameters.first + tid.x;
-    uint3 key = uint3(0xffffffffu);
-    if (slot < parameters.count)
-        key = order_key(slot, lane);
-    sort_keys[lane] = key;
-    GroupMemoryBarrierWithGroupSync();
-    [unroll]
-    for (uint width = 2; width <= 64; width *= 2)
-    {
-        [unroll]
-        for (uint stride = width / 2; stride > 0; stride /= 2)
-        {
-            uint next = lane ^ stride;
-            if (lane < next)
-            {
-                uint3 a = sort_keys[lane], b = sort_keys[next];
-                if ((lane & width) == 0u ? precedes(b, a) : precedes(a, b))
-                {
-                    sort_keys[lane] = b;
-                    sort_keys[next] = a;
-                }
-            }
-            GroupMemoryBarrierWithGroupSync();
-        }
-    }
     if (slot >= parameters.count)
         return;
-    uint q = (slot & ~63u) + (sort_keys[lane].z & 63u);
-    uint header = parameters.headers[q * 2u];
-    uint selected = parameters.headers[q * 2u + 1u];
+    uint header = parameters.headers[slot * 2u];
+    uint selected = parameters.headers[slot * 2u + 1u];
     uint *surface = parameters.headers + parameters.count * 2u + (selected & 0x7fffffffu) * 16u;
     uint format = (header >> 29u) & 3u;
     uint vertices[12];
@@ -140,7 +75,7 @@ void expand_quads(uint3 tid: SV_DispatchThreadID, uint lane: SV_GroupIndex)
     }
     else if (format == 0u)
     {
-        uint *src = parameters.payload + (header & 0x1fffffffu) + 1u;
+        uint *src = parameters.payload + (header & 0x1fffffffu);
         uint a = src[0], c = src[1];
         [unroll]
         for (uint axis = 0; axis < 3; ++axis)
@@ -155,7 +90,7 @@ void expand_quads(uint3 tid: SV_DispatchThreadID, uint lane: SV_GroupIndex)
     }
     else
     {
-        uint *src = parameters.payload + (header & 0x1fffffffu) + 1u;
+        uint *src = parameters.payload + (header & 0x1fffffffu);
         [unroll]
         for (uint i = 0; i < 12; ++i)
         {
@@ -214,11 +149,11 @@ void expand_quads(uint3 tid: SV_DispatchThreadID, uint lane: SV_GroupIndex)
     {
         uint2 id = parameters.base_id;
         if ((parameters.mask & 16u) != 0u)
-            id = uint2(parameters.id_input[q * 2u], parameters.id_input[q * 2u + 1u]);
+            id = uint2(parameters.id_input[slot * 2u], parameters.id_input[slot * 2u + 1u]);
         else
         {
-            id.x += q;
-            id.y += uint(id.x < q);
+            id.x += slot;
+            id.y += uint(id.x < slot);
         }
         parameters.identities[slot * 2u] = id.x;
         parameters.identities[slot * 2u + 1u] = id.y;
@@ -242,10 +177,5 @@ void expand_quads(uint3 tid: SV_DispatchThreadID, uint lane: SV_GroupIndex)
         row[1] = asuint(world.y);
         row[2] = asuint(world.z);
         row[3] = flags;
-    }
-    if ((parameters.mask & 32u) != 0u)
-    {
-        parameters.sorted_opacity[slot * 2u] = parameters.source_opacity[q * 2u];
-        parameters.sorted_opacity[slot * 2u + 1u] = parameters.source_opacity[q * 2u + 1u];
     }
 }

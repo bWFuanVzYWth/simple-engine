@@ -24,8 +24,6 @@ pub struct ProjectedRectangle {
     pub uv_axes: [i8; 2],
     /// 应用材料字与高 16 位表面标记。
     pub material_flags: [u32; 2],
-    /// 已链接的 hit group 程序槽，用于着色局部性分组。
-    pub program: u32,
 }
 
 fn projection_bits(axes: [i8; 2]) -> u32 {
@@ -84,23 +82,6 @@ fn rectangle(points: [[f32; 3]; 4], lod: u8) -> Option<(u32, u32)> {
     Some((packed, layout))
 }
 const WORDS: [usize; 4] = [2, 3, 6, 12];
-
-fn morton(p: [u32; 3]) -> u32 {
-    let spread = |v: u32| {
-        let v = (v | (v << 8)) & 0x0f00f;
-        let v = (v | (v << 4)) & 0x0c30c3;
-        (v | (v << 2)) & 0x249249
-    };
-    spread(p[0]) | spread(p[1]) << 1 | spread(p[2]) << 2
-}
-fn rect_key(geometry: u32, layout: u32) -> u32 {
-    let axis = (layout & 3) as usize;
-    let mut p = [geometry & 63, (geometry >> 6) & 63, (geometry >> 12) & 63];
-    p[axis] = (p[axis] + ((geometry >> 30) & 1)).min(63);
-    p[(axis + 1) % 3] += ((geometry >> 18) & 63).div_ceil(2);
-    p[(axis + 2) % 3] += ((geometry >> 24) & 63).div_ceil(2);
-    morton(p.map(|v| v.min(63)))
-}
 
 // 一格内的十二个角坐标只需十二位。适用于对角草卡及其他由单位格角组成的模型面。
 fn cell_quad(points: [[f32; 3]; 4], lod: u8, cell: Option<[i32; 3]>) -> Option<u32> {
@@ -169,17 +150,7 @@ impl QuadEncoder {
         lod: u8,
         attributes: [[u32; 4]; 3],
     ) -> Result<(), Error> {
-        self.push_routed(points, lod, attributes, 0)
-    }
-    /// 同 [`Self::push`]，以材质的实际 hit group 程序槽作为近邻面之间的着色排序键。
-    pub fn push_routed(
-        &mut self,
-        points: [[f32; 3]; 4],
-        lod: u8,
-        attributes: [[u32; 4]; 3],
-        program: u32,
-    ) -> Result<(), Error> {
-        self.insert(points, lod, attributes, None, program)
+        self.insert(points, lod, attributes, None)
     }
     /// 直接接收矩形分解的整数结果。返回 false 表示该矩形超出 64³ 局部格式，可改传完整面。
     /// 域内矩形不生成浮点顶点；无效朝向、投影或分配失败返回错误。
@@ -214,10 +185,7 @@ impl QuadEncoder {
         let geometry =
             x | y << 6 | z << 12 | (w - 1) << 18 | (h - 1) << 24 | u32::from(rect.normal > 0) << 30;
         let mut surface = [0; 16];
-        surface[0] = axis as u32
-            | u32::from(rect.lod) << 4
-            | projection_bits(rect.uv_axes)
-            | rect.program.min(0xffff) << 16;
+        surface[0] = axis as u32 | u32::from(rect.lod) << 4 | projection_bits(rect.uv_axes);
         surface[12] = rect.material_flags[0];
         surface[13] = rect.material_flags[1] & !0xffff;
         self.append(surface, false, |_| Ok(geometry))?;
@@ -234,12 +202,11 @@ impl QuadEncoder {
         attributes: [[u32; 4]; 3],
         cell: [i32; 3],
         uv_axes: [i8; 2],
-        program: u32,
     ) -> Result<(), Error> {
         if uv_axes.iter().any(|v| !(1..=3).contains(&v.unsigned_abs())) {
             return Err(Error::Position);
         }
-        self.insert(points, lod, attributes, Some((cell, uv_axes)), program)
+        self.insert(points, lod, attributes, Some((cell, uv_axes)))
     }
     fn insert(
         &mut self,
@@ -247,7 +214,6 @@ impl QuadEncoder {
         lod: u8,
         attributes: [[u32; 4]; 3],
         projected: Option<([i32; 3], [i8; 2])>,
-        program: u32,
     ) -> Result<(), Error> {
         let mut rect = rectangle(points, lod);
         if let Some((cell, _)) = projected {
@@ -286,14 +252,14 @@ impl QuadEncoder {
                 surface[1..4].copy_from_slice(&cell.map(|v| v as u32));
             }
         }
-        surface[0] = layout | (program.min(0xffff) << 16);
+        surface[0] = layout;
         self.append(surface, instance.is_some(), |stream| {
             if let Some((word, _)) = rect {
                 Ok(word)
             } else if let Some(word) = instance {
                 Ok(word)
             } else {
-                stream.fallback(points, lod)
+                stream.fallback(points)
             }
         })
     }
@@ -373,7 +339,7 @@ impl QuadEncoder {
             };
             if s & ESCAPE == 0 && geometry & ESCAPE != 0 {
                 let at = (geometry & OFFSET) as usize;
-                let n = 1 + WORDS[((geometry >> 29) & 3) as usize];
+                let n = WORDS[((geometry >> 29) & 3) as usize];
                 let offset = self.stream.payload.len();
                 if offset > OFFSET as usize {
                     return Err(Error::Capacity);
@@ -407,18 +373,17 @@ impl QuadEncoder {
         Ok(())
     }
 
-    /// 使用驻留面的既有几何和源序，替换显式着色属性与命中程序。用于只改变材质覆盖的重建。
+    /// 使用驻留面的既有几何和源序，替换显式着色属性。用于只改变材质覆盖的重建。
     pub fn rebind(
         &mut self,
         source: &ResidentQuads,
         i: usize,
         attr: [[u32; 4]; 3],
-        program: u32,
     ) -> Result<(), Error> {
         let packed = source.positions();
         let &[g, s] = packed.headers.get(i).ok_or(Error::Capacity)?;
         let mut surface = packed.surfaces[(s & !ESCAPE) as usize];
-        surface[0] = surface[0] & 0x1ff | (program.min(0xffff) << 16);
+        surface[0] &= 0x1ff;
         surface[4..].copy_from_slice(attr.as_flattened());
         let next = self.stream.headers.len();
         self.stream.inherited.try_reserve(1)?;
@@ -427,7 +392,7 @@ impl QuadEncoder {
                 return Ok(g);
             }
             let at = (g & OFFSET) as usize;
-            let n = 1 + WORDS[((g >> 29) & 3) as usize];
+            let n = WORDS[((g >> 29) & 3) as usize];
             let offset = dest.payload.len();
             if offset > OFFSET as usize {
                 return Err(Error::Capacity);
@@ -459,7 +424,7 @@ impl QuadEncoder {
     }
 }
 impl PackedQuads {
-    fn fallback(&mut self, points: [[f32; 3]; 4], lod: u8) -> Result<u32, Error> {
+    fn fallback(&mut self, points: [[f32; 3]; 4]) -> Result<u32, Error> {
         let octets = points.map(|p| p.map(|v| v as u8));
         let mut words = [0; 12];
         let format = if (0..4)
@@ -503,21 +468,15 @@ impl PackedQuads {
         };
         let offset = self.payload.len();
         let len = WORDS[format];
-        if offset + 1 + len > OFFSET as usize {
+        if offset + len > OFFSET as usize {
             return Err(Error::Capacity);
         }
-        self.payload.try_reserve(len + 1)?;
-        let scale = 2.0f64.powi(i32::from(lod));
-        let center = std::array::from_fn(|i| {
-            (points.iter().map(|p| f64::from(p[i])).sum::<f64>() / (4. * scale)).clamp(0., 63.)
-                as u32
-        });
-        self.payload.push(morton(center));
+        self.payload.try_reserve(len)?;
         self.payload.extend_from_slice(&words[..len]);
         Ok(ESCAPE | (format as u32) << 29 | offset as u32)
     }
 
-    /// 每个 quad 一个目录项，primitive 顺序由生产者确定。
+    /// 每个 quad 一个目录项。GPU 按生产者的源序展开，BLAS 的局部 primitive 编号除以二即源 quad 序号。
     pub const fn headers(&self) -> &[[u32; 2]] {
         self.headers.as_slice()
     }
@@ -550,7 +509,7 @@ impl PackedQuads {
         if geometry & ESCAPE == 0 {
             return (geometry, self.surfaces[surface as usize][0] & 0x1ff, &[]);
         }
-        let start = (geometry & OFFSET) as usize + 1;
+        let start = (geometry & OFFSET) as usize;
         let format = ((geometry >> 29) & 3) as usize;
         (
             ESCAPE,
@@ -560,90 +519,6 @@ impl PackedQuads {
     }
     fn surface(&self, index: usize) -> &QuadSurface {
         &self.surfaces[(self.headers[index][1] & !ESCAPE) as usize]
-    }
-    fn locality(&self, i: usize) -> (u32, u32, u32) {
-        let [g, s] = self.headers[i];
-        let layout = self.surfaces[(s & !ESCAPE) as usize][0];
-        let code = if s & ESCAPE != 0 {
-            morton([g & 63, (g >> 6) & 63, (g >> 12) & 63])
-        } else if g & ESCAPE == 0 {
-            rect_key(g, layout)
-        } else {
-            self.payload[(g & OFFSET) as usize]
-        };
-        (
-            ((code >> 9) << 16) | (layout >> 16),
-            s,
-            ((code & 511) << 6) | (i as u32 & 63),
-        )
-    }
-    /// 顺序定位多个属性或发光面；每个命中的 64 面组只计算一次逆序。
-    pub fn order_cursor(&self) -> QuadOrder<'_> {
-        QuadOrder {
-            source: self,
-            block: usize::MAX,
-            lanes: [0; 64],
-        }
-    }
-    /// 局部源序号在 GPU 的物理 quad 号。只用于场景准备阶段定位 CPU 补丁和发光注册。
-    /// 命中直接执行 primitive/2。每 64 面依次按粗空间块、程序槽、表面和细 Morton 顺序排列。
-    pub fn physical(&self, index: usize) -> Option<usize> {
-        if index >= self.headers.len() {
-            return None;
-        }
-        let start = index & !63;
-        let key = self.locality(index);
-        Some(
-            start
-                + (start..(start + 64).min(self.headers.len()))
-                    .filter(|&i| self.locality(i) < key)
-                    .count(),
-        )
-    }
-    /// 一个 64 面组按 GPU 物理顺序排列的源 lane，末组尾部以 u8::MAX 填充。
-    /// 用于按相同布局准备批量属性补丁；不常驻重排表。
-    pub fn block_order(&self, block: usize) -> [u8; 64] {
-        let start = block.saturating_mul(64);
-        let n = self.headers.len().saturating_sub(start).min(64);
-        let mut indices = std::array::from_fn(|i| if i < n { i as u8 } else { u8::MAX });
-        let keys: [_; 64] = std::array::from_fn(|i| {
-            if i < n {
-                self.locality(start + i)
-            } else {
-                (u32::MAX, u32::MAX, u32::MAX)
-            }
-        });
-        indices[..n].sort_unstable_by_key(|&i| keys[i as usize]);
-        indices
-    }
-}
-
-/// 候选组的临时 CPU 排列，只为准备阶段的稀疏消费者占用 64 个字节。
-pub struct QuadOrder<'a> {
-    source: &'a PackedQuads,
-    block: usize,
-    lanes: [u8; 64],
-}
-impl QuadOrder<'_> {
-    /// 返回源 quad 的物理序号，切换分组时重算本组，各 GPU 命中不访问此对象。
-    pub fn physical(&mut self, index: usize) -> Option<usize> {
-        if index >= self.source.headers.len() {
-            return None;
-        }
-        let block = index / 64;
-        if self.block != block {
-            self.block = block;
-            for (i, lane) in self
-                .source
-                .block_order(block)
-                .into_iter()
-                .take_while(|v| *v != u8::MAX)
-                .enumerate()
-            {
-                self.lanes[lane as usize] = i as u8;
-            }
-        }
-        Some(block * 64 + usize::from(self.lanes[index % 64]))
     }
 }
 
@@ -835,6 +710,31 @@ mod tests {
         let old = ResidentQuads::prepare(make([5, 9])?, None, ids)?;
         let new = ResidentQuads::prepare(make([9, 5])?, Some(&old), ids)?;
         assert_eq!([new.token(0), new.token(1)], [old.token(1), old.token(0)]);
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_faces_keep_their_geometry_and_identity_when_repacked() -> Result<(), Error> {
+        let owner = Cache::<()>::new()?;
+        let mut update = owner.begin(0)?;
+        let ids = update.parts_mut().2;
+        let mut source = QuadEncoder::with_capacity(2)?;
+        for x in [-0.5, 0.1] {
+            source.push(
+                [[x, 0., 0.], [1., 0., 0.], [1., 1., 0.], [x, 1., 0.]],
+                0,
+                [[0; 4]; 3],
+            )?;
+        }
+        let old = ResidentQuads::prepare(source.finish(), None, ids)?;
+        let mut encoder = QuadEncoder::with_capacity(2)?;
+        encoder.rebind(&old, 1, [[17; 4]; 3])?;
+        encoder.extend_packed(old.positions(), 0..1)?;
+        let new = ResidentQuads::prepare(encoder.finish(), Some(&old), ids)?;
+        for (i, prior) in [1, 0].into_iter().enumerate() {
+            assert_eq!(new.positions().record(i), old.positions().record(prior));
+            assert_eq!(new.token(i), old.token(prior));
+        }
         Ok(())
     }
 

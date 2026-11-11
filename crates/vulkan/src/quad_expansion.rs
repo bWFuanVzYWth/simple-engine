@@ -11,7 +11,6 @@ pub(crate) struct QuadDispatch {
     pub count: u32,
     pub region: [i32; 3],
     pub first_token: u64,
-    pub opacity: [u64; 2],
 }
 
 pub(crate) struct Expansion {
@@ -25,7 +24,7 @@ impl Expansion {
             cache,
             include_bytes!(concat!(env!("OUT_DIR"), "/expand_quads.spv")),
             c"expand_quads",
-            112,
+            96,
         )
     }
     pub(crate) fn with_shader(
@@ -105,7 +104,6 @@ impl Expansion {
             count,
             region,
             first_token: id,
-            opacity,
         } = parameters;
         let limit = device
             .physical
@@ -117,7 +115,7 @@ impl Expansion {
             device
                 .raw
                 .cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, self.pipeline);
-            let mut push = [0u8; 112];
+            let mut push = [0u8; 96];
             for (slot, addr) in push[..64].as_chunks_mut::<8>().0.iter_mut().zip(addresses) {
                 slot.copy_from_slice(&addr.to_ne_bytes());
             }
@@ -129,13 +127,8 @@ impl Expansion {
             let mask = addresses[3..]
                 .iter()
                 .enumerate()
-                .fold(u32::from(opacity[0] != 0) << 5, |v, (i, &a)| {
-                    v | (u32::from(a != 0) << i)
-                });
+                .fold(0u32, |v, (i, &a)| v | (u32::from(a != 0) << i));
             push[92..96].copy_from_slice(&mask.to_ne_bytes());
-            for (dst, addr) in push[96..].as_chunks_mut::<8>().0.iter_mut().zip(opacity) {
-                dst.copy_from_slice(&addr.to_ne_bytes());
-            }
             let mut first = 0;
             while first < count {
                 let groups = (count - first).div_ceil(64).min(limit);

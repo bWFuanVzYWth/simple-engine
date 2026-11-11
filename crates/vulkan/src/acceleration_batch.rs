@@ -165,7 +165,6 @@ struct Plan {
     vertex_offset: usize,
     expanded_offset: Option<usize>,
     identity_offset: Option<usize>,
-    sorted_opacity: Option<usize>,
     index_offset: Option<usize>,
 }
 
@@ -360,7 +359,6 @@ impl BlasData {
         plans.try_reserve_exact(inputs.len())?;
         let mut input_len = 0_usize;
         let mut expanded_len = 0usize;
-        let mut sorted_bytes = 0usize;
         let mut largest = None;
         for input in inputs {
             let (triangles, bytes, expanded_offset) = match input.positions {
@@ -429,22 +427,12 @@ impl BlasData {
             } else {
                 None
             };
-            let sorted_opacity = if expanded_offset.is_some() && index_offset.is_some() {
-                let at = sorted_bytes;
-                sorted_bytes = sorted_bytes
-                    .checked_add(triangles * 4)
-                    .ok_or(Error::InvalidArgument("OMM 分组输出溢出"))?;
-                Some(at)
-            } else {
-                None
-            };
             plans.push(Plan {
                 count,
                 vertices,
                 vertex_offset,
                 expanded_offset,
                 identity_offset,
-                sorted_opacity,
                 index_offset,
             });
             if input.uploaded.is_some() {
@@ -467,7 +455,6 @@ impl BlasData {
             let total = count
                 .checked_mul(24)
                 .and_then(|indices| expanded_len.checked_add(indices))
-                .and_then(|bytes| bytes.checked_add(sorted_bytes))
                 .and_then(|bytes| bytes.checked_add(15))
                 .ok_or(Error::InvalidArgument("quad 设备缓冲溢出"))?;
             resources.expanded = Some(resources.pool.take(device, Class::Expanded, total)?);
@@ -477,7 +464,6 @@ impl BlasData {
             .as_ref()
             .map_or(0, |b| b.address(device).next_multiple_of(16));
         let index_address = expanded_address + expanded_len as u64;
-        let opacity_address = index_address + largest.map_or(0, |(_, n)| n as u64 * 24);
         let vertex_address = |input: &ResolvedBlas, offset: usize| {
             if input.destinations[2] != 0 {
                 input.destinations[2]
@@ -569,12 +555,7 @@ impl BlasData {
             if let (Some(offset), Some((map, _, _))) = (plan.index_offset, input.opacity) {
                 *opacity = vk::AccelerationStructureTrianglesOpacityMicromapKHR::default()
                     .index_type(vk::IndexType::UINT32)
-                    .index_buffer(
-                        plan.sorted_opacity
-                            .map_or(source_address(input) + offset as u64, |at| {
-                                opacity_address + at as u64
-                            }),
-                    )
+                    .index_buffer(source_address(input) + offset as u64)
                     .index_stride(4)
                     .micromap(map.raw());
                 data = data.push(opacity);
@@ -721,15 +702,6 @@ impl BlasData {
                             let id_src = plan
                                 .identity_offset
                                 .map_or(0, |at| source_address(source) + at as u64);
-                            let opacity = plan.index_offset.zip(plan.sorted_opacity).map_or(
-                                [0; 2],
-                                |(src, dst)| {
-                                    [
-                                        source_address(source) + src as u64,
-                                        opacity_address + dst as u64,
-                                    ]
-                                },
-                            );
                             program.record(
                                 device,
                                 command,
@@ -753,7 +725,6 @@ impl BlasData {
                                     count,
                                     region: source.region,
                                     first_token: resident.first_token(),
-                                    opacity,
                                 },
                             );
                         }

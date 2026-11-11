@@ -36,9 +36,7 @@ pub use slots::Slots;
 mod producer;
 mod quads;
 pub use producer::{Producer, ProducerError};
-pub use quads::{
-    PackedQuads, ProjectedRectangle, QuadEncoder, QuadOrder, QuadSurface, ResidentQuads,
-};
+pub use quads::{PackedQuads, ProjectedRectangle, QuadEncoder, QuadSurface, ResidentQuads};
 mod geometry;
 pub use geometry::{
     GeometryDirectory, GeometryPublication, GeometryRecord, GeometrySource, GeometryUpdate,
