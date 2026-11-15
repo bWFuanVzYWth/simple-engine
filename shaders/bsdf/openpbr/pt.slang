@@ -26,22 +26,24 @@ import "bsdf/openpbr/pt_subsurface.slang";
 // The legacy exact OpenPBR supported-domain kernels remain unchanged. PT supplies
 // only their source-reachable parameters, after a visibility query; no generic
 // material/default graph or closure survives a query.
-public PrimeFullCompactOpaqueState primeFullPtOpaqueState<Energy>(
-    Energy energy, float3 baseColor, float roughness, float interfaceIor, float subsurfaceWeight,
-    bool conductor, float3 f0, float3 f82, float3 wi)
+public func primeFullPtOpaqueState<Energy>(energy: Energy, baseColor: float3, roughness: float,
+                                           interfaceIor: float, subsurfaceWeight: float,
+                                           conductor: bool, f0: float3, f82: float3, wi: float3)
+    ->PrimeFullCompactOpaqueState
     where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     return primeFullPtOpaqueStateImpl<false>(energy, baseColor, roughness, interfaceIor,
                                              subsurfaceWeight, conductor, f0, f82, wi);
 }
 
-public PrimeFullCompactOpaqueState primeFullPtOpaqueStateImpl<let Continuous : bool,
-                                                              let Smooth : bool = false, Energy>(
-    Energy energy, float3 baseColor, float roughness, float interfaceIor, float subsurfaceWeight,
-    bool conductor, float3 f0, float3 f82, float3 wi)
+public func primeFullPtOpaqueStateImpl<let Continuous : bool, let Smooth : bool = false, Energy>(
+    energy: Energy, baseColor: float3, roughness: float, interfaceIor: float,
+    subsurfaceWeight: float, conductor: bool, f0: float3, f82: float3, wi: float3)
+    ->PrimeFullCompactOpaqueState
     where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullCompactOpaqueState state = {};
+    var subsurfaceWeight = subsurfaceWeight;
+    var state : PrimeFullCompactOpaqueState = {};
     state.metalness = conductor ? 1.0 : 0.0;
     state.kind = conductor                 ? PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR
                  : subsurfaceWeight == 1.0 ? PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
@@ -76,21 +78,22 @@ public PrimeFullCompactOpaqueState primeFullPtOpaqueStateImpl<let Continuous : b
     state.dielectricFresnel.color = float3(1.0);
     state.dielectricMultipleScattering = primeFullOpenPbrMicrofacetDielectricMsCompensation<Smooth>(
         energy, state.microfacet, wi.z, state.dielectricFresnel.energyIor);
-    float3 diffuseEnergy =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE && subsurfaceWeight < 1.0
-            ? baseColor
-            : float3(0.0);
-    float3 subsurfaceEnergy =
-        subsurfaceWeight > 0.0
-            ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : float3(0.0);
+    let diffuseEnergy : float3 = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE &&
+                                         subsurfaceWeight < 1.0
+                                     ? baseColor
+                                     : float3(0.0);
+    let subsurfaceEnergy
+        : float3 = subsurfaceWeight > 0.0
+                       ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                       : float3(0.0);
     state.diffuseMix =
         primeFullCompactMakeMixState(subsurfaceWeight, diffuseEnergy, subsurfaceEnergy);
-    float3 baseEnergy = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-                            ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
-                        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-                            ? subsurfaceEnergy
-                            : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+    let baseEnergy
+        : float3 = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                       ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                   : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                       ? subsurfaceEnergy
+                       : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
     state.layer = primeFullCompactMakeLayerState(
         baseEnergy, float3(1.0 - state.dielectricMultipleScattering.z),
         primeFullCompactDielectricEnergyImpl<Continuous>(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL));
@@ -100,16 +103,16 @@ public PrimeFullCompactOpaqueState primeFullPtOpaqueStateImpl<let Continuous : b
 // Canonical metalness mixes the two existing physical endpoints. The component
 // proposal uses the same m as its response weight, without another directional-energy
 // lookup or a second state. State is prepared only at its final local consumer.
-public PrimeFullCompactOpaqueState primeFullPtMetallicState<Energy>(Energy energy, float3 color,
-                                                                    float roughness,
-                                                                    float interfaceIor,
-                                                                    float subsurface,
-                                                                    float metalness, float3 wi)
+public func primeFullPtMetallicState<Energy>(energy: Energy, color: float3, roughness: float,
+                                             interfaceIor: float, subsurface: float,
+                                             metalness: float, wi: float3)
+    ->PrimeFullCompactOpaqueState
     where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullCompactOpaqueState state =
-        primeFullPtOpaqueState(energy, color, roughness, interfaceIor, subsurface, metalness == 1.0,
-                               saturate(color), float3(1.0), wi);
+    var metalness = metalness;
+    var state : PrimeFullCompactOpaqueState =
+                    primeFullPtOpaqueState(energy, color, roughness, interfaceIor, subsurface,
+                                           metalness == 1.0, saturate(color), float3(1.0), wi);
     if (metalness == 0.0 || metalness == 1.0)
         return state;
     state.metalness = metalness;
@@ -126,12 +129,13 @@ public PrimeFullCompactOpaqueState primeFullPtMetallicState<Energy>(Energy energ
     return state;
 }
 
-public PrimeFullCompactTransmissionState primeFullPtTransmissionState<Energy>(
-    Energy energy, float roughness, float interfaceIor, bool thinWalled, float3 thinExtinction,
-    float3 wi)
+public func primeFullPtTransmissionState<Energy>(energy: Energy, roughness: float,
+                                                 interfaceIor: float, thinWalled: bool,
+                                                 thinExtinction: float3, wi: float3)
+    ->PrimeFullCompactTransmissionState
     where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullCompactTransmissionState state = {};
+    var state : PrimeFullCompactTransmissionState = {};
     state.geometryThinWalled = thinWalled ? 1u : 0u;
     state.entering = wi.z >= 0.0 ? 1u : 0u;
     state.specularMicrofacet.alpha = float2(roughness * roughness);
@@ -158,15 +162,16 @@ public PrimeFullCompactTransmissionState primeFullPtTransmissionState<Energy>(
 
 // MIS consumes the full closure response and its marginal proposal density,
 // retaining the legacy sampler's exact selected direction and random mapping.
-public PrimeFullOpenPbrSample primeFullPtOpaqueSample(float3 wi, float3 randomValue,
-                                                      PrimeFullCompactOpaqueState state)
+public func primeFullPtOpaqueSample(wi: float3, randomValue: float3,
+                                    state: PrimeFullCompactOpaqueState)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample sampled = primeFullCompactOpaqueSample(wi, randomValue, state);
+    var sampled : PrimeFullOpenPbrSample = primeFullCompactOpaqueSample(wi, randomValue, state);
     if (state.metalness == 0.0 && primeFullOpenPbrHasSample(sampled) &&
         !primeFullOpenPbrIsDelta(sampled.throughput.flags))
     {
-        PrimeFullCompactOpaqueEvaluation evaluated =
-            primeFullCompactOpaqueEvaluate(wi, sampled.wo, state);
+        let evaluated : PrimeFullCompactOpaqueEvaluation =
+                            primeFullCompactOpaqueEvaluate(wi, sampled.wo, state);
         sampled.throughput.value = evaluated.throughput.value;
         sampled.pdf = evaluated.pdf;
     }

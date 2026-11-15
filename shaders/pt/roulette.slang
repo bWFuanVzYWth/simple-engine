@@ -10,13 +10,14 @@ namespace pt
 {
 /// relative_eta=eta_t/eta_i，透射更新平方补偿，反射/TIR 不变。
 /// eta_scale 和 relative_eta 须有限正，更新结果须可表示。
-public float eta_scale_after_scatter(float eta_scale, float relative_eta, bool transmission)
+public func eta_scale_after_scatter(eta_scale: float, relative_eta: float, transmission: bool)
+    ->float
 {
     return transmission ? eta_scale * relative_eta * relative_eta : eta_scale;
 }
 
 /// 从已完成散射数决定应用选定的起点；未发生散射的透明孔不应计数。
-public bool roulette_applies(uint completed_scatters, uint minimum_completed_scatters)
+public func roulette_applies(completed_scatters: uint, minimum_completed_scatters: uint)->bool
 {
     return completed_scatters >= minimum_completed_scatters;
 }
@@ -26,15 +27,16 @@ public bool roulette_applies(uint completed_scatters, uint minimum_completed_sca
 /// https://github.com/blender/blender/blob/0dc747e6a9277155ad85fc0644c4e0e17a4c0d20/intern/cycles/kernel/integrator/path_state.h#L273
 /// p=0 结束，p=1 原样继续；两者均不取随机数。
 /// 仅 0<p<1 时取独立均匀 u，以 u<p 决定存活，再调用 roulette_reweight。
-public float roulette_probability(float3 throughput, float eta_scale, bool square_root = false)
+public func roulette_probability(throughput: float3, eta_scale: float, square_root: bool = false)
+    ->float
 {
-    float probability =
-        clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
+    let probability
+        : float = clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
     return square_root ? sqrt(probability) : probability;
 }
 
 /// 仅用于 0<p<1 的存活事件；条件贡献除以 p，保持期望。p=1 路径不需要调用。
-public float3 roulette_reweight(float3 throughput, float probability)
+public func roulette_reweight(throughput: float3, probability: float)->float3
 {
     return throughput / probability;
 }

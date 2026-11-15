@@ -1,14 +1,15 @@
 module readback;
 
 [[vk::binding(0, 0)]]
-RWTexture2D<float4> image;
+var image : RWTexture2D<float4>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<float4> pixels;
+var pixels : RWStructuredBuffer<float4>;
 
 [numthreads(8, 8, 1)]
-void readback_main(uint3 id: SV_DispatchThreadID)
+func readback_main(uint3 id: SV_DispatchThreadID)->void
 {
-    uint width, height;
+    var width : uint;
+    var height : uint;
     image.GetDimensions(width, height);
     if (id.x >= width || id.y >= height)
         return;

@@ -4,36 +4,37 @@ module cone;
 namespace geometry
 {
 /// 球面弦长平方；小角度下仍保留有效位，不计算 1-cos(angle)。
-public float cone_chord_squared(float angle)
+public func cone_chord_squared(angle: float)->float
 {
-    float halfAngle = 0.5 * angle;
+    let halfAngle : float = 0.5 * angle;
     // GPU sin 的绝对误差保证不足以约束微小圆盘的相对误差；此区间的余项低于 f32 舍入。
-    float squared = halfAngle * halfAngle;
-    float halfSine = halfAngle < 0.1 ? halfAngle * (1 - squared * (1.0 / 6.0 - squared / 120.0))
-                                     : sin(halfAngle);
+    let squared : float = halfAngle * halfAngle;
+    let halfSine : float = halfAngle < 0.1
+                               ? halfAngle * (1 - squared * (1.0 / 6.0 - squared / 120.0))
+                               : sin(halfAngle);
     return 4 * halfSine * halfSine;
 }
 
-public float uniform_cone_pdf(float angle)
+public func uniform_cone_pdf(angle: float)->float
 {
     return 1 / (3.141592653589793 * cone_chord_squared(angle));
 }
 
 /// 发光域和反向 PDF 共用此谓词；避免单位向量点积的末位误差放大小角度边界。
-public bool cone_contains(float3 axis, float angle, float3 direction)
+public func cone_contains(axis: float3, angle: float, direction: float3)->bool
 {
-    float3 chord = direction - axis;
+    let chord : float3 = direction - axis;
     return dot(chord, chord) <= cone_chord_squared(angle);
 }
 
-public float3 sample_uniform_cone(float3 axis, float angle, float2 u)
+public func sample_uniform_cone(axis: float3, angle: float, u: float2)->float3
 {
-    float offset = 0.5 * cone_chord_squared(angle) * u.x;
-    float z = 1 - offset;
-    float radius = sqrt(offset * (2 - offset));
-    float phi = 6.283185307179586 * u.y;
-    float3 tangent =
-        normalize(cross(abs(axis.z) < 0.999 ? float3(0, 0, 1) : float3(0, 1, 0), axis));
+    let offset : float = 0.5 * cone_chord_squared(angle) * u.x;
+    let z : float = 1 - offset;
+    let radius : float = sqrt(offset * (2 - offset));
+    let phi : float = 6.283185307179586 * u.y;
+    let tangent
+        : float3 = normalize(cross(abs(axis.z) < 0.999 ? float3(0, 0, 1) : float3(0, 1, 0), axis));
     return axis * z + radius * (cos(phi) * tangent + sin(phi) * cross(axis, tangent));
 }
 }

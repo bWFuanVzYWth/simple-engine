@@ -12,7 +12,7 @@ import "bsdf/openpbr/contract/material.slang";
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public bool primeFullCompactOpaqueSupports(PrimeFullOpenPbrMaterial material)
+public func primeFullCompactOpaqueSupports(material: PrimeFullOpenPbrMaterial)->bool
 {
     return material.weight.base == 1.0 && material.weight.specular == 1.0 &&
            (material.weight.metalness == 0.0 || material.weight.metalness == 1.0) &&
@@ -24,12 +24,13 @@ public bool primeFullCompactOpaqueSupports(PrimeFullOpenPbrMaterial material)
             (material.weight.metalness == 0.0 && material.geometry.thinWalled != 0u));
 }
 
-public PrimeFullCompactOpaqueState primeFullCompactOpaqueStateInit<TransmissionGgxEnergy>(
-    TransmissionGgxEnergy transmissionGgxEnergy, PrimeFullOpenPbrMaterial material, float3 wi,
-    float inverseOutsideIor)
+public func primeFullCompactOpaqueStateInit<TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, material: PrimeFullOpenPbrMaterial, wi: float3,
+    inverseOutsideIor: float)
+    ->PrimeFullCompactOpaqueState
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullCompactOpaqueState state;
+    var state : PrimeFullCompactOpaqueState;
     state.onb = material.geometry.onb;
     state.metalness = material.weight.metalness;
     state.kind = material.weight.metalness == 1.0    ? PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR
@@ -43,7 +44,7 @@ public PrimeFullCompactOpaqueState primeFullCompactOpaqueStateInit<TransmissionG
     state.microfacet.alpha = primeFullOpenPbrSpecularNdfRoughnesses(
         material.specular.roughness, material.specular.roughnessAnisotropy);
 
-    float interfaceIor = material.specular.ior * inverseOutsideIor;
+    let interfaceIor : float = material.specular.ior * inverseOutsideIor;
     state.dielectricFresnel.ior = interfaceIor;
     state.dielectricFresnel.energyIor =
         primeFullOpenPbrIorAdjustment(interfaceIor, material.weight.specular);
@@ -67,21 +68,22 @@ public PrimeFullCompactOpaqueState primeFullCompactOpaqueStateInit<TransmissionG
                                  .x;
     }
 
-    float3 diffuseEnergy =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE && state.subsurfaceWeight < 1.0
-            ? state.baseColor
-            : float3(0.0);
-    float3 subsurfaceEnergy =
-        state.kind != PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR && state.subsurfaceWeight > 0.0
-            ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : float3(0.0);
+    let diffuseEnergy : float3 = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE &&
+                                         state.subsurfaceWeight < 1.0
+                                     ? state.baseColor
+                                     : float3(0.0);
+    let subsurfaceEnergy
+        : float3 = state.kind != PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR && state.subsurfaceWeight > 0.0
+                       ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                       : float3(0.0);
     state.diffuseMix =
         primeFullCompactMakeMixState(state.subsurfaceWeight, diffuseEnergy, subsurfaceEnergy);
-    float3 baseEnergy = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-                            ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
-                        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-                            ? subsurfaceEnergy
-                            : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+    let baseEnergy
+        : float3 = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                       ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                   : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                       ? subsurfaceEnergy
+                       : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
     state.layer = primeFullCompactMakeLayerState(
         baseEnergy, float3(1.0 - state.dielectricMultipleScattering.z),
         primeFullCompactDielectricEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL));

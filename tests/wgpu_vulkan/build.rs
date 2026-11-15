@@ -129,12 +129,12 @@ fn main() -> Result<(), shader_build::Error> {
     );
     recipes.extend([
         Recipe {
-            source: "shaders/sampled.slang",
+            source: "shaders/sampled_prepare.slang",
             entry: "sampled_prepare",
             stage: "compute",
             output: "sampled_prepare.spv",
             target: Target::Spirv("spirv_1_4"),
-            args: &["-DSAMPLED_PREPARE=1"],
+            args: &[],
         },
         Recipe {
             source: "shaders/sampled.slang",

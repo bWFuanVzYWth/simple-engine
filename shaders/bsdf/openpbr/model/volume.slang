@@ -7,15 +7,15 @@ import "bsdf/openpbr/contract/material.slang";
 import "bsdf/openpbr/contract/volume.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public PrimeFullOpenPbrVolume primeFullOpenPbrVolumeFromTransmission(
-    PrimeFullOpenPbrTransmission transmission)
+public func primeFullOpenPbrVolumeFromTransmission(transmission: PrimeFullOpenPbrTransmission)
+    ->PrimeFullOpenPbrVolume
 {
-    PrimeFullOpenPbrVolume result;
+    var result : PrimeFullOpenPbrVolume;
     if (transmission.depth > 0.0)
     {
-        float3 muT = -log(max(float3(1.0e-3), transmission.color)) / transmission.depth;
-        float3 muS = transmission.scatter / transmission.depth;
-        float3 muA = muT - muS;
+        let muT : float3 = -log(max(float3(1.0e-3), transmission.color)) / transmission.depth;
+        let muS : float3 = transmission.scatter / transmission.depth;
+        var muA : float3 = muT - muS;
         muA -= float3(min(0.0, primeFullOpenPbrReduceMin(muA)));
         result.extinction = muA + muS;
         result.albedo = float3(result.extinction.x != 0.0 ? muS.x / result.extinction.x : 0.0,

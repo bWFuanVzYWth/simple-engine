@@ -9,26 +9,26 @@ import bsdf.openpbr.specialized;
 import bsdf.openpbr.flow;
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<float4> inputs;
+var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<uint4> outputs;
+var outputs : RWStructuredBuffer<uint4>;
 // 两个测试域均不消费 energy；真实 SPIR-V 不应保留这两个 descriptor。
 [[vk::binding(2, 0)]]
-Texture3D<float4> unused_energy;
+var unused_energy : Texture3D<float4>;
 [[vk::binding(3, 0)]]
-SamplerState unused_sampler;
+var unused_sampler : SamplerState;
 
 using namespace pt;
 using namespace geometry;
 
 public struct PaletteScene : IFlowScene
 {
-    public SurfaceMaterial resolve(Hit hit, uint capability, float4 incident)
+    public func resolve(hit: Hit, capability: uint, incident: float4)->SurfaceMaterial
     {
-        uint base = hit.identity.x;
-        float4 value = inputs[base];
-        float3 color = value.xyz * inputs[base + 1].xyz;
-        SurfaceMaterial result = {};
+        let base : uint = hit.identity.x;
+        let value : float4 = inputs[base];
+        let color : float3 = value.xyz * inputs[base + 1].xyz;
+        var result : SurfaceMaterial = {};
         result.pbr.base_roughness = float4(color, 0.9);
         result.pbr.surface.x = 1.5;
         result.pbr.control.x = capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC ? 1u : 0u;
@@ -37,38 +37,39 @@ public struct PaletteScene : IFlowScene
         result.boundary_filter = color;
         return result;
     }
-    public SurfaceMaterial resolve_flow(Hit hit, uint flow, float4 incident)
+    public func resolve_flow(hit: Hit, flow: uint, incident: float4)->SurfaceMaterial
     {
-        uint capability = (flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u
-                              ? openpbr::CAP_DELTA_SOLID_DIELECTRIC
-                              : openpbr::CAP_OPAQUE_DIELECTRIC;
+        let capability : uint = (flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u
+                                    ? openpbr::CAP_DELTA_SOLID_DIELECTRIC
+                                    : openpbr::CAP_OPAQUE_DIELECTRIC;
         return resolve(hit, capability, incident);
     }
-    public openpbr::Energy energy()
+    public func energy()->openpbr::Energy
     {
         return { unused_energy, unused_sampler };
     }
-    public LightSample sample_sun(SurfacePoint point, float2 sample)
+    public func sample_sun(point_value: SurfacePoint, sample_value: float2)->LightSample
     {
         return (LightSample)0;
     }
-    public LightSample sample_light(SurfacePoint point, float3 sample)
+    public func sample_light(point_value: SurfacePoint, sample_value: float3)->LightSample
     {
         return (LightSample)0;
     }
-    public float3 light_emission(SurfacePoint point, LightSample sample, bool solar)
+    public func light_emission(point_value: SurfacePoint, sample_value: LightSample, solar: bool)
+        ->float3
     {
-        return sample.emission;
+        return sample_value.emission;
     }
-    public float emission_pdf(Hit hit, float3 previous)
+    public func emission_pdf(hit: Hit, previous: float3)->float
     {
         return inputs[hit.identity.x + 1].w;
     }
-    public bool occluded(Ray ray)
+    public func occluded(ray: Ray)->bool
     {
         return false;
     }
-    public Environment environment(float3 direction, float3 previous, uint depth)
+    public func environment(direction: float3, previous: float3, depth: uint)->Environment
     {
         return (Environment)0;
     }
@@ -76,15 +77,15 @@ public struct PaletteScene : IFlowScene
 
 public struct AttributeScene : IScene, IDeltaPrefixScene
 {
-    public DeltaInterface delta_interface(Hit hit, float4 incident)
+    public func delta_interface(hit: Hit, incident: float4)->DeltaInterface
     {
         return { hit.surface.normal, float4(1, inputs[hit.identity.y + 2].xyz),
                  hit.texel.xyz * inputs[hit.identity.y].xyz };
     }
-    public SurfaceMaterial resolve(Hit hit, uint capability, float4 incident)
+    public func resolve(hit: Hit, capability: uint, incident: float4)->SurfaceMaterial
     {
-        float3 color = hit.texel.xyz * inputs[hit.identity.y].xyz;
-        SurfaceMaterial result = {};
+        let color : float3 = hit.texel.xyz * inputs[hit.identity.y].xyz;
+        var result : SurfaceMaterial = {};
         result.pbr.base_roughness = float4(color, 0.9);
         result.pbr.surface.x = 1.5;
         result.pbr.control.x = capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC ? 1u : 0u;
@@ -93,37 +94,38 @@ public struct AttributeScene : IScene, IDeltaPrefixScene
         result.boundary_filter = color;
         return result;
     }
-    public openpbr::Energy energy()
+    public func energy()->openpbr::Energy
     {
         return { unused_energy, unused_sampler };
     }
-    public LightSample sample_sun(SurfacePoint point, float2 sample)
+    public func sample_sun(point_value: SurfacePoint, sample_value: float2)->LightSample
     {
         return (LightSample)0;
     }
-    public LightSample sample_light(SurfacePoint point, float3 sample)
+    public func sample_light(point_value: SurfacePoint, sample_value: float3)->LightSample
     {
         return (LightSample)0;
     }
-    public float3 light_emission(SurfacePoint point, LightSample sample, bool solar)
+    public func light_emission(point_value: SurfacePoint, sample_value: LightSample, solar: bool)
+        ->float3
     {
-        return sample.emission;
+        return sample_value.emission;
     }
-    public float emission_pdf(Hit hit, float3 previous)
+    public func emission_pdf(hit: Hit, previous: float3)->float
     {
         return inputs[hit.identity.y].w;
     }
-    public bool occluded(Ray ray)
+    public func occluded(ray: Ray)->bool
     {
         return false;
     }
-    public Environment environment(float3 direction, float3 previous, uint depth)
+    public func environment(direction: float3, previous: float3, depth: uint)->Environment
     {
         return (Environment)0;
     }
 };
 
-void store_path(uint base, PathState path)
+func store_path(base: uint, path: PathState)->void
 {
     outputs[base] = asuint(float4(path.throughput, path.previous_pdf));
     outputs[base + 1] = asuint(float4(path.radiance, path.eta_scale));
@@ -136,14 +138,15 @@ void store_path(uint base, PathState path)
 
 /// 末顶点 opaque 发光的 Beer／MIS 与匹配 IOR 的 solid 边界采用不同独立用例。
 [numthreads(64, 1, 1)]
-void pt_scene_main(uint3 id: SV_DispatchThreadID)
+func pt_scene_main(uint3 id: SV_DispatchThreadID)->void
 {
-    uint rows, stride;
+    var rows : uint;
+    var stride : uint;
     inputs.GetDimensions(rows, stride);
     if (id.x >= rows / 4)
         return;
-    uint base = id.x * 4;
-    TransportCall palette = {};
+    let base : uint = id.x * 4;
+    var palette : TransportCall = {};
     palette.hit.surface = { float3(0), float3(0, 0, 1), 0 };
     palette.hit.identity.x = base;
     palette.hit.distance = 2;
@@ -157,12 +160,12 @@ void pt_scene_main(uint3 id: SV_DispatchThreadID)
     palette.path.eta_scale = 1;
     palette.pixel = uint2(id.x, 0);
     palette.sample = asuint(inputs[base + 2].w);
-    TransportCall attributes = palette;
+    var attributes : TransportCall = palette;
     attributes.hit.identity.x = 0xffffffffu;
     attributes.hit.identity.y = base + 1;
     attributes.hit.texel = inputs[base];
-    Settings settings = { 17, 1, 8, 8, false };
-    uint mode = asuint(inputs[base + 3].w);
+    var settings : Settings = { 17, 1, 8, 8, false };
+    let mode : uint = asuint(inputs[base + 3].w);
     if (mode == 0)
     {
         palette.path.depth = 1;

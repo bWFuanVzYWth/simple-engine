@@ -12,9 +12,10 @@ import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 import "bsdf/openpbr/model/volume.slang";
 
-public PrimeFullCompactTransmissionState primeFullCompactTransmissionClosureState(
-    PrimeFullCompactTransmissionState state)
+public func primeFullCompactTransmissionClosureState(state: PrimeFullCompactTransmissionState)
+    ->PrimeFullCompactTransmissionState
 {
+    var state = state;
     if (state.geometryThinWalled == 0u)
     {
         state.entering = 1u;
@@ -22,7 +23,7 @@ public PrimeFullCompactTransmissionState primeFullCompactTransmissionClosureStat
     return state;
 }
 
-public bool primeFullCompactTransmissionSupports(PrimeFullOpenPbrMaterial material)
+public func primeFullCompactTransmissionSupports(material: PrimeFullOpenPbrMaterial)->bool
 {
     return material.weight.base == 1.0 && material.weight.diffuseRoughness == 0.0 &&
            material.weight.specular == 1.0 && material.weight.metalness == 0.0 &&
@@ -34,13 +35,13 @@ public bool primeFullCompactTransmissionSupports(PrimeFullOpenPbrMaterial materi
 
 // energyCosine is abs(wi.z) for the material frame, or wi.z for the physical interface.
 // Selecting it here avoids constructing and then replacing the exiting-interface LUT result.
-public PrimeFullCompactTransmissionState primeFullCompactTransmissionStateInit<
-    TransmissionGgxEnergy>(TransmissionGgxEnergy transmissionGgxEnergy,
-                           PrimeFullOpenPbrMaterial material, float3 wi,
-                           PrimeFullOpenPbrVolume outsideMedium, float rayT, float energyCosine)
+public func primeFullCompactTransmissionStateInit<TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, material: PrimeFullOpenPbrMaterial, wi: float3,
+    outsideMedium: PrimeFullOpenPbrVolume, rayT: float, energyCosine: float)
+    ->PrimeFullCompactTransmissionState
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullCompactTransmissionState state;
+    var state : PrimeFullCompactTransmissionState;
     state.onb = material.geometry.onb;
     state.geometryThinWalled = material.geometry.thinWalled;
     state.entering = wi.z >= 0.0 ? 1u : 0u;
@@ -79,21 +80,23 @@ public PrimeFullCompactTransmissionState primeFullCompactTransmissionStateInit<
     return state;
 }
 
-public PrimeFullCompactTransmissionState primeFullCompactTransmissionStateInit<
-    TransmissionGgxEnergy>(TransmissionGgxEnergy transmissionGgxEnergy,
-                           PrimeFullOpenPbrMaterial material, float3 wi,
-                           PrimeFullOpenPbrVolume outsideMedium, float rayT)
+public func primeFullCompactTransmissionStateInit<TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, material: PrimeFullOpenPbrMaterial, wi: float3,
+    outsideMedium: PrimeFullOpenPbrVolume, rayT: float)
+    ->PrimeFullCompactTransmissionState
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     return primeFullCompactTransmissionStateInit(transmissionGgxEnergy, material, wi, outsideMedium,
                                                  rayT, abs(wi.z));
 }
 
-public PrimeFullCompactTransmissionState primeFullCompactTransmissionInterfaceState<
-    TransmissionGgxEnergy>(TransmissionGgxEnergy transmissionGgxEnergy, float3 wi,
-                           PrimeFullCompactTransmissionState state)
+public func primeFullCompactTransmissionInterfaceState<TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, wi: float3,
+    state: PrimeFullCompactTransmissionState)
+    ->PrimeFullCompactTransmissionState
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
+    var state = state;
     if (state.geometryThinWalled != 0u || state.entering != 0u)
     {
         return state;

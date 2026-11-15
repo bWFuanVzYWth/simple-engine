@@ -33,36 +33,36 @@ module types;
 namespace restir_pt
 {
 /// NV PathTracerUtils::LightType的2-bit编码。
-public static const uint LIGHT_ENV = 0;
-public static const uint LIGHT_EMISSIVE = 1;
-public static const uint LIGHT_ANALYTIC = 2;
-public static const uint MAXIMUM_RC_LENGTH = 255;
+public static const let LIGHT_ENV : uint = 0;
+public static const let LIGHT_EMISSIVE : uint = 1;
+public static const let LIGHT_ANALYTIC : uint = 2;
+public static const let MAXIMUM_RC_LENGTH : uint = 255;
 
 /// 默认point Hybrid设置；distance阈值已按NV的c/100换算。
 public struct ShiftSettings
 {
     /// 0为纯reconnection，1为Hybrid random replay/reconnection。
-    public uint shiftMapping = 1;
-    public uint localStrategyType = 3;
-    public float specularRoughnessThreshold = 0.2f;
-    public float nearFieldDistanceThreshold = 0.0002f;
-    public float specularRoughnessSigma = 0.0f;
-    public float nearFieldDistanceSigma = 0.2f;
-    public bool additionalShadowRayOffset = false;
+    public var shiftMapping : uint = 1;
+    public var localStrategyType : uint = 3;
+    public var specularRoughnessThreshold = 0.2f;
+    public var nearFieldDistanceThreshold = 0.0002f;
+    public var specularRoughnessSigma = 0.0f;
+    public var nearFieldDistanceSigma = 0.2f;
+    public var additionalShadowRayOffset = false;
 };
 
 /// 16B稳定交点身份；几何、材质、重心的解释归scene适配器。
 public struct HitInfo
 {
     /// 全0表示无效；有效身份须至少有一个非零分量。
-    public uint4 data = 0;
+    public var data : uint4 = 0;
     /// 是否有有效身份，不访问scene资源。
-    public bool isValid()
+    public func isValid()->bool
     {
         return any(data != 0);
     }
     /// 与isValid等价的简短入口。
-    public bool valid()
+    public func valid()->bool
     {
         return isValid();
     }
@@ -74,180 +74,179 @@ public struct HitInfo
 /// 255是无可重连顶点的rc sentinel。
 public struct ReSTIRPathFlags
 {
+    public static const let kPathLengthMask : uint = 0xFF;
+    public static const let kPathLengthShift : uint = 0;
+    public static const let kRcVertexLengthMask : uint = 0xFF;
+    public static const let kRcVertexLengthShift : uint = 8;
+    public static const let kLastVertexNEEShift : uint = 16;
+    public static const let kIsVeryDirectLightShift : uint = 17;
+    public static const let kLightTypeMask : uint = 0x3;
+    public static const let kLightTypeShift : uint = 18;
 
-    public static const uint kPathLengthMask = 0xFF;
-    public static const uint kPathLengthShift = 0;
-    public static const uint kRcVertexLengthMask = 0xFF;
-    public static const uint kRcVertexLengthShift = 8;
-    public static const uint kLastVertexNEEShift = 16;
-    public static const uint kIsVeryDirectLightShift = 17;
-    public static const uint kLightTypeMask = 0x3;
-    public static const uint kLightTypeShift = 18;
+    public static const let kBouncePackedBeforeRcMask : uint = 0x3f;
+    public static const let kBouncePackedBeforeRcShift : uint = 20;
+    public static const let kIsDeltaBeforeRcShift : uint = 20;
+    public static const let kIsTransmissionBeforeRcShift : uint = 21;
+    public static const let kBSDFComponentBeforeRcShift : uint = 22;
+    public static const let kSupportBSDFIndexingShift : uint = 25;
 
-    public static const uint kBouncePackedBeforeRcMask = 0x3f;
-    public static const uint kBouncePackedBeforeRcShift = 20;
-    public static const uint kIsDeltaBeforeRcShift = 20;
-    public static const uint kIsTransmissionBeforeRcShift = 21;
-    public static const uint kBSDFComponentBeforeRcShift = 22;
-    public static const uint kSupportBSDFIndexingShift = 25;
+    public static const let kBouncePackedAfterRcMask : uint = 0x1f;
+    public static const let kBouncePackedAfterRcShift : uint = 26;
+    public static const let kIsDeltaAfterRcShift : uint = 26;
+    public static const let kIsTransmissionAfterRcShift : uint = 27;
+    public static const let kBSDFComponentAfterRcShift : uint = 28;
 
-    public static const uint kBouncePackedAfterRcMask = 0x1f;
-    public static const uint kBouncePackedAfterRcShift = 26;
-    public static const uint kIsDeltaAfterRcShift = 26;
-    public static const uint kIsTransmissionAfterRcShift = 27;
-    public static const uint kBSDFComponentAfterRcShift = 28;
+    public static const let kBSDFComponentMask : uint = 0x7;
+    public static const let kTerminalNEEShift : uint = 31;
 
-    public static const uint kBSDFComponentMask = 0x7;
-    public static const uint kTerminalNEEShift = 31;
-
-    public uint flags = 0;
+    public var flags : uint = 0;
 
     [mutating]
-    public void tryInsertBounceTypesBeforeRcVertex(uint data, bool doInsert)
+    public func tryInsertBounceTypesBeforeRcVertex(data: uint, doInsert: bool)->void
     {
         flags &= doInsert ? ~(kBouncePackedBeforeRcMask << kBouncePackedBeforeRcShift) : 0xffffffff;
         flags |= doInsert ? (data << kBouncePackedBeforeRcShift) : 0;
     }
 
     [mutating]
-    public void tryInsertBounceTypesAfterRcVertex(uint data, bool doInsert)
+    public func tryInsertBounceTypesAfterRcVertex(data: uint, doInsert: bool)->void
     {
         flags &= doInsert ? ~(kBouncePackedAfterRcMask << kBouncePackedAfterRcShift) : 0xffffffff;
         flags |= doInsert ? (data << kBouncePackedAfterRcShift) : 0;
     }
 
     [mutating]
-    public void insertIsDeltaEvent(bool isDeltaEvent, bool beforeRcVertex)
+    public func insertIsDeltaEvent(isDeltaEvent: bool, beforeRcVertex: bool)->void
     {
-        const uint shift = beforeRcVertex ? kIsDeltaBeforeRcShift : kIsDeltaAfterRcShift;
+        let shift : uint = beforeRcVertex ? kIsDeltaBeforeRcShift : kIsDeltaAfterRcShift;
         flags &= ~(1 << shift);
         flags |= uint(isDeltaEvent) << shift;
     }
 
     [mutating]
-    public void insertIsTransmissionEvent(bool isTransmissionEvent, bool beforeRcVertex)
+    public func insertIsTransmissionEvent(isTransmissionEvent: bool, beforeRcVertex: bool)->void
     {
-        const uint shift =
-            beforeRcVertex ? kIsTransmissionBeforeRcShift : kIsTransmissionAfterRcShift;
+        let shift : uint =
+                        beforeRcVertex ? kIsTransmissionBeforeRcShift : kIsTransmissionAfterRcShift;
         flags &= ~(1 << shift);
         flags |= uint(isTransmissionEvent) << shift;
     }
 
     [mutating]
-    public void insertBSDFComponentType(uint component, bool beforeRcVertex)
+    public func insertBSDFComponentType(component: uint, beforeRcVertex: bool)->void
     {
-        const uint shift =
-            beforeRcVertex ? kBSDFComponentBeforeRcShift : kBSDFComponentAfterRcShift;
+        let shift : uint =
+                        beforeRcVertex ? kBSDFComponentBeforeRcShift : kBSDFComponentAfterRcShift;
         flags &= ~(kBSDFComponentMask << shift);
         flags |= component << shift;
     }
 
     [mutating]
-    public void insertSupportBSDFIndexingBeforeRcVertex(bool enabled)
+    public func insertSupportBSDFIndexingBeforeRcVertex(enabled: bool)->void
     {
         flags &= ~(1 << kSupportBSDFIndexingShift);
         flags |= uint(enabled) << kSupportBSDFIndexingShift;
     }
 
-    public bool decodeIsDeltaEvent(bool beforeRcVertex)
+    public func decodeIsDeltaEvent(beforeRcVertex: bool)->bool
     {
         return ((flags >> (beforeRcVertex ? kIsDeltaBeforeRcShift : kIsDeltaAfterRcShift)) & 1) !=
                0u;
     }
 
-    public bool decodeIsTransmissionEvent(bool beforeRcVertex)
+    public func decodeIsTransmissionEvent(beforeRcVertex: bool)->bool
     {
         return ((flags >>
                  (beforeRcVertex ? kIsTransmissionBeforeRcShift : kIsTransmissionAfterRcShift)) &
                 1) != 0u;
     }
 
-    public uint decodeBSDFComponent(bool beforeRcVertex)
+    public func decodeBSDFComponent(beforeRcVertex: bool)->uint
     {
         return (flags >>
                 (beforeRcVertex ? kBSDFComponentBeforeRcShift : kBSDFComponentAfterRcShift)) &
                kBSDFComponentMask;
     }
 
-    public bool decodeSupportBSDFIndexingBeforeRcVertex()
+    public func decodeSupportBSDFIndexingBeforeRcVertex()->bool
     {
         return ((flags >> kSupportBSDFIndexingShift) & 1) != 0u;
     }
 
     [mutating]
-    public void insertPathLength(int pathLength)
+    public func insertPathLength(pathLength: int)->void
     {
         flags &= ~kPathLengthMask;
         flags |= pathLength & kPathLengthMask;
     }
 
     [mutating]
-    public void insertRcVertexLength(int rcVertexLength)
+    public func insertRcVertexLength(rcVertexLength: int)->void
     {
         flags &= ~(kRcVertexLengthMask << kRcVertexLengthShift);
         flags |= (rcVertexLength & kRcVertexLengthMask) << kRcVertexLengthShift;
     }
 
     [mutating]
-    public void resetRcVertexLength()
+    public func resetRcVertexLength()->void
     {
         flags |= kRcVertexLengthMask << kRcVertexLengthShift;
     }
 
-    public int pathLength()
+    public func pathLength()->int
     {
         return flags & kPathLengthMask;
     }
 
-    public int rcVertexLength()
+    public func rcVertexLength()->int
     {
         return (flags >> kRcVertexLengthShift) & kRcVertexLengthMask;
     }
 
     [mutating]
-    public void insertLastVertexNEE(bool isNEE)
+    public func insertLastVertexNEE(isNEE: bool)->void
     {
         flags &= ~(1 << kLastVertexNEEShift);
         flags |= (int(isNEE) & 1) << kLastVertexNEEShift;
     }
 
-    public bool lastVertexNEE()
+    public func lastVertexNEE()->bool
     {
         return ((flags >> kLastVertexNEEShift) & 1) != 0u;
     }
 
     /// 散射预算耗尽后的NEE没有BSDF采样竞争；随赢家保存，预算热切不能改写旧样本。
     [mutating]
-    public void insertTerminalNEE(bool terminal)
+    public func insertTerminalNEE(terminal: bool)->void
     {
         flags = (flags & ~(1u << kTerminalNEEShift)) | (uint(terminal) << kTerminalNEEShift);
     }
 
-    public bool terminalNEE()
+    public func terminalNEE()->bool
     {
         return (flags >> kTerminalNEEShift) != 0u;
     }
 
     [mutating]
-    public void insertIsVeryDirectLight(bool isVeryDirectLight)
+    public func insertIsVeryDirectLight(isVeryDirectLight: bool)->void
     {
         flags &= ~(1 << kIsVeryDirectLightShift);
         flags |= (int(isVeryDirectLight) & 1) << kIsVeryDirectLightShift;
     }
 
-    public bool isVeryDirectLight()
+    public func isVeryDirectLight()->bool
     {
         return ((flags >> kIsVeryDirectLightShift) & 1) != 0u;
     }
 
     [mutating]
-    public void insertLightType(uint lightType)
+    public func insertLightType(lightType: uint)->void
     {
         flags &= ~(kLightTypeMask << kLightTypeShift);
         flags |= ((int(lightType) & kLightTypeMask) << kLightTypeShift);
     }
 
-    public uint lightType()
+    public func lightType()->uint
     {
         return (flags >> kLightTypeShift) & kLightTypeMask;
     }
@@ -255,20 +254,21 @@ public struct ReSTIRPathFlags
 
 public struct LastVertexState
 {
-    public static const uint kIsDeltaShift = 0;
-    public static const uint kIsTransmissionShift = 1;
-    public static const uint kBSDFComponentShift = 2;
-    public static const uint kBSDFComponentMask = 0x7;
-    public static const uint kSupportBSDFIndexingShift = 5;
-    public static const uint kIsRoughShift = 6;
-    public static const uint kIsFarFromPrevShift = 7;
+    public static const let kIsDeltaShift : uint = 0;
+    public static const let kIsTransmissionShift : uint = 1;
+    public static const let kBSDFComponentShift : uint = 2;
+    public static const let kBSDFComponentMask : uint = 0x7;
+    public static const let kSupportBSDFIndexingShift : uint = 5;
+    public static const let kIsRoughShift : uint = 6;
+    public static const let kIsFarFromPrevShift : uint = 7;
 
-    public uint data = 0;
+    public var data : uint = 0;
 
     [mutating]
-    public void Init(bool isLastVertexDelta, bool isLastVertexTransmission, uint lastBSDFComponent,
-                     bool lastVertexSupportBSDFIndexing, bool isLastVertexRough,
-                     bool isCurrentVertexFarFromPrev)
+    public func Init(isLastVertexDelta: bool, isLastVertexTransmission: bool,
+                     lastBSDFComponent: uint, lastVertexSupportBSDFIndexing: bool,
+                     isLastVertexRough: bool, isCurrentVertexFarFromPrev: bool)
+        ->void
     {
         data = 0;
         data |= (uint)isLastVertexDelta << kIsDeltaShift;
@@ -279,27 +279,27 @@ public struct LastVertexState
         data |= (uint)isCurrentVertexFarFromPrev << kIsFarFromPrevShift;
     }
 
-    public bool isLastVertexDelta()
+    public func isLastVertexDelta()->bool
     {
         return ((data >> kIsDeltaShift) & 1) != 0u;
     }
-    public bool isLastVertexTransmission()
+    public func isLastVertexTransmission()->bool
     {
         return ((data >> kIsTransmissionShift) & 1) != 0u;
     }
-    public uint lastBSDFComponent()
+    public func lastBSDFComponent()->uint
     {
         return (data >> kBSDFComponentShift) & kBSDFComponentMask;
     }
-    public bool lastVertexSupportBSDFIndexing()
+    public func lastVertexSupportBSDFIndexing()->bool
     {
         return ((data >> kSupportBSDFIndexingShift) & 1) != 0u;
     }
-    public bool isLastVertexRough()
+    public func isLastVertexRough()->bool
     {
         return ((data >> kIsRoughShift) & 1) != 0u;
     }
-    public bool isCurrentVertexFarFromPrev()
+    public func isCurrentVertexFarFromPrev()->bool
     {
         return ((data >> kIsFarFromPrevShift) & 1) != 0u;
     }
@@ -308,49 +308,49 @@ public struct LastVertexState
 /// 只在当前追踪中使用的rc前缀状态；不是跨帧buffer ABI。
 public struct PathReconnectionInfo
 {
-    public ReSTIRPathFlags pathFlags = {};
-    public uint rcNextVertexBounceSeed = 0;
-    public uint initRandomSeed = 0;
-    public float3 rcThroughput = 0;
-    public HitInfo reconnectionHit = {};
-    public float reconnectionJacobian = 0;
-    public float3 reconnectionWi = 0;
-    public float footprintFactor = 0;
+    public var pathFlags : ReSTIRPathFlags = {};
+    public var rcNextVertexBounceSeed : uint = 0;
+    public var initRandomSeed : uint = 0;
+    public var rcThroughput : float3 = 0;
+    public var reconnectionHit : HitInfo = {};
+    public var reconnectionJacobian : float = 0;
+    public var reconnectionWi : float3 = 0;
+    public var footprintFactor : float = 0;
 }
 
 /// 路径内部候选RIS，weight为未归一化和；混合PSS/solid-angle integrand由scene形成。
 public struct PathRISState
 {
-    public float weight = 0;
-    public float3 integrand = 0;
-    public ReSTIRPathFlags pathFlags = {};
-    public float lightPdf = 0;
-    public uint rcNextVertexBounceSeed = 0;
-    public HitInfo reconnectionHit = {};
-    public float reconnectionJacobian = 0;
-    public float3 reconnectionIncidentRadiance = 0;
-    public float3 reconnectionWi = 0;
+    public var weight : float = 0;
+    public var integrand : float3 = 0;
+    public var pathFlags : ReSTIRPathFlags = {};
+    public var lightPdf : float = 0;
+    public var rcNextVertexBounceSeed : uint = 0;
+    public var reconnectionHit : HitInfo = {};
+    public var reconnectionJacobian : float = 0;
+    public var reconnectionIncidentRadiance : float3 = 0;
+    public var reconnectionWi : float3 = 0;
 
     [mutating]
-    public void init()
+    public func init()->void
     {
         weight = 0.f;
     }
 
-    public static float gaussrand(float mean, float stddev, float2 randomUV)
+    public static func gaussrand(mean: float, stddev: float, randomUV: float2)->float
     {
-
-        const float2 rand = randomUV;
-        float Z = sqrt(-2.0 * log(rand.x)) * cos(2.0 * 3.14159265358979323846f * rand.y);
-        float X = Z * stddev * mean + mean;
+        let rand : float2 = randomUV;
+        let Z : float = sqrt(-2.0 * log(rand.x)) * cos(2.0 * 3.14159265358979323846f * rand.y);
+        let X : float = Z * stddev * mean + mean;
         return X;
     }
 
     /// 叶子已按发光、局部灯、环境顺序抽取胜者。此处仅写胜者的重连属性。
     [mutating]
-    public void storeNEECandidate(PathReconnectionInfo rc, bool isRcVertex, uint depth,
-                                  float3 contribution, float3 wi, float3 Le, float3 Lr,
-                                  float sourcePdf, float pdf, uint lightType)
+    public func storeNEECandidate(rc: PathReconnectionInfo, isRcVertex: bool, depth: uint,
+                                  contribution: float3, wi: float3, Le: float3, Lr: float3,
+                                  sourcePdf: float, pdf: float, lightType: uint)
+        ->void
     {
         pathFlags = rc.pathFlags;
         pathFlags.insertPathLength(depth);
@@ -368,9 +368,10 @@ public struct PathRISState
     }
 
     [mutating]
-    public void storeBSDFHitCandidate(PathReconnectionInfo rc, uint depth, float3 contribution,
-                                      float3 Le, float3 Lr, float sourcePdf, float pdf,
-                                      uint lightType)
+    public func storeBSDFHitCandidate(rc: PathReconnectionInfo, depth: uint, contribution: float3,
+                                      Le: float3, Lr: float3, sourcePdf: float, pdf: float,
+                                      lightType: uint)
+        ->void
     {
         pathFlags = rc.pathFlags;
         pathFlags.insertPathLength(depth);
@@ -387,9 +388,10 @@ public struct PathRISState
     }
 
     [mutating]
-    public bool addBSDFHitCandidate(float u, PathReconnectionInfo rc, uint depth,
-                                    float3 contribution, float3 wi, float3 Le, float3 Lr,
-                                    float sourcePdf, float pdf, uint lightType)
+    public func addBSDFHitCandidate(u: float, rc: PathReconnectionInfo, depth: uint,
+                                    contribution: float3, wi: float3, Le: float3, Lr: float3,
+                                    sourcePdf: float, pdf: float, lightType: uint)
+        ->bool
     {
         if (!addPSSSample(u, contribution))
             return false;
@@ -398,9 +400,11 @@ public struct PathRISState
     }
 
     [mutating]
-    public bool addPrimaryVisibleEmitterCandidate(float u, float3 pathContribution, float sourcePdf)
+    public func addPrimaryVisibleEmitterCandidate(u: float, pathContribution: float3,
+                                                  sourcePdf: float)
+        ->bool
     {
-        bool selected = addPSSSample(u, pathContribution);
+        let selected : bool = addPSSSample(u, pathContribution);
         this.pathFlags.flags = selected ? 0 : this.pathFlags.flags;
         this.pathFlags.insertIsVeryDirectLight(selected ? true
                                                         : this.pathFlags.isVeryDirectLight());
@@ -410,9 +414,10 @@ public struct PathRISState
     }
 
     [mutating]
-    public void markAsRcVertex(uint pathLength, HitInfo hit, LastVertexState lastVertexState,
-                               float lightPdf, uint lightType, float3 Le, float3 wi,
-                               float reconnectionJacobian)
+    public func markAsRcVertex(pathLength: uint, hit: HitInfo, lastVertexState: LastVertexState,
+                               lightPdf: float, lightType: uint, Le: float3, wi: float3,
+                               reconnectionJacobian: float)
+        ->void
     {
         this.pathFlags.insertRcVertexLength(pathLength);
 
@@ -432,14 +437,14 @@ public struct PathRISState
     }
 
     [mutating]
-    public bool addPSSSample(float u, float3 pathContribution)
+    public func addPSSSample(u: float, pathContribution: float3)->bool
     {
         return selectCandidate(weight, u, pathContribution);
     }
 
-    public static bool selectCandidate(inout float total, float u, float3 pathContribution)
+    public static func selectCandidate(inout total: float, u: float, pathContribution: float3)->bool
     {
-        float w = toScalar(pathContribution);
+        var w : float = toScalar(pathContribution);
 
         w = isnan(w) ? 0.0f : w;
         total += w;
@@ -447,7 +452,7 @@ public struct PathRISState
         return (u * total < w);
     }
 
-    public static float toScalar(float3 color)
+    public static func toScalar(color: float3)->float
     {
         return dot(color, float3(0.299, 0.587, 0.114));
     }
@@ -457,20 +462,20 @@ public struct PathRISState
 /// M为候选/历史有效量，seed及rc后随机种子用于确定性重放。
 public struct PathReservoir
 {
-    public float M;
-    public float weight;
-    public float3 integrand;
-    public ReSTIRPathFlags pathFlags;
-    public uint initRandomSeed;
-    public uint rcNextVertexBounceSeed;
-    public float lightPdf;
-    public HitInfo reconnectionHit;
-    public float reconnectionJacobian;
-    public float3 reconnectionIncidentRadiance;
-    public float3 reconnectionWi;
+    public var M : float;
+    public var weight : float;
+    public var integrand : float3;
+    public var pathFlags : ReSTIRPathFlags;
+    public var initRandomSeed : uint;
+    public var rcNextVertexBounceSeed : uint;
+    public var lightPdf : float;
+    public var reconnectionHit : HitInfo;
+    public var reconnectionJacobian : float;
+    public var reconnectionIncidentRadiance : float3;
+    public var reconnectionWi : float3;
 
     [mutating]
-    public void init()
+    public func init()->void
     {
         this.M = 0;
         this.weight = 0;
@@ -486,7 +491,7 @@ public struct PathReservoir
     }
 
     [mutating]
-    public void init(const PathRISState state)
+    public func init(const state: PathRISState)->void
     {
         this.M = 1;
         this.weight = state.weight;
@@ -500,9 +505,10 @@ public struct PathReservoir
         this.reconnectionWi = state.reconnectionWi;
     }
 
-    public static PathReservoir createFromRisState(const PathRISState state, uint initRandomSeed)
+    public static func createFromRisState(const state: PathRISState, initRandomSeed: uint)
+        ->PathReservoir
     {
-        PathReservoir r;
+        var r : PathReservoir;
         r.M = 1;
         r.weight = state.weight;
         r.integrand = state.integrand;
@@ -518,14 +524,14 @@ public struct PathReservoir
     }
 
     [mutating]
-    public bool add(const PathRISState state, uint initRandomSeed, float u)
+    public func add(const state: PathRISState, initRandomSeed: uint, u: float)->bool
     {
-        float w = state.weight;
+        var w : float = state.weight;
         w = (isnan(w) || isinf(w)) ? 0.0f : w;
         this.M += 1;
         this.weight += w;
 
-        bool sampleSelected = (u * this.weight < w);
+        let sampleSelected : bool = (u * this.weight < w);
 
         this.pathFlags.flags = sampleSelected ? state.pathFlags.flags : this.pathFlags.flags;
         this.rcNextVertexBounceSeed =
@@ -548,16 +554,18 @@ public struct PathReservoir
     }
 
     [mutating]
-    public bool merge(float3 integrand, float in_Jacobian, PathReservoir inReservoir, float u,
-                      float misWeight)
+    public func merge(integrand: float3, in_Jacobian: float, inReservoir: PathReservoir, u: float,
+                      misWeight: float)
+        ->bool
     {
-        float w = PathRISState::toScalar(integrand) * in_Jacobian * inReservoir.weight * misWeight;
+        var w : float = PathRISState::toScalar(integrand) * in_Jacobian * inReservoir.weight *
+                        misWeight;
         w = (isnan(w) || isinf(w)) ? 0.0f : w;
 
         this.M += inReservoir.M;
         this.weight += w;
 
-        bool sampleSelected = (u * this.weight < w);
+        let sampleSelected : bool = (u * this.weight < w);
 
         this.pathFlags.flags = sampleSelected ? inReservoir.pathFlags.flags : this.pathFlags.flags;
         this.rcNextVertexBounceSeed =
@@ -578,7 +586,7 @@ public struct PathReservoir
     }
 
     [mutating]
-    public void mergeDirectOverwrite(float3 integrand, PathReservoir inReservoir)
+    public func mergeDirectOverwrite(integrand: float3, inReservoir: PathReservoir)->void
     {
         this.pathFlags.flags = inReservoir.pathFlags.flags;
         this.rcNextVertexBounceSeed = inReservoir.rcNextVertexBounceSeed;
@@ -592,21 +600,22 @@ public struct PathReservoir
     }
 
     [mutating]
-    public bool mergeWithoutWriting(float pHatWithJacobian, PathReservoir inReservoir, float u,
-                                    float misWeight)
+    public func mergeWithoutWriting(pHatWithJacobian: float, inReservoir: PathReservoir, u: float,
+                                    misWeight: float)
+        ->bool
     {
-        float w = pHatWithJacobian * inReservoir.weight * misWeight;
+        var w : float = pHatWithJacobian * inReservoir.weight * misWeight;
         w = (isnan(w) || isinf(w)) ? 0.0f : w;
         this.M += inReservoir.M;
         this.weight += w;
-        bool sampleSelected = (u * this.weight < w);
+        let sampleSelected : bool = (u * this.weight < w);
         return sampleSelected;
     }
 
     [mutating]
-    public void finalizeReservoirWeight()
+    public func finalizeReservoirWeight()->void
     {
-        float p_hat = PathRISState::toScalar(integrand);
+        let p_hat : float = PathRISState::toScalar(integrand);
         this.weight = (p_hat == 0.f) ? 0.f : (this.weight / p_hat);
     }
 }
@@ -614,33 +623,33 @@ public struct PathReservoir
 /// 60B前缀重放结果；pathThroughput不含连接顶点重算，wo指离开rc前顶点。
 public struct ReconnectionData
 {
-    public HitInfo rcPrevHit;
-    public float3 pathThroughput;
-    public float3 rcPrevWo;
-    public float rcFootprintFactor;
+    public var rcPrevHit : HitInfo;
+    public var pathThroughput : float3;
+    public var rcPrevWo : float3;
+    public var rcFootprintFactor : float;
     /// 前缀实际到达该点的IOR与消光系数；仅凭该点材质和面朝向不能恢复。
-    public float4 rcPrevIncident;
+    public var rcPrevIncident : float4;
 };
 
 /// 20B配对shift缓存；pathThroughput沿用NV命名，实际为目标域完整shift integrand。
 public struct PrecomputedShiftData
 {
-    public float3 pathThroughput;
-    public float Jacobian;
-    public float reconnectionJacobian;
+    public var pathThroughput : float3;
+    public var Jacobian : float;
+    public var reconnectionJacobian : float;
 };
 
 /// 每像素有效邻居mask及sum M；默认只使用低3bits。
 public struct NeighborValidMask
 {
-    public uint data;
-    public float cSum;
-    public bool isValid(uint index)
+    public var data : uint;
+    public var cSum : float;
+    public func isValid(index: uint)->bool
     {
         return ((data >> index) & 1u) != 0;
     }
     [mutating]
-    public void setValid(uint index, bool value)
+    public func setValid(index: uint, value: bool)->void
     {
         data = (data & ~(1u << index)) | (uint(value) << index);
     }

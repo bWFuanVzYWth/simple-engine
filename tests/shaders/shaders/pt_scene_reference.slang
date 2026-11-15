@@ -8,20 +8,23 @@ import pt.roulette;
 import geometry.ray;
 namespace pt
 {
-float3 connection_medium<let Capability : uint>(Hit hit, float3 view, float3 direction,
-                                                float4 incident, float4 transmitted)
+func connection_medium<let Capability : uint>(hit: Hit, view: float3, direction: float3,
+                                              incident: float4, transmitted: float4)
+    ->float3
 {
     if (Capability == openpbr::CAP_SOLID_DIELECTRIC)
     {
-        bool crossing = dot(view, hit.surface.normal) * dot(direction, hit.surface.normal) < 0;
+        let crossing : bool =
+                           dot(view, hit.surface.normal) * dot(direction, hit.surface.normal) < 0;
         return crossing ? transmitted.yzw : incident.yzw;
     }
     return incident.yzw;
 }
 
-void direct_sample<let Capability : uint, let Continuous : bool, Scene>(
-    Scene scene, Hit hit, SurfaceMaterial material, float3 view, LightSample light, bool solar,
-    bool continuation, inout PathState path)
+func direct_sample<let Capability : uint, let Continuous : bool, Scene>(
+    scene: Scene, hit: Hit, material: SurfaceMaterial, view: float3, light: LightSample,
+    solar: bool, continuation: bool, inout path: PathState)
+    ->void
     where Scene : IScene
 {
     if (light.pdf <= 0)
@@ -32,11 +35,11 @@ void direct_sample<let Capability : uint, let Continuous : bool, Scene>(
         return;
     if (scene.occluded(light.visibility))
         return;
-    float3 t =
-        segment_transmittance(connection_medium<Capability>(hit, view, light.direction, path.medium,
-                                                            material.transmitted),
-                              light.distance);
-    openpbr::Evaluation evaluated;
+    let t : float3 = segment_transmittance(connection_medium<Capability>(hit, view, light.direction,
+                                                                         path.medium,
+                                                                         material.transmitted),
+                                           light.distance);
+    var evaluated : openpbr::Evaluation;
     if (!Continuous)
         evaluated = openpbr::evaluate_specialized<Capability>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, light.direction,
@@ -51,22 +54,23 @@ void direct_sample<let Capability : uint, let Continuous : bool, Scene>(
             path.medium, material.transmitted);
     if (any(evaluated.response > 0))
     {
-        float weight = power_heuristic_over_pdf(light.pdf, continuation ? evaluated.pdf : 0);
-        float3 emission = scene.light_emission(hit.surface, light, solar);
+        let weight : float = power_heuristic_over_pdf(light.pdf, continuation ? evaluated.pdf : 0);
+        let emission : float3 = scene.light_emission(hit.surface, light, solar);
         path.radiance += path.throughput * triple_product(evaluated.response, emission * t, weight);
     }
 }
 
-void reference_accumulate_emission<Scene>(Scene scene, Hit hit, float3 emission,
-                                          inout PathState path)
+func reference_accumulate_emission<Scene>(scene: Scene, hit: Hit, emission: float3,
+                                          inout path: PathState)
+    ->void
     where Scene : IScene
 {
     if (any(emission > 0))
     {
-        float weight =
-            path.previous_pdf > 0
-                ? power_heuristic(path.previous_pdf, scene.emission_pdf(hit, path.previous))
-                : 1;
+        let weight : float = path.previous_pdf > 0
+                                 ? power_heuristic(path.previous_pdf,
+                                                   scene.emission_pdf(hit, path.previous))
+                                 : 1;
         path.radiance += path.throughput * emission * weight;
     }
 }
@@ -74,12 +78,13 @@ void reference_accumulate_emission<Scene>(Scene scene, Hit hit, float3 emission,
 /// 消费当前段和顶点，不查询下一表面；同一函数供 delta 前缀和叶子 callable 使用。
 /// Continuous=true 只适用于已证明的 opaque roughness² 下界／非匹配 solid IOR 窄域。
 /// 运行时任意合法材料应使用默认 false，避免把应用固定参数推广为通用前提。
-public void process_reference_material<let Capability : uint, let Emissive : bool = false,
+public func process_reference_material<let Capability : uint, let Emissive : bool = false,
                                        let Continuous : bool = false, Scene>(
-    Scene scene, inout TransportCall data, Settings settings)
+    scene: Scene, inout data: TransportCall, settings: Settings)
+    ->void
     where Scene : IScene
 {
-    PathState path = {};
+    var path : PathState = {};
     path.direction = data.path.direction;
     path.throughput = data.path.throughput;
     path.radiance = data.path.radiance;
@@ -92,14 +97,15 @@ public void process_reference_material<let Capability : uint, let Emissive : boo
         path.previous = data.path.previous;
         path.previous_pdf = data.path.previous_pdf;
     }
-    Hit hit = data.hit;
+    let hit : Hit = data.hit;
     path.throughput *= segment_transmittance(path.medium.yzw, hit.distance);
-    SurfaceMaterial material = scene.resolve(hit, Capability, path.medium);
+    let material : SurfaceMaterial = scene.resolve(hit, Capability, path.medium);
     if (Emissive)
         reference_accumulate_emission(scene, hit, material.emission, path);
-    float3 view = -path.direction;
-    bool continuation = path.depth < settings.budget;
-    PathSampler sampler = path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
+    let view : float3 = -path.direction;
+    let continuation : bool = path.depth < settings.budget;
+    let sampler : PathSampler =
+                      path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     if (Capability < openpbr::CAP_DELTA_CONDUCTOR)
     {
         direct_sample<Capability, Continuous>(
@@ -126,7 +132,7 @@ public void process_reference_material<let Capability : uint, let Emissive : boo
             return;
         }
     }
-    openpbr::Sample scattered;
+    var scattered : openpbr::Sample;
     if (Capability >= openpbr::CAP_DELTA_CONDUCTOR)
         scattered = openpbr::sample_delta_specialized<Capability>(
             material.pbr, shading_normal(hit, material), view, sampler.bsdf(path.depth).z,
@@ -149,13 +155,13 @@ public void process_reference_material<let Capability : uint, let Emissive : boo
         data.path = path;
         return;
     }
-    float3 response = scattered.response;
+    var response : float3 = scattered.response;
     if (Capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC &&
         dot(view, hit.surface.normal) * dot(scattered.direction, hit.surface.normal) < 0)
         response *= material.boundary_filter;
     path.direction = scattered.direction;
     path.throughput = product_over(path.throughput, response, scattered.pdf);
-    bool transmission = (scattered.events & openpbr::TRANSMISSION) != 0;
+    let transmission : bool = (scattered.events & openpbr::TRANSMISSION) != 0;
     path.eta_scale = eta_scale_after_scatter(path.eta_scale, scattered.relative_eta, transmission);
     path.medium = scattered.medium;
     if (Continuous)
@@ -164,13 +170,13 @@ public void process_reference_material<let Capability : uint, let Emissive : boo
         path.previous_pdf = (scattered.events & openpbr::DISCRETE) != 0 ? 0 : scattered.pdf;
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);
-    uint status = PATH_ACTIVE;
+    var status : uint = PATH_ACTIVE;
     if (max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (path.depth + 1 >= 2)
     {
-        float survival =
-            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
+        let survival : float = roulette_probability(path.throughput, path.eta_scale,
+                                                    settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)

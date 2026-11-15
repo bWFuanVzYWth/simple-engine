@@ -42,8 +42,8 @@ namespace restir_pt
 /// reservoir 估计主表面之后的路径；residual 保存默认 point 域之外的主发光/主环境。
 public struct InitialResult
 {
-    public PathReservoir reservoir;
-    public float3 residual;
+    public var reservoir : PathReservoir;
+    public var residual : float3;
 };
 
 /// 初采追踪上下文只属于当前raygen；trace发布的新命中供下一次shade消费。
@@ -51,52 +51,62 @@ public struct InitialResult
 public interface IInitialTrace<Scene : IRestirScene, State>
 {
     [mutating]
-    bool trace(inout Scene scene, inout State state, float3 origin, float3 direction,
-               out HitInfo hit, out float distance);
+    func trace(inout scene: Scene, inout state: State, origin: float3, direction: float3,
+               out hit: HitInfo, out distance: float)
+        ->bool;
     /// 当前新命中的表面；fromOrigin区分观察位置和已知wo，不能用于历史或光端点。
-    Surface load(inout Scene scene, inout State state, HitInfo hit, float3 view, bool fromOrigin);
+    func load(inout scene: Scene, inout state: State, hit: HitInfo, view: float3, fromOrigin: bool)
+        ->Surface;
     [mutating]
-    InitialVertex shade(inout Scene scene, inout State state, Surface surface,
-                        InitialRequest request);
+    func shade(inout scene: Scene, inout state: State, surface: Surface, request: InitialRequest)
+        ->InitialVertex;
 };
 
 /// 兼容原始TraceRay/callable实现；无额外状态或运行时分支。
 public struct InitialTrace<Scene : IRestirScene> : IInitialTrace<Scene, uint>
 {
     [mutating]
-    public bool trace(inout Scene scene, inout uint state, float3 origin, float3 direction,
-                      out HitInfo hit, out float distance)
+    public func trace(inout scene: Scene, inout state: uint, origin: float3, direction: float3,
+                      out hit: HitInfo, out distance: float)
+        ->bool
     {
+        var origin = origin;
+        var direction = direction;
         return scene.trace(origin, direction, false, hit, distance);
     }
-    public Surface load(inout Scene scene, inout uint state, HitInfo hit, float3 view,
-                        bool fromOrigin)
+    public func load(inout scene: Scene, inout state: uint, hit: HitInfo, view: float3,
+                     fromOrigin: bool)
+        ->Surface
     {
         return fromOrigin ? scene.loadSurfaceFromOrigin(hit, view, false)
                           : scene.loadSurface(hit, view, false);
     }
     [mutating]
-    public InitialVertex shade(inout Scene scene, inout uint state, Surface surface,
-                               InitialRequest request)
+    public func shade(inout scene: Scene, inout state: uint, surface: Surface,
+                      request: InitialRequest)
+        ->InitialVertex
     {
         return scene.shadeInitialVertex(surface, request);
     }
 };
 
-LastVertexState initialLastVertex(BsdfSample sample, Surface surface, bool rough,
-                                  ReplaySegment segment, float primaryFootprint,
-                                  float distanceThreshold)
+func initialLastVertex(sample_value: BsdfSample, surface: Surface, rough: bool,
+                       segment: ReplaySegment, primaryFootprint: float, distanceThreshold: float)
+    ->LastVertexState
 {
-    LastVertexState result;
-    result.Init(sample.delta, sample.transmission, sample.component, surface.supportBSDFIndexing,
-                rough, segment.rayFootprint >= primaryFootprint * distanceThreshold);
+    var result : LastVertexState;
+    result.Init(sample_value.delta, sample_value.transmission, sample_value.component,
+                surface.supportBSDFIndexing, rough,
+                segment.rayFootprint >= primaryFootprint * distanceThreshold);
     return result;
 }
 
-bool initialCanConnect(ShiftSettings settings, uint depth, uint rcLength, ReplaySegment segment,
-                       float outgoingPdf, bool previousRough, float primaryFootprint,
-                       float distanceThreshold)
+func initialCanConnect(settings: ShiftSettings, depth: uint, rcLength: uint, segment: ReplaySegment,
+                       outgoingPdf: float, previousRough: bool, primaryFootprint: float,
+                       distanceThreshold: float)
+    ->bool
 {
+
     return settings.shiftMapping == 0
                ? depth == 1
                : rcLength == MAXIMUM_RC_LENGTH && depth >= 1 && previousRough &&
@@ -110,12 +120,14 @@ bool initialCanConnect(ShiftSettings settings, uint depth, uint rcLength, Replay
 /// LightSamples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
 /// PDF不含族选择概率。第二族使用原padding维，不改变散射/RR及重放的随机身份。
 /// 完整材质阶段一次产生可见NEE候选；调度器不重采灯、不重算材质支持或介质。
-public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : uint = 1>(
-    inout Scene scene, uint2 pixel, HitInfo primaryHit, uint initialSeed, uint maxSurfaceBounces,
-    ShiftSettings settings, bool useRussianRoulette, bool useNEE, bool useMIS)
+public func sampleInitialPath<Scene : IRestirScene, let LightSamples : uint = 1>(
+    inout scene: Scene, pixel: uint2, primaryHit: HitInfo, initialSeed: uint,
+    maxSurfaceBounces: uint, settings: ShiftSettings, useRussianRoulette: bool, useNEE: bool,
+    useMIS: bool)
+    ->InitialResult
 {
-    InitialTrace<Scene> tracer;
-    uint state = 0;
+    var tracer : InitialTrace<Scene>;
+    var state : uint = 0;
     return sampleInitialPathTraced<Scene, uint, InitialTrace<Scene>, LightSamples>(
         scene, tracer, state, pixel, primaryHit, initialSeed, maxSurfaceBounces, settings,
         useRussianRoulette, useNEE, useMIS);
@@ -123,15 +135,16 @@ public InitialResult sampleInitialPath<Scene : IRestirScene, let LightSamples : 
 
 /// primaryHit须由同一个tracer.trace产生；每次新命中仅在下一顶点着色前有效。
 /// tracer拥有硬件命中状态，算法不复制或持久化它；其余随机域、RIS及可见性不变。
-public InitialResult sampleInitialPathTraced<
+public func sampleInitialPathTraced<
     Scene : IRestirScene, State, Trace : IInitialTrace<Scene, State>, let LightSamples : uint = 1>(
-    inout Scene scene, inout Trace tracer, inout State state, uint2 pixel, HitInfo primaryHit,
-    uint initialSeed, uint maxSurfaceBounces, ShiftSettings settings, bool useRussianRoulette,
-    bool useNEE, bool useMIS)
+    inout scene: Scene, inout tracer: Trace, inout state: State, pixel: uint2, primaryHit: HitInfo,
+    initialSeed: uint, maxSurfaceBounces: uint, settings: ShiftSettings, useRussianRoulette: bool,
+    useNEE: bool, useMIS: bool)
+    ->InitialResult
 {
     static_assert(LightSamples == 1 || LightSamples == 2,
                   "initial NEE supports one or two families");
-    InitialResult result = {};
+    var result : InitialResult = {};
     result.reservoir.init();
     if (!primaryHit.isValid())
     {
@@ -140,42 +153,43 @@ public InitialResult sampleInitialPathTraced<
             exp(-scene.initialMedium(pixel).yzw * scene.environmentDistance());
         return result;
     }
-    Surface surface = tracer.load(scene, state, primaryHit, scene.initialOrigin(pixel), true);
+    var surface : Surface = tracer.load(scene, state, primaryHit, scene.initialOrigin(pixel), true);
     // primary 的物理生产者是实际相机射线；不从有限精度重建点重新推导另一条方向。
     surface.wo = -scene.initialDirection(pixel);
     scene.setIncident(surface, scene.initialMedium(pixel));
-    float3 throughput = exp(-surface.incident.yzw * surface.distance);
-    float primaryFootprint = scene.primaryRayFootprint(surface, pixel, false);
-    float distanceThreshold;
-    float roughnessThreshold;
-    TinyUniformSampleGenerator sampler =
-        initReplaySampler(initialSeed, settings, distanceThreshold, roughnessThreshold);
-    PathRISState ris = {};
+    var throughput : float3 = exp(-surface.incident.yzw * surface.distance);
+    let primaryFootprint : float = scene.primaryRayFootprint(surface, pixel, false);
+    var distanceThreshold : float;
+    var roughnessThreshold : float;
+    var sampler
+        : TinyUniformSampleGenerator =
+              initReplaySampler(initialSeed, settings, distanceThreshold, roughnessThreshold);
+    var ris : PathRISState = {};
     ris.init();
-    PathReconnectionInfo rc = {};
+    var rc : PathReconnectionInfo = {};
     rc.pathFlags.insertRcVertexLength(MAXIMUM_RC_LENGTH);
     rc.rcThroughput = 1.0;
     rc.initRandomSeed = initialSeed;
-    float sourcePdf = 1.0;
-    float previousScatterPdf = 1.0;
-    float previousFullPdf = 1.0;
-    bool previousRough = false;
-    BsdfSample previousScatter = {};
-    Surface previousSurface = {};
-    ReplaySegment segment = {};
-    float3 previousSegmentTransmittance = 1.0;
-    for (uint depth = 0; depth <= maxSurfaceBounces; ++depth)
+    var sourcePdf = 1.0;
+    var previousScatterPdf = 1.0;
+    var previousFullPdf = 1.0;
+    var previousRough = false;
+    var previousScatter : BsdfSample = {};
+    var previousSurface : Surface = {};
+    var segment : ReplaySegment = {};
+    var previousSegmentTransmittance : float3 = 1.0;
+    for (var depth: uint = 0; depth <= maxSurfaceBounces; ++depth)
     {
-        uint bounceSeed = sampler.state;
+        let bounceSeed : uint = sampler.state;
         sampler.state = useRussianRoulette ? initialRandomState<11>(bounceSeed)
                                            : initialRandomState<10>(bounceSeed);
-        float rouletteProbability =
-            useRussianRoulette ? initialRouletteProbability(throughput) : 1.0;
-        bool rouletteKilled =
-            useRussianRoulette && (rouletteProbability == 0.0 ||
-                                   initialRandomValue<8>(bounceSeed) >= rouletteProbability);
-        bool continuation = depth < maxSurfaceBounces;
-        InitialRequest request = {
+        let rouletteProbability
+            : float = useRussianRoulette ? initialRouletteProbability(throughput) : 1.0;
+        let rouletteKilled : bool = useRussianRoulette &&
+                                    (rouletteProbability == 0.0 ||
+                                     initialRandomValue<8>(bounceSeed) >= rouletteProbability);
+        let continuation : bool = depth < maxSurfaceBounces;
+        let request : InitialRequest = {
             bounceSeed,
             (continuation && !rouletteKilled ? INITIAL_SAMPLE : 0u) | (useNEE ? INITIAL_NEE : 0u) |
                 (continuation && useMIS ? INITIAL_MIS : 0u) |
@@ -186,23 +200,24 @@ public InitialResult sampleInitialPathTraced<
             ris.weight,
             useNEE && useMIS && !previousScatter.delta ? previousFullPdf : -1.0
         };
-        InitialVertex shading = tracer.shade(scene, state, surface, request);
+        let shading : InitialVertex = tracer.shade(scene, state, surface, request);
         surface.emission = shading.emission;
         ris.weight = shading.weight;
 
-        LastVertexState last = initialLastVertex(previousScatter, previousSurface, previousRough,
-                                                 segment, primaryFootprint, distanceThreshold);
+        let last : LastVertexState =
+                       initialLastVertex(previousScatter, previousSurface, previousRough, segment,
+                                         primaryFootprint, distanceThreshold);
         if (depth == 0)
         {
             result.residual = throughput * surface.emission;
         }
         else if (any(surface.emission > 0.0))
         {
-            float lightPdf = shading.emissionPdf;
-            float mis = useNEE && useMIS && !previousScatter.delta
-                            ? lightMisWeight(1.0, previousFullPdf, 1.0, lightPdf)
-                            : 1.0;
-            float3 cachedEmission = surface.emission;
+            let lightPdf : float = shading.emissionPdf;
+            let mis : float = useNEE && useMIS && !previousScatter.delta
+                                  ? lightMisWeight(1.0, previousFullPdf, 1.0, lightPdf)
+                                  : 1.0;
+            var cachedEmission : float3 = surface.emission;
             if (depth - 1 == rc.pathFlags.rcVertexLength())
                 cachedEmission *= previousSegmentTransmittance;
             ris.storeBSDFHitCandidate(rc, depth - 1, throughput * mis * surface.emission,
@@ -211,12 +226,13 @@ public InitialResult sampleInitialPathTraced<
             if (rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
                 (settings.shiftMapping == 1 || depth == 1))
             {
-                bool canConnect =
-                    settings.shiftMapping == 0 ||
-                    min(segment.rayFootprint,
-                        segment.inverseGeometryFactor / (0.5 / 3.14159265358979323846)) >=
-                            primaryFootprint * distanceThreshold &&
-                        (!previousSurface.supportSimpleRoughnessThreshold || previousRough);
+                let canConnect
+                    : bool =
+                          settings.shiftMapping == 0 ||
+                          min(segment.rayFootprint,
+                              segment.inverseGeometryFactor / (0.5 / 3.14159265358979323846)) >=
+                                  primaryFootprint * distanceThreshold &&
+                              (!previousSurface.supportSimpleRoughnessThreshold || previousRough);
                 if (canConnect)
                 {
                     ris.integrand *= previousScatterPdf;
@@ -228,12 +244,12 @@ public InitialResult sampleInitialPathTraced<
         }
         if (shading.direct.pdf > 0.0)
         {
-            InitialDirect light = shading.direct;
-            uint lightType = light.lightType & ~INITIAL_POINT_LIGHT;
-            bool canConnect = initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(),
-                                                segment, light.bsdfPdf, previousRough,
-                                                primaryFootprint, distanceThreshold);
-            float3 cachedRadiance = canConnect ? light.attenuatedRadiance : light.radiance;
+            let light : InitialDirect = shading.direct;
+            let lightType : uint = light.lightType & ~INITIAL_POINT_LIGHT;
+            let canConnect : bool = initialCanConnect(
+                                 settings, depth, rc.pathFlags.rcVertexLength(), segment,
+                                 light.bsdfPdf, previousRough, primaryFootprint, distanceThreshold);
+            let cachedRadiance : float3 = canConnect ? light.attenuatedRadiance : light.radiance;
             ris.storeNEECandidate(rc, canConnect, depth, throughput * light.reflected,
                                   light.direction, cachedRadiance, light.reflected, sourcePdf,
                                   light.pdf, lightType);
@@ -283,16 +299,16 @@ public InitialResult sampleInitialPathTraced<
             throughput /= rouletteProbability;
             sourcePdf *= rouletteProbability;
         }
-        BsdfSample scatter = shading.sample;
+        var scatter : BsdfSample = shading.sample;
         if (scatter.pdf <= 0.0 || all(scatter.weight == 0.0) ||
             any(isnan(scatter.weight) | isinf(scatter.weight)) || isinf(scatter.pdf))
             break;
-        float scatterPdf = replayScatterPdf(scatter);
-        bool rough = !scatter.delta && scene.isSampleRough(surface, scatter.component, scatterPdf,
-                                                           roughnessThreshold);
-        float componentPdf = scatter.delta                 ? 1.0
-                             : surface.supportBSDFIndexing ? scatter.componentPdf
-                                                           : scatter.pdf;
+        let scatterPdf : float = replayScatterPdf(scatter);
+        let rough : bool = !scatter.delta && scene.isSampleRough(surface, scatter.component,
+                                                                 scatterPdf, roughnessThreshold);
+        let componentPdf : float = scatter.delta                 ? 1.0
+                                   : surface.supportBSDFIndexing ? scatter.componentPdf
+                                                                 : scatter.pdf;
         throughput *= scatter.weight;
         rc.rcThroughput *= scatter.weight;
         if (initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(), segment, scatterPdf,
@@ -310,30 +326,33 @@ public InitialResult sampleInitialPathTraced<
                 true);
             rc.rcThroughput = 1.0;
         }
-        float3 origin = geometry::offset_origin(surface.point, scatter.direction);
-        HitInfo hit = {};
-        float distance;
-        bool found = tracer.trace(scene, state, origin, scatter.direction, hit, distance);
+        let origin : float3 = geometry::offset_origin(surface.point, scatter.direction);
+        var hit : HitInfo = {};
+        var distance : float;
+        let found : bool = tracer.trace(scene, state, origin, scatter.direction, hit, distance);
         if (!found)
         {
-            float uBSDFRIS = sampler.next1D();
-            float3 radiance = scene.environment(scatter.direction, surface.point.position, false);
-            float3 environmentTransmittance =
-                exp(-scatter.medium.yzw * scene.environmentDistance());
-            float lightPdf = scene.lightPdf(surface, hit, scatter.direction, LIGHT_ENV, false);
-            float mis = useNEE && useMIS && !scatter.delta
-                            ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)
-                            : 1.0;
-            LastVertexState envLast;
+            let uBSDFRIS : float = sampler.next1D();
+            let radiance : float3 =
+                               scene.environment(scatter.direction, surface.point.position, false);
+            let environmentTransmittance
+                : float3 = exp(-scatter.medium.yzw * scene.environmentDistance());
+            let lightPdf : float =
+                               scene.lightPdf(surface, hit, scatter.direction, LIGHT_ENV, false);
+            let mis : float = useNEE && useMIS && !scatter.delta
+                                  ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)
+                                  : 1.0;
+            var envLast : LastVertexState;
             envLast.Init(scatter.delta, scatter.transmission, scatter.component,
                          surface.supportBSDFIndexing, rough, true);
-            float3 cachedRadiance = depth == rc.pathFlags.rcVertexLength()
-                                        ? radiance * environmentTransmittance
-                                        : radiance;
-            bool selected = ris.addBSDFHitCandidate(
-                uBSDFRIS, rc, depth, throughput * environmentTransmittance * mis * radiance,
-                scatter.direction, cachedRadiance, environmentTransmittance * mis * radiance,
-                sourcePdf, lightPdf, LIGHT_ENV);
+            let cachedRadiance : float3 = depth == rc.pathFlags.rcVertexLength()
+                                              ? radiance * environmentTransmittance
+                                              : radiance;
+            let selected
+                : bool = ris.addBSDFHitCandidate(
+                      uBSDFRIS, rc, depth, throughput * environmentTransmittance * mis * radiance,
+                      scatter.direction, cachedRadiance, environmentTransmittance * mis * radiance,
+                      sourcePdf, lightPdf, LIGHT_ENV);
             if (selected && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
                 (settings.shiftMapping == 1 || depth == 0) && (rough || settings.shiftMapping == 0))
             {
@@ -343,11 +362,11 @@ public InitialResult sampleInitialPathTraced<
             }
             break;
         }
-        float3 attenuation = exp(-scatter.medium.yzw * distance);
+        let attenuation : float3 = exp(-scatter.medium.yzw * distance);
         throughput *= attenuation;
         rc.rcThroughput *= attenuation;
         previousSegmentTransmittance = attenuation;
-        Surface next = tracer.load(scene, state, hit, -scatter.direction, false);
+        var next : Surface = tracer.load(scene, state, hit, -scatter.direction, false);
         scene.setIncident(next, scatter.medium);
         segment = replaySegment(surface, next, scatterPdf);
         previousSurface = surface;

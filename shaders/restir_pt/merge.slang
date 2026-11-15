@@ -7,28 +7,30 @@ import restir_pt.reservoir;
 
 namespace restir_pt
 {
-public static const uint NO_REUSE_WINNER = 0xffffffffu;
+public static const let NO_REUSE_WINNER = 0xffffffffu;
 
 /// 热结果与冷来源互相独立；source只在有效赢家时读取，canonical标识未shift的中心来源。
 public struct MergeSelection
 {
-    public PathReservoir hot;
-    public uint source;
-    public bool canonical;
-    public float reconnectionJacobian;
+    public var hot : PathReservoir;
+    public var source : uint;
+    public var canonical : bool;
+    public var reconnectionJacobian : float;
 };
 
 /// canonical/history仅要求M、UCW与integrand；两个方向的shift已由独立追踪完成。
 /// 源历史M只在本轮竞争中封顶，不改变源UCW、随机身份或颜色所有权。
-public MergeSelection temporal_selection(PathReservoir canonical, PathReservoir history,
-                                         PrecomputedShiftData canonicalAtHistory,
-                                         PrecomputedShiftData historyAtCanonical, uint offset,
-                                         uint historyOffset, float2 u, float historyLength)
+public func temporal_selection(canonical: PathReservoir, history: PathReservoir,
+                               canonicalAtHistory: PrecomputedShiftData,
+                               historyAtCanonical: PrecomputedShiftData, offset: uint,
+                               historyOffset: uint, u: float2, historyLength: float)
+    ->MergeSelection
 {
+    var history = history;
     history.M = min(historyLength, history.M);
-    MergeSelection result = { empty_reservoir(), NO_REUSE_WINNER, false, 0.0 };
-    float canonicalWeight = temporal_canonical_weight(canonical, history, canonicalAtHistory);
-    float neighborWeight = temporal_neighbor_weight(canonical, history, historyAtCanonical);
+    var result : MergeSelection = { empty_reservoir(), NO_REUSE_WINNER, false, 0.0 };
+    let canonicalWeight : float = temporal_canonical_weight(canonical, history, canonicalAtHistory);
+    let neighborWeight : float = temporal_neighbor_weight(canonical, history, historyAtCanonical);
     if (result.hot.mergeWithoutWriting(target(historyAtCanonical.pathThroughput) *
                                            historyAtCanonical.Jacobian,
                                        history, u.x, neighborWeight))
@@ -51,13 +53,13 @@ public MergeSelection temporal_selection(PathReservoir canonical, PathReservoir 
 /// 按原slot顺序竞争；调用方提供有效邻居集合、原随机流及独立CV颜色累加。
 public struct SpatialSelection
 {
-    public PathReservoir canonical;
-    public PairwiseFactor factor;
-    public float canonicalWeight;
-    public MergeSelection selected;
+    public var canonical : PathReservoir;
+    public var factor : PairwiseFactor;
+    public var canonicalWeight : float;
+    public var selected : MergeSelection;
 
     [mutating]
-    public void init(PathReservoir center, float massSum)
+    public func init(center: PathReservoir, massSum: float)->void
     {
         canonical = center;
         factor = { massSum, center.M };
@@ -66,8 +68,9 @@ public struct SpatialSelection
     }
 
     [mutating]
-    public void add(PathReservoir neighbor, uint source, PrecomputedShiftData forward,
-                    PrecomputedShiftData reverse, float u)
+    public func add(neighbor: PathReservoir, source: uint, forward: PrecomputedShiftData,
+                    reverse: PrecomputedShiftData, u: float)
+        ->void
     {
         canonicalWeight += spatial_canonical_term(canonical, neighbor, reverse, factor);
         if (selected.hot.mergeWithoutWriting(target(forward.pathThroughput) * forward.Jacobian,
@@ -81,7 +84,7 @@ public struct SpatialSelection
     }
 
     [mutating]
-    public void finish(uint offset, float u)
+    public func finish(offset: uint, u: float)->void
     {
         if (selected.hot.mergeWithoutWriting(target(canonical.integrand), canonical, u,
                                              canonicalWeight))
@@ -95,8 +98,9 @@ public struct SpatialSelection
 };
 
 /// 冷字段只来自获胜源；shift后的几何因子随赢家推进，不把邻居颜色复制进路径。
-public PathReservoir restore_selection(PathReservoir cold, MergeSelection selected)
+public func restore_selection(cold: PathReservoir, selected: MergeSelection)->PathReservoir
 {
+    var cold = cold;
     if (selected.source == NO_REUSE_WINNER)
         return selected.hot;
     cold.M = selected.hot.M;
@@ -108,7 +112,7 @@ public PathReservoir restore_selection(PathReservoir cold, MergeSelection select
 }
 
 /// spatial所有来源都在本轮只读A；temporal由调用方显式选择A或历史B后再恢复。
-public PathReservoir load_selection(RWByteAddressBuffer buffer, MergeSelection selected)
+public func load_selection(buffer: RWByteAddressBuffer, selected: MergeSelection)->PathReservoir
 {
     if (selected.source == NO_REUSE_WINNER)
         return selected.hot;

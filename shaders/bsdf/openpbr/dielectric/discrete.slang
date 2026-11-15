@@ -14,30 +14,36 @@ import "bsdf/openpbr/math/fresnel.slang";
 import "bsdf/openpbr/math/delta.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public PrimeFullOpenPbrSample primeFullCompactRefractiveDiscreteSample(
-    float3 wi, float randomEvent, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveDiscreteSample(wi: float3, randomEvent: float,
+                                                     state: PrimeFullCompactTransmissionState,
+                                                     samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     return primeFullRefractiveDeltaSample(wi, randomEvent, state.specularFresnel, samplingFlags);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactThinWallDiscreteSampleRaw(
-    float3 wi, float randomEvent, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactThinWallDiscreteSampleRaw(wi: float3, randomEvent: float,
+                                                      state: PrimeFullCompactTransmissionState,
+                                                      samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     return primeFullThinWallDeltaSample(wi, randomEvent, state.specularFresnel,
                                         state.transmissionTint, state.transmissionVolume.extinction,
                                         samplingFlags);
 }
 
-public PrimeFullOpenPbrSampleResult primeFullCompactTransmissionDiscreteSample(
-    float3 wi, float randomEvent, PrimeFullCompactTransmissionState state, uint samplingFlags,
-    PrimeFullOpenPbrVolume medium)
+public func primeFullCompactTransmissionDiscreteSample(wi: float3, randomEvent: float,
+                                                       state: PrimeFullCompactTransmissionState,
+                                                       samplingFlags: uint,
+                                                       medium: PrimeFullOpenPbrVolume)
+    ->PrimeFullOpenPbrSampleResult
 {
-    PrimeFullCompactTransmissionState closureState = state;
+    var closureState : PrimeFullCompactTransmissionState = state;
     if (closureState.geometryThinWalled == 0u)
     {
         closureState.entering = 1u;
     }
-    PrimeFullOpenPbrSampleResult result;
+    var result : PrimeFullOpenPbrSampleResult;
     result.medium = medium;
     result.rayT = state.rayT;
     if (closureState.geometryThinWalled != 0u)

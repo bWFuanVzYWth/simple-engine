@@ -1,5 +1,6 @@
 /// RR方向能量的白名单组合；不构造BSDF采样状态。
 module guide_composition;
+import bsdf.openpbr.selection;
 import bsdf.openpbr.api;
 import bsdf.openpbr.composition;
 import "bsdf/openpbr/math/microfacet_energy.slang";
@@ -7,28 +8,24 @@ import "bsdf/openpbr/math/microfacet_measure.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 import "bsdf/openpbr/contract/sample.slang";
 
-#ifdef OPENPBR_RECIPE_VARIANT
-#define GUIDE_VARIANT OPENPBR_VARIANT
-#else
-#define GUIDE_VARIANT 0
-#endif
-
 namespace openpbr_composition
 {
 public struct GuideEnergy
 {
-    public float3 diffuse;
-    public float3 specular;
+    public var diffuse : float3;
+    public var specular : float3;
 };
 public interface IGuideEnergy
 {
-    static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted);
+    static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy;
 };
 public struct BaseGuide<B : IBase> : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
         return { B.energy(float3(0, 0, cosine), B.prepare(m.base_roughness.xyz, m.surface.z)),
                  float3(0) };
@@ -36,15 +33,16 @@ public struct BaseGuide<B : IBase> : IGuideEnergy
 };
 public struct DielectricGuide<B : IBase> : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
-        PrimeFullOpenPbrMicrofacet distribution = { float2(m.base_roughness.w *
-                                                           m.base_roughness.w) };
-        float reflected = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                              energy, distribution, cosine,
-                              primeFullOpenPbrIorAdjustment(m.surface.x / incident.x, 1))
-                              .z;
+        let distribution
+            : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
+        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
+                                    energy, distribution, cosine,
+                                    primeFullOpenPbrIorAdjustment(m.surface.x / incident.x, 1))
+                                    .z;
         return { B.energy(float3(0, 0, cosine), B.prepare(m.base_roughness.xyz, m.surface.z)) *
                      (1 - reflected),
                  float3(reflected) };
@@ -52,17 +50,18 @@ public struct DielectricGuide<B : IBase> : IGuideEnergy
 };
 public struct MetalGuide : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
-        PrimeFullOpenPbrMicrofacet distribution = { float2(m.base_roughness.w *
-                                                           m.base_roughness.w) };
-        float3 f0 = saturate(m.base_roughness.xyz);
-        float ess = primeFullOpenPbrMicrofacetEffectivelySmooth(distribution)
-                        ? 1
-                        : primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
-                              distribution, cosine, float3(1), float3(1))
-                              .x;
+        let distribution
+            : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
+        let f0 : float3 = saturate(m.base_roughness.xyz);
+        let ess : float = primeFullOpenPbrMicrofacetEffectivelySmooth(distribution)
+                              ? 1
+                              : primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
+                                    distribution, cosine, float3(1), float3(1))
+                                    .x;
         return { float3(0), primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
                                 distribution, cosine, f0, float3(1)) *
                                 (float3(1) + f0 * (1 - ess) / ess) };
@@ -70,10 +69,11 @@ public struct MetalGuide : IGuideEnergy
 };
 public struct MetalGuideBlend<D : IGuideEnergy> : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
-        GuideEnergy value = {};
+        var value : GuideEnergy = {};
         if (m.surface.y < 1)
         {
             value = D.directional(energy, m, cosine, incident, transmitted);
@@ -89,8 +89,9 @@ public struct MetalGuideBlend<D : IGuideEnergy> : IGuideEnergy
 };
 public struct MetalGuideSwitch<D : IGuideEnergy> : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
         if (m.surface.y == 1)
             return MetalGuide.directional(energy, m, cosine, incident, transmitted);
@@ -99,60 +100,48 @@ public struct MetalGuideSwitch<D : IGuideEnergy> : IGuideEnergy
 };
 public struct SolidGuide : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
-        bool exiting = incident.x > transmitted.x;
-        float ior = exiting ? incident.x / transmitted.x : transmitted.x / incident.x;
-        PrimeFullOpenPbrMicrofacet distribution = { float2(m.base_roughness.w *
-                                                           m.base_roughness.w) };
-        float reflected = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                              energy, distribution, exiting ? -cosine : cosine, ior)
-                              .z;
+        let exiting : bool = incident.x > transmitted.x;
+        let ior : float = exiting ? incident.x / transmitted.x : transmitted.x / incident.x;
+        let distribution
+            : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
+        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
+                                    energy, distribution, exiting ? -cosine : cosine, ior)
+                                    .z;
         return { float3(1 - reflected), float3(reflected) };
     }
 };
 public struct ThinGuide : IGuideEnergy
 {
-    public static GuideEnergy directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        P energy, openpbr::Material m, float cosine, float4 incident, float4 transmitted)
+    public static func directional<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, m: openpbr::Material, cosine: float, incident: float4, transmitted: float4)
+        ->GuideEnergy
     {
-        PrimeFullOpenPbrMicrofacet distribution = { float2(m.base_roughness.w *
-                                                           m.base_roughness.w) };
-        float reflected = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                              energy, distribution, cosine, transmitted.x / incident.x)
-                              .z;
+        let distribution
+            : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
+        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
+                                    energy, distribution, cosine, transmitted.x / incident.x)
+                                    .z;
         return { float3(1 - reflected), float3(reflected) };
     }
 };
 
-#if defined(OPENPBR_FLOW)
-#define GUIDE_FLOW OPENPBR_FLOW
-#elif defined(GAME_FLOW)
-#define GUIDE_FLOW GAME_FLOW
-#endif
-#ifdef GUIDE_FLOW
-#if GUIDE_FLOW & 16
-public typedef SolidGuide Guide;
-#elif GUIDE_FLOW & 32
-public typedef ThinGuide Guide;
-#else
-#if GUIDE_FLOW & 2
-typedef DielectricGuide<SelectedBase> DielectricGuidePart;
-#else
-typedef BaseGuide<SelectedBase> DielectricGuidePart;
-#endif
-#if GUIDE_FLOW & 2048
-#if (GUIDE_VARIANT & 2048)
-public typedef MetalGuideSwitch<DielectricGuidePart> Guide;
-#else
-public typedef MetalGuideBlend<DielectricGuidePart> Guide;
-#endif
-#elif GUIDE_FLOW & 4
-public typedef MetalGuide Guide;
-#else
-public typedef DielectricGuidePart Guide;
-#endif
-#endif
-#endif
+static const let GuideHasReflection : bool = (SelectedFlow & 2) != 0;
+static const let GuideHasMetalMixture : bool = (SelectedFlow & 2048) != 0;
+static const let GuideHasBinaryMetal : bool = (SelectedVariant & 2048) != 0;
+static const let GuideHasMetal : bool = (SelectedFlow & 4) != 0;
+static const let GuideIsSolid : bool = (SelectedFlow & 16) != 0;
+static const let GuideIsThin : bool = (SelectedFlow & 32) != 0;
+typealias DielectricGuidePart =
+    TypeSelect<GuideHasReflection, DielectricGuide<SelectedBase>, BaseGuide<SelectedBase>>.Type;
+typealias SwitchedGuide = MetalGuideSwitch<DielectricGuidePart>;
+typealias BlendedGuide = MetalGuideBlend<DielectricGuidePart>;
+typealias MixedGuide = TypeSelect<GuideHasBinaryMetal, SwitchedGuide, BlendedGuide>.Type;
+typealias UnmixedGuide = TypeSelect<GuideHasMetal, MetalGuide, DielectricGuidePart>.Type;
+typealias OpaqueGuide = TypeSelect<GuideHasMetalMixture, MixedGuide, UnmixedGuide>.Type;
+typealias OtherGuide = TypeSelect<GuideIsThin, ThinGuide, OpaqueGuide>.Type;
+public typealias Guide = TypeSelect<GuideIsSolid, SolidGuide, OtherGuide>.Type;
 }

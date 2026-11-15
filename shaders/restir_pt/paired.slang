@@ -33,30 +33,31 @@ module paired;
 
 namespace restir_pt
 {
-public static const uint PAIRED_NEIGHBOR_COUNT = 3;
-public static const uint PAIRED_SLOT_CAPACITY = 65536;
+public static const let PAIRED_NEIGHBOR_COUNT : uint = 3;
+public static const let PAIRED_SLOT_CAPACITY : uint = 65536;
 
 /// 原NV每slot的周期；此处不能拿256替代PNG的实际边长。
-public uint paired_size(uint slot)
+public func paired_size(slot: uint)->uint
 {
-    uint3 sizes = uint3(254, 232, 196);
+    let sizes = uint3(254, 232, 196);
     return sizes[slot];
 }
 
 /// NV随机平移、反射和转置；randomBits来自整帧共享RNG的一次next()。
 public struct PairedNeighborTransform
 {
-    public int offsetX;
-    public int offsetY;
-    public bool flipX;
-    public bool flipY;
-    public bool transpose;
+    public var offsetX : int;
+    public var offsetY : int;
+    public var flipX : bool;
+    public var flipY : bool;
+    public var transpose : bool;
 };
 
 /// 保留NV 15+14+1+1+1bit分割；frameDim须非零，不按像素独立播种。
-public PairedNeighborTransform paired_transform(uint randomBits, uint2 frameDim)
+public func paired_transform(randomBits: uint, frameDim: uint2)->PairedNeighborTransform
 {
-    PairedNeighborTransform result;
+    var randomBits = randomBits;
+    var result : PairedNeighborTransform;
     result.offsetX = int((randomBits & 0x7fffu) % frameDim.x);
     randomBits >>= 15;
     result.offsetY = int((randomBits & 0x3fffu) % frameDim.y);
@@ -71,19 +72,20 @@ public PairedNeighborTransform paired_transform(uint randomBits, uint2 frameDim)
 
 /// 读取同slot原LUT后逆变换delta；pixel为有效非负屏幕像素，slot<3。
 /// lut须完整保留原像素，不可替换为独立随机offset；两次同slot应用得到原像素。
-public int2 paired_delta(StructuredBuffer<uint> lut, PairedNeighborTransform transform, uint slot,
-                         uint2 pixel)
+public func paired_delta(lut: StructuredBuffer<uint>, transform: PairedNeighborTransform,
+                         slot: uint, pixel: uint2)
+    ->int2
 {
-    int size = int(paired_size(slot));
-    int2 coordinate = (int2(pixel) + int2(transform.offsetX, transform.offsetY)) % size;
+    let size = int(paired_size(slot));
+    var coordinate : int2 = (int2(pixel) + int2(transform.offsetX, transform.offsetY)) % size;
     if (transform.flipX)
         coordinate.x = size - 1 - coordinate.x;
     if (transform.flipY)
         coordinate.y = size - 1 - coordinate.y;
     if (transform.transpose)
         coordinate = coordinate.yx;
-    uint packed = lut[PAIRED_SLOT_CAPACITY * slot + uint(coordinate.y * size + coordinate.x)];
-    int2 delta = int2(int(packed & 0xffu) - 128, int(packed >> 8) - 128);
+    let packed : uint = lut[PAIRED_SLOT_CAPACITY * slot + uint(coordinate.y * size + coordinate.x)];
+    var delta = int2(int(packed & 0xffu) - 128, int(packed >> 8) - 128);
     if (transform.transpose)
         delta = delta.yx;
     if (transform.flipX)
@@ -94,14 +96,15 @@ public int2 paired_delta(StructuredBuffer<uint> lut, PairedNeighborTransform tra
 }
 
 /// 有界屏幕不做periodic wrap；越界邻居由workload pass拒绝，避免跨画面边缘重用。
-public int2 paired_neighbor(StructuredBuffer<uint> lut, PairedNeighborTransform transform,
-                            uint slot, uint2 pixel)
+public func paired_neighbor(lut: StructuredBuffer<uint>, transform: PairedNeighborTransform,
+                            slot: uint, pixel: uint2)
+    ->int2
 {
     return int2(pixel) + paired_delta(lut, transform, slot, pixel);
 }
 
 /// paired precomputed/reconnection逻辑地址。逆向缓存取neighborOffset的同一个slot。
-public uint paired_address(uint reservoirOffset, uint slot)
+public func paired_address(reservoirOffset: uint, slot: uint)->uint
 {
     return PAIRED_NEIGHBOR_COUNT * reservoirOffset + slot;
 }

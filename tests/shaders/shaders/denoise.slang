@@ -10,40 +10,40 @@ import bsdf.openpbr.specialized;
 import "bsdf/openpbr/math/microfacet_energy.slang";
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<float4> inputs;
+var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<float4> outputs;
+var outputs : RWStructuredBuffer<float4>;
 [[vk::binding(2, 0)]]
-Texture3D<float4> unused_energy;
+var unused_energy : Texture3D<float4>;
 [[vk::binding(3, 0)]]
-SamplerState unused_sampler;
+var unused_sampler : SamplerState;
 
 using namespace pt;
 
 public struct ConstantEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    public float4 sampleLevel(float3 uvw)
+    public func sampleLevel(uvw: float3)->float4
     {
         return float4(0.2, 0.3, 0.4, 0.5);
     }
 };
 
-DenoiseCamera camera(float x)
+func camera(x: float)->DenoiseCamera
 {
     return { float4(x, 0, 0, 1), float4(0, 0, 1, 2), float4(1, 0, 0, 0), float4(0, 1, 0, 0) };
 }
 
 [numthreads(64, 1, 1)]
-void denoise_motion_main(uint3 id: SV_DispatchThreadID)
+func denoise_motion_main(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x != 0)
         return;
-    uint2 extent = uint2(800, 400);
-    float2 uv = float2(0.5) + float2(0.25, -0.125) / float2(extent);
-    float3 direction = denoise_direction(camera(0), uv);
-    float3 point = direction * (10.0 / direction.z);
-    float2 motion;
-    bool valid = denoise_motion(camera(0), uv, point, false, extent, motion);
+    let extent = uint2(800, 400);
+    let uv = float2(0.5) + float2(0.25, -0.125) / float2(extent);
+    let direction : float3 = denoise_direction(camera(0), uv);
+    let point : float3 = direction * (10.0 / direction.z);
+    var motion : float2;
+    var valid : bool = denoise_motion(camera(0), uv, point, false, extent, motion);
     outputs[0] = float4(motion, denoise_depth(camera(0), point), float(valid));
     valid = denoise_motion(camera(-1), uv, point, false, extent, motion);
     outputs[1] = float4(motion, 0, float(valid));
@@ -56,39 +56,41 @@ void denoise_motion_main(uint3 id: SV_DispatchThreadID)
 }
 
 [numthreads(64, 1, 1)]
-void denoise_albedo_main(uint3 id: SV_DispatchThreadID)
+func denoise_albedo_main(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x != 0)
         return;
-    SurfaceMaterial material = {};
+    var material : SurfaceMaterial = {};
     material.pbr.base_roughness = inputs[0];
     material.pbr.surface = float4(1, 0, 0, 0);
     material.transmitted = float4(1, 0, 0, 0);
-    DenoiseGuides matched = denoise_surface(ConstantEnergy(), material, float3(0, 0, -1),
-                                            float3(0, 0, 1), float4(1, 0, 0, 0));
+    let matched : DenoiseGuides = denoise_surface(ConstantEnergy(), material, float3(0, 0, -1),
+                                                  float3(0, 0, 1), float4(1, 0, 0, 0));
     outputs[0] = matched.normal_roughness;
     outputs[1] = float4(matched.diffuse_albedo, 1);
     outputs[2] = float4(matched.specular_albedo, 1);
     material.pbr.surface.x = 1.5;
-    DenoiseGuides dielectric = denoise_surface(ConstantEnergy(), material, float3(0, 0, 1),
-                                               float3(0, 0, 1), float4(1, 0, 0, 0));
+    let dielectric : DenoiseGuides = denoise_surface(ConstantEnergy(), material, float3(0, 0, 1),
+                                                     float3(0, 0, 1), float4(1, 0, 0, 0));
     outputs[3] = float4(dielectric.diffuse_albedo, 1);
     outputs[4] = float4(dielectric.specular_albedo, 1);
     material.pbr.control.x = 1;
-    DenoiseGuides solid = denoise_surface(ConstantEnergy(), material, float3(0, 0, 1),
-                                          float3(0, 0, 1), float4(1, 0, 0, 0));
+    let solid : DenoiseGuides = denoise_surface(ConstantEnergy(), material, float3(0, 0, 1),
+                                                float3(0, 0, 1), float4(1, 0, 0, 0));
     outputs[5] = float4(solid.diffuse_albedo, 1);
     outputs[6] = float4(solid.specular_albedo, 1);
 }
 
-void compare_flow_albedo<let Flow : uint>(openpbr::Material material, float4 incident,
-                                          float4 transmitted, uint index)
+func compare_flow_albedo<let Flow : uint>(material: openpbr::Material, incident: float4,
+                                          transmitted: float4, index: uint)
+    ->void
 {
-    float3 normal = float3(0, 0, 1), view = normalize(float3(0.7, 0.1, 0.7));
-    openpbr::DenoiseAlbedos reference =
-        openpbr::denoise_albedos(ConstantEnergy(), material, normal, view, incident, transmitted);
-    openpbr::DenoiseAlbedos specialized = openpbr::denoise_albedos_flow<Flow>(
-        ConstantEnergy(), material, normal, view, incident, transmitted);
+    let normal = float3(0, 0, 1);
+    let view : float3 = normalize(float3(0.7, 0.1, 0.7));
+    let reference : openpbr::DenoiseAlbedos = openpbr::denoise_albedos(
+                        ConstantEnergy(), material, normal, view, incident, transmitted);
+    let specialized : openpbr::DenoiseAlbedos = openpbr::denoise_albedos_flow<Flow>(
+                          ConstantEnergy(), material, normal, view, incident, transmitted);
     outputs[index * 4] = float4(reference.diffuse, 1);
     outputs[index * 4 + 1] = float4(reference.specular, 1);
     outputs[index * 4 + 2] = float4(specialized.diffuse, 1);
@@ -96,14 +98,15 @@ void compare_flow_albedo<let Flow : uint>(openpbr::Material material, float4 inc
 }
 
 [numthreads(64, 1, 1)]
-void denoise_flow_main(uint3 id: SV_DispatchThreadID)
+func denoise_flow_main(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x != 0)
         return;
-    openpbr::Material material = {};
+    var material : openpbr::Material = {};
     material.base_roughness = inputs[0];
     material.surface.x = 1;
-    float4 air = float4(1, 0, 0, 0), glass = float4(1.5, 0, 0, 0);
+    let air = float4(1, 0, 0, 0);
+    let glass = float4(1.5, 0, 0, 0);
     compare_flow_albedo<1>(material, air, air, 0);
     material.surface.x = 1.5;
     compare_flow_albedo<131>(material, air, air, 1);
@@ -125,13 +128,14 @@ void denoise_flow_main(uint3 id: SV_DispatchThreadID)
 }
 
 [numthreads(64, 1, 1)]
-void flow_discrete_main(uint3 id: SV_DispatchThreadID)
+func flow_discrete_main(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x != 0)
         return;
-    openpbr::Material material = {};
+    var material : openpbr::Material = {};
     material.surface = float4(1, 0.5, 0, 0);
-    float4 air = float4(1, 0, 0, 0), glass = float4(1.5, 0, 0, 0);
+    let air = float4(1, 0, 0, 0);
+    let glass = float4(1.5, 0, 0, 0);
     outputs[0] = float4(float(openpbr::is_discrete_only(material, air, air)),
                         float(openpbr::is_discrete_only_flow<2116>(material, air, air)), 0, 0);
     material.surface.y = 1;
@@ -147,13 +151,13 @@ void flow_discrete_main(uint3 id: SV_DispatchThreadID)
 
 public struct PrefixScene : ITraceScene
 {
-    public DeltaInterface delta_interface(Hit hit, float4 incident)
+    public func delta_interface(hit: Hit, incident: float4)->DeltaInterface
     {
         return { hit.surface.normal, incident, float3(1) };
     }
-    public SurfaceMaterial resolve(Hit hit, uint capability, float4 incident)
+    public func resolve(hit: Hit, capability: uint, incident: float4)->SurfaceMaterial
     {
-        SurfaceMaterial result = {};
+        var result : SurfaceMaterial = {};
         result.pbr.base_roughness = float4(1, 1, 1, 0);
         result.pbr.surface.x = 1;
         result.pbr.control.x = 1;
@@ -161,35 +165,37 @@ public struct PrefixScene : ITraceScene
         result.boundary_filter = 1;
         return result;
     }
-    public openpbr::Energy energy()
+    public func energy()->openpbr::Energy
     {
         return { unused_energy, unused_sampler };
     }
-    public LightSample sample_sun(geometry::SurfacePoint point, float2 sample)
+    public func sample_sun(point_value: geometry::SurfacePoint, sample_value: float2)->LightSample
     {
         return (LightSample)0;
     }
-    public LightSample sample_light(geometry::SurfacePoint point, float3 sample)
+    public func sample_light(point_value: geometry::SurfacePoint, sample_value: float3)->LightSample
     {
         return (LightSample)0;
     }
-    public float3 light_emission(geometry::SurfacePoint point, LightSample sample, bool solar)
+    public func light_emission(point_value: geometry::SurfacePoint, sample_value: LightSample,
+                               solar: bool)
+        ->float3
     {
-        return sample.emission;
+        return sample_value.emission;
     }
-    public float emission_pdf(Hit hit, float3 previous)
+    public func emission_pdf(hit: Hit, previous: float3)->float
     {
         return 0;
     }
-    public bool occluded(geometry::Ray ray)
+    public func occluded(ray: geometry::Ray)->bool
     {
         return false;
     }
-    public Environment environment(float3 direction, float3 previous, uint depth)
+    public func environment(direction: float3, previous: float3, depth: uint)->Environment
     {
         return (Environment)0;
     }
-    public bool intersect(float3 origin, float3 direction, out Hit hit)
+    public func intersect(origin: float3, direction: float3, out hit: Hit)->bool
     {
         hit = {};
         hit.surface = { float3(0, 0, origin.z == 0 ? 2 : 4), float3(0, 0, -1), 0 };
@@ -197,43 +203,44 @@ public struct PrefixScene : ITraceScene
         hit.identity.x = origin.z == 0 ? 11 : 22;
         return true;
     }
-    public void resolve_hit(inout Hit hit, float4 incident)
+    public func resolve_hit(inout hit: Hit, incident: float4)->void
     {
     }
-    public bool prefix(Hit hit)
+    public func prefix(hit: Hit)->bool
     {
         return hit.identity.x == 11;
     }
-    public void shade(inout TransportCall data)
+    public func shade(inout data: TransportCall)->void
     {
     }
 };
 
 public struct PrefixGuides : IPrefixGuides
 {
-    public void surface(TransportCall data)
+    public func surface(data: TransportCall)->void
     {
         outputs[0] = float4(data.hit.surface.position, float(data.hit.identity.x));
     }
-    public void environment(TransportCall data)
+    public func environment(data: TransportCall)->void
     {
         outputs[0] = -1;
     }
 };
 
 [numthreads(64, 1, 1)]
-void denoise_prefix_main(uint3 id: SV_DispatchThreadID)
+func denoise_prefix_main(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x != 0)
         return;
-    TransportCall with_guides = {};
+    var with_guides : TransportCall = {};
     with_guides.path.direction = float3(0, 0, 1);
     with_guides.path.medium = float4(1, 0, 0, 0);
     with_guides.path.throughput = 1;
     with_guides.path.eta_scale = 1;
-    TransportCall without_guides = with_guides;
-    Settings settings = { 0, 3, 8, 8, false };
-    float first, other_first;
+    var without_guides : TransportCall = with_guides;
+    let settings : Settings = { 0, 3, 8, 8, false };
+    var first : float;
+    var other_first : float;
     trace_prefix(PrefixScene(), with_guides, settings, first, PrefixGuides());
     trace_prefix(PrefixScene(), without_guides, settings, other_first);
     outputs[1] = float4(with_guides.hit.surface.position, float(with_guides.hit.identity.x));

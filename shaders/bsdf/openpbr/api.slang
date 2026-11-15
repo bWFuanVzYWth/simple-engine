@@ -32,80 +32,82 @@ namespace openpbr
 public struct Material
 {
     /// RGB 与线性 roughness，均属于 [0,1]。
-    public float4 base_roughness;
+    public var base_roughness : float4;
     /// opaque IOR、metalness、薄层 SSS weight、thin dielectric thickness。
-    public float4 surface;
+    public var surface : float4;
     /// bit0=dielectric，bit1=thin dielectric；其余内容为零。
-    public uint4 control;
+    public var control : uint4;
 };
 
 /// 原作者能量表的真实 Rgba16Float 3D 纹理及 normalized linear clamp LOD0 sampler。
 /// 纹理为 44x32x159，不是颜色；资源所有权与绑定由调用方维持。
 public struct Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    public Texture3D<float4> texture;
-    public SamplerState sampler;
-    public float4 sampleLevel(float3 uvw)
+    public var texture : Texture3D<float4>;
+    public var sampler : SamplerState;
+    public func sampleLevel(uvw: float3)->float4
     {
         return texture.SampleLevel(sampler, uvw, 0.0);
     }
 };
 
 /// 反射事件；与 TRANSMISSION 互斥。
-public static const uint REFLECTION = 1u;
+public static const let REFLECTION = 1u;
 /// 透射事件；solid dielectric 更新 medium，thin 和薄层 SSS 不更新。
-public static const uint TRANSMISSION = 2u;
+public static const let TRANSMISSION = 2u;
 /// 漫反射／薄层 SSS 分量。
-public static const uint DIFFUSE = 4u;
+public static const let DIFFUSE = 4u;
 /// 有限宽度微表面分量。
-public static const uint GLOSSY = 8u;
+public static const let GLOSSY = 8u;
 /// 离散 delta 事件，pdf 是概率质量；不能与立体角密度直接用于 MIS。
-public static const uint DISCRETE = 16u;
+public static const let DISCRETE = 16u;
 
 /// 完整闭包的连续方向响应与边缘 proposal PDF；response 已包含 |cos|，不是裸 BRDF。
 public struct Evaluation
 {
-    public float3 response;
-    public float pdf;
+    public var response : float3;
+    public var pdf : float;
 };
 
 /// 拒绝 proposal 时 events=0，无可消费的散射；其余内容规范为零／incident medium。
 /// 有效 proposal 以 beta*=response/pdf 更新；不要再次乘 cos 或额外重复乘 eta²。
 public struct Sample
 {
-    public float3 direction;
-    public float3 response;
-    public float pdf;
+    public var direction : float3;
+    public var response : float3;
+    public var pdf : float;
     /// eta_t/eta_i，供 eta-aware RR；响应已包含参考实现的 radiance eta 补偿。
-    public float relative_eta;
-    public uint events;
+    public var relative_eta : float;
+    public var events : uint;
     /// 后续段的 float4(IOR,RGB extinction)，thin dielectric 透射仍保留入射介质。
-    public float4 medium;
+    public var medium : float4;
 };
 
-internal bool dielectric(Material material)
+internal func dielectric(material: Material)->bool
 {
     return (material.control.x & 1u) != 0;
 }
-internal bool thin(Material material)
+internal func thin(material: Material)->bool
 {
     return (material.control.x & 2u) != 0;
 }
 
-internal float interface_ior(Material material, float4 incident, float4 transmitted)
+internal func interface_ior(material: Material, incident: float4, transmitted: float4)->float
 {
-    bool exiting = !thin(material) && incident.x > transmitted.x;
+    let exiting : bool = !thin(material) && incident.x > transmitted.x;
     return (exiting ? incident.x : transmitted.x) / (exiting ? transmitted.x : incident.x);
 }
 
-internal PrimeFullOpenPbrOnb frame(Material material, float3 normal, float3 view, float4 incident,
-                                   float4 transmitted)
+internal func frame(material: Material, normal: float3, view: float3, incident: float4,
+                    transmitted: float4)
+    ->PrimeFullOpenPbrOnb
 {
+    var normal = normal;
     normal = dot(normal, view) < 0.0 ? -normal : normal;
-    PrimeFullOpenPbrOnb onb = primeFullOpenPbrOnbFromNormal(normal);
+    var onb : PrimeFullOpenPbrOnb = primeFullOpenPbrOnbFromNormal(normal);
     if (dielectric(material))
     {
-        bool exiting = !thin(material) && incident.x > transmitted.x;
+        let exiting : bool = !thin(material) && incident.x > transmitted.x;
         if ((dot(onb.normal, view) >= 0.0) == exiting)
         {
             onb.normal = -onb.normal;
@@ -115,8 +117,9 @@ internal PrimeFullOpenPbrOnb frame(Material material, float3 normal, float3 view
     return onb;
 }
 
-internal PrimeFullCompactOpaqueState opaque_state<Provider>(Provider energy, Material material,
-                                                            float3 wi, float4 incident)
+internal func opaque_state<Provider>(energy: Provider, material: Material, wi: float3,
+                                     incident: float4)
+    ->PrimeFullCompactOpaqueState
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     return primeFullPtMetallicState(energy, material.base_roughness.xyz, material.base_roughness.w,
@@ -124,7 +127,7 @@ internal PrimeFullCompactOpaqueState opaque_state<Provider>(Provider energy, Mat
                                     material.surface.y, wi);
 }
 
-internal bool reflection_only(Material material)
+internal func reflection_only(material: Material)->bool
 {
     return !dielectric(material) && (material.surface.y == 1.0 || material.surface.z == 0.0);
 }
@@ -132,23 +135,24 @@ internal bool reflection_only(Material material)
 /// 连续方向的保守支持域快判，不读取能量表或准备闭包。
 /// false 保证 evaluate 的 response／pdf 为零；true 不保证非零，不替代完整评估。
 /// 输入及世界空间约定同 evaluate；保留 tangent、dielectric 和薄层 SSS 的反侧方向。
-public bool may_evaluate(Material material, float3 normal, float3 view, float3 direction,
-                         float4 incident, float4 transmitted)
+public func may_evaluate(material: Material, normal: float3, view: float3, direction: float3,
+                         incident: float4, transmitted: float4)
+    ->bool
 {
     if (!reflection_only(material))
         return true;
-    PrimeFullOpenPbrOnb onb = frame(material, normal, view, incident, transmitted);
+    let onb : PrimeFullOpenPbrOnb = frame(material, normal, view, incident, transmitted);
     return !(dot(onb.normal, direction) < 0.0);
 }
 
 /// 整个闭包是否仅有离散事件；光滑 dielectric／conductor 成立，含漫反射的光滑 opaque 不成立。
 /// continuous NEE 可跳过此闭包，但不能丢掉它的延续和发光命中。
-public bool is_discrete_only(Material material, float4 incident, float4 transmitted)
+public func is_discrete_only(material: Material, incident: float4, transmitted: float4)->bool
 {
-    float alpha = material.base_roughness.w * material.base_roughness.w;
+    let alpha : float = material.base_roughness.w * material.base_roughness.w;
     if (dielectric(material))
     {
-        float ior = interface_ior(material, incident, transmitted);
+        let ior : float = interface_ior(material, incident, transmitted);
         if (thin(material))
             return clamp(alpha * primeFullOpenPbrThinDielectricRoughnessScaler2(ior), 0.0, 1.0) <
                    1.0e-4;
@@ -160,35 +164,38 @@ public bool is_discrete_only(Material material, float4 incident, float4 transmit
 /// 连续方向的完整闭包响应与边缘 PDF；incident/transmitted 为显式的边界两侧介质。
 /// normal、view、direction 同世界空间，方向均离开顶点；normal 可未 face-forward。
 /// delta 质量不属于连续评估；无效结果归零，不增加任意输入修复。
-public Evaluation evaluate<Provider>(Provider energy, Material material, float3 normal, float3 view,
-                                     float3 direction, float4 incident, float4 transmitted)
+public func evaluate<Provider>(energy: Provider, material: Material, normal: float3, view: float3,
+                               direction: float3, incident: float4, transmitted: float4)
+    ->Evaluation
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullOpenPbrOnb onb = frame(material, normal, view, incident, transmitted);
-    float3 wi = primeFullOpenPbrOnbToLocal(onb, view);
-    float3 wo = primeFullOpenPbrOnbToLocal(onb, direction);
+    let onb : PrimeFullOpenPbrOnb = frame(material, normal, view, incident, transmitted);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
+    let wo : float3 = primeFullOpenPbrOnbToLocal(onb, direction);
     if (wo.z < 0.0 && reflection_only(material))
         return { float3(0.0), 0.0 };
-    PrimeFullOpenPbrThroughput response;
-    float pdf;
+    var response : PrimeFullOpenPbrThroughput;
+    var pdf : float;
     if (dielectric(material))
     {
-        PrimeFullCompactTransmissionState state = primeFullPtTransmissionState(
-            energy, material.base_roughness.w, interface_ior(material, incident, transmitted),
-            thin(material), transmitted.yzw * material.surface.w, wi);
-        PrimeFullCompactTransmissionEvaluation evaluated =
-            primeFullCompactTransmissionEvaluate(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+        let state
+            : PrimeFullCompactTransmissionState = primeFullPtTransmissionState(
+                  energy, material.base_roughness.w, interface_ior(material, incident, transmitted),
+                  thin(material), transmitted.yzw * material.surface.w, wi);
+        let evaluated
+            : PrimeFullCompactTransmissionEvaluation =
+                  primeFullCompactTransmissionEvaluate(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
         response = evaluated.throughput;
         pdf = evaluated.pdf;
     }
     else
     {
-        PrimeFullCompactOpaqueEvaluation evaluated =
-            primeFullCompactOpaqueEvaluate(wi, wo, opaque_state(energy, material, wi, incident));
+        let evaluated : PrimeFullCompactOpaqueEvaluation = primeFullCompactOpaqueEvaluate(
+                            wi, wo, opaque_state(energy, material, wi, incident));
         response = evaluated.throughput;
         pdf = evaluated.pdf;
     }
-    BsdfEvaluation checked = primeInvalidBsdfEvaluation();
+    var checked : BsdfEvaluation = primeInvalidBsdfEvaluation();
     if (response.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
     {
         checked.response = response.value;
@@ -201,21 +208,23 @@ public Evaluation evaluate<Provider>(Provider energy, Material material, float3 
 /// 按分量选择、方向映射及完整边缘 PDF 采样；u 的分量独立，不能复用 RR 随机数。
 /// solid transmission 更新 medium；薄片光学深度为 transmitted.sigma * 显式 thickness。
 /// 采样只处理界面，沿路径段的 Beer 吸收由调用方另以当前 medium 与距离计算。
-public Sample sample<Provider>(Provider energy, Material material, float3 normal, float3 view,
-                               float3 u, float4 incident, float4 transmitted)
+public func sample<Provider>(energy: Provider, material: Material, normal: float3, view: float3,
+                             u: float3, incident: float4, transmitted: float4)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    Sample result = {};
+    var result : Sample = {};
     result.relative_eta = 1.0;
     result.medium = incident;
-    PrimeFullOpenPbrOnb onb = frame(material, normal, view, incident, transmitted);
-    float3 wi = primeFullOpenPbrOnbToLocal(onb, view);
-    PrimeFullOpenPbrSample sampled;
+    let onb : PrimeFullOpenPbrOnb = frame(material, normal, view, incident, transmitted);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
+    var sampled : PrimeFullOpenPbrSample;
     if (dielectric(material))
     {
-        PrimeFullCompactTransmissionState state = primeFullPtTransmissionState(
-            energy, material.base_roughness.w, interface_ior(material, incident, transmitted),
-            thin(material), transmitted.yzw * material.surface.w, wi);
+        let state
+            : PrimeFullCompactTransmissionState = primeFullPtTransmissionState(
+                  energy, material.base_roughness.w, interface_ior(material, incident, transmitted),
+                  thin(material), transmitted.yzw * material.surface.w, wi);
         sampled = primeFullCompactTransmissionSampleRaw(
             wi, u, primeFullCompactTransmissionClosureState(state), PRIME_FULL_OPENPBR_FLAG_ALL);
     }
@@ -223,7 +232,7 @@ public Sample sample<Provider>(Provider energy, Material material, float3 normal
         sampled = primeFullPtOpaqueSample(wi, u, opaque_state(energy, material, wi, incident));
     if (!primeFullOpenPbrHasSample(sampled))
         return result;
-    BsdfSample checked = primeInvalidBsdfSample();
+    var checked : BsdfSample = primeInvalidBsdfSample();
     checked.direction = primeFullOpenPbrOnbToWorld(onb, sampled.wo);
     if ((sampled.throughput.flags & PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION) != 0u)
         checked.direction = normalize(reflect(-view, onb.normal));

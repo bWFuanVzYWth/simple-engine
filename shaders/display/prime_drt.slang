@@ -14,79 +14,79 @@ namespace display
 public struct PrimeDrtParameters
 {
     /// 仅应用一次的有限正手动曝光倍率。
-    public float exposure_multiplier;
+    public var exposure_multiplier : float;
     /// 压缩曲线的渐近峰值，由起点与 headroom 推导。
-    public float curve_peak;
+    public var curve_peak : float;
     /// headroom 经 sRGB 传递函数编码后的输出上限。
-    public float encoded_output_peak;
+    public var encoded_output_peak : float;
     /// 编码域内向原色相恢复的比例，范围 0..1。
-    public float hue_compensation;
+    public var hue_compensation : float;
     /// 编码域内附加饱和倍率的增量，范围 0..0.5。
-    public float saturation_compensation;
+    public var saturation_compensation : float;
     /// 与恒等映射相切的场景线性压缩起点，范围 0..0.99。
-    public float compression_start;
+    public var compression_start : float;
     /// 保留为零，使独立参数块与两个 float4 一致。
-    public float2 padding;
+    public var padding : float2;
 };
 
-static const float3 NEUTRAL_WEIGHTS =
+static const let NEUTRAL_WEIGHTS =
     float3(0.2120053547549465, 0.3921825078090138, 0.3958121374360396);
-static const float GAMUT_COMPRESSION = 0.04;
+static const let GAMUT_COMPRESSION = 0.04;
 
-internal float3 to_virtual_rgb(float3 color)
+internal func to_virtual_rgb(color: float3)->float3
 {
-    float neutral = dot(color, NEUTRAL_WEIGHTS);
+    let neutral : float = dot(color, NEUTRAL_WEIGHTS);
     return lerp(color, neutral.xxx, GAMUT_COMPRESSION);
 }
 
-internal float3 from_virtual_rgb(float3 color)
+internal func from_virtual_rgb(color: float3)->float3
 {
     // neutral 投影不变，因此这是上述线性映射的逆。
-    float neutral = dot(color, NEUTRAL_WEIGHTS);
+    let neutral : float = dot(color, NEUTRAL_WEIGHTS);
     return (color - GAMUT_COMPRESSION * neutral.xxx) / (1.0 - GAMUT_COMPRESSION);
 }
 
-internal float curve_component(float value, PrimeDrtParameters parameters)
+internal func curve_component(value: float, parameters: PrimeDrtParameters)->float
 {
     if (value <= parameters.compression_start)
         return value;
-    float distance = value - parameters.compression_start;
-    float extent = parameters.curve_peak - parameters.compression_start;
+    let distance : float = value - parameters.compression_start;
+    let extent : float = parameters.curve_peak - parameters.compression_start;
     // 倒数形式避免 distance/extent 溢出及 GPU 大分母倒数冲零。
     return parameters.compression_start + extent / (1.0 + extent / distance);
 }
 
-internal float3 curve(float3 value, PrimeDrtParameters parameters)
+internal func curve(value: float3, parameters: PrimeDrtParameters)->float3
 {
     return float3(curve_component(value.x, parameters), curve_component(value.y, parameters),
                   curve_component(value.z, parameters));
 }
 
-internal float3 encode_srgb(float3 linear_rgb)
+internal func encode_srgb(linear_rgb: float3)->float3
 {
     // 负 outset 值保留到 HSV 补偿，不能在此饱和裁剪。
-    bool3 cutoff = linear_rgb < 0.0031308;
-    float3 higher = 1.055 * pow(max(linear_rgb, 0.0), 1.0 / 2.4) - 0.055;
-    float3 lower = linear_rgb * 12.92;
+    let cutoff : bool3 = linear_rgb < 0.0031308;
+    let higher : float3 = 1.055 * pow(max(linear_rgb, 0.0), 1.0 / 2.4) - 0.055;
+    let lower : float3 = linear_rgb * 12.92;
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
                   cutoff.z ? lower.z : higher.z);
 }
 
-internal float3 decode_srgb(float3 encoded)
+internal func decode_srgb(encoded: float3)->float3
 {
-    bool3 cutoff = encoded <= 0.04045;
-    float3 lower = encoded / 12.92;
-    float3 higher = pow((encoded + 0.055) / 1.055, 2.4);
+    let cutoff : bool3 = encoded <= 0.04045;
+    let lower : float3 = encoded / 12.92;
+    let higher : float3 = pow((encoded + 0.055) / 1.055, 2.4);
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
                   cutoff.z ? lower.z : higher.z);
 }
 
-internal float3 rgb_to_hsv(float3 color)
+internal func rgb_to_hsv(color: float3)->float3
 {
-    float maximum = max(color.x, max(color.y, color.z));
-    float minimum = min(color.x, min(color.y, color.z));
-    float chroma = maximum - minimum;
-    float hue = 0.0;
+    let maximum : float = max(color.x, max(color.y, color.z));
+    let minimum : float = min(color.x, min(color.y, color.z));
+    let chroma : float = maximum - minimum;
+    var hue = 0.0;
     if (chroma > 0.0 && maximum > 1.0e-7)
     {
         if (maximum == color.x)
@@ -97,31 +97,34 @@ internal float3 rgb_to_hsv(float3 color)
             hue = (color.x - color.y) / chroma + 4.0;
         hue = frac(hue / 6.0);
     }
-    float saturation = maximum > 1.0e-7 ? chroma / max(maximum, 1.0e-7) : 0.0;
+    let saturation : float = maximum > 1.0e-7 ? chroma / max(maximum, 1.0e-7) : 0.0;
     return float3(hue, saturation, maximum);
 }
 
-internal float3 hsv_to_rgb(float3 hsv)
+internal func hsv_to_rgb(hsv: float3)->float3
 {
-    float3 primary =
-        clamp(abs(frac(hsv.x + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    let primary : float3 =
+                      clamp(abs(frac(hsv.x + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0,
+                            0.0, 1.0);
     return hsv.z * lerp(1.0.xxx, primary, hsv.y);
 }
 
-internal float3 compensate_hsv(float3 original_linear, float3 mapped_display,
-                               float hue_compensation, float saturation_compensation)
+internal func compensate_hsv(original_linear: float3, mapped_display: float3,
+                             hue_compensation: float, saturation_compensation: float)
+    ->float3
 {
+
     if (hue_compensation == 0.0 && saturation_compensation == 0.0 && all(mapped_display >= 0.0))
         return mapped_display;
-    float3 mapped_hsv = rgb_to_hsv(mapped_display);
+    var mapped_hsv : float3 = rgb_to_hsv(mapped_display);
     if (mapped_hsv.y == 0.0)
         return mapped_display;
     if (hue_compensation > 0.0 && mapped_hsv.y > 1.0e-7)
     {
-        float3 original_hsv = rgb_to_hsv(encode_srgb(original_linear));
+        let original_hsv : float3 = rgb_to_hsv(encode_srgb(original_linear));
         if (original_hsv.y > 1.0e-7)
         {
-            float hue_offset = original_hsv.x - mapped_hsv.x;
+            var hue_offset : float = original_hsv.x - mapped_hsv.x;
             hue_offset -= floor(hue_offset + 0.5);
             mapped_hsv.x = frac(mapped_hsv.x + hue_compensation * hue_offset);
         }
@@ -131,12 +134,12 @@ internal float3 compensate_hsv(float3 original_linear, float3 mapped_display,
     return hsv_to_rgb(mapped_hsv);
 }
 
-internal float3 tonemap(float3 linear_bt709, PrimeDrtParameters parameters)
+internal func tonemap(linear_bt709: float3, parameters: PrimeDrtParameters)->float3
 {
-    float3 nonnegative = max(linear_bt709, float3(0.0));
-    float3 working = to_virtual_rgb(nonnegative);
-    float3 mapped_linear = from_virtual_rgb(curve(working, parameters));
-    float3 mapped_display = encode_srgb(mapped_linear);
+    let nonnegative : float3 = max(linear_bt709, float3(0.0));
+    let working : float3 = to_virtual_rgb(nonnegative);
+    let mapped_linear : float3 = from_virtual_rgb(curve(working, parameters));
+    let mapped_display : float3 = encode_srgb(mapped_linear);
     return compensate_hsv(nonnegative, mapped_display, parameters.hue_compensation,
                           parameters.saturation_compensation);
 }
@@ -144,29 +147,29 @@ internal float3 tonemap(float3 linear_bt709, PrimeDrtParameters parameters)
 /// 场景线性 BT.709／sRGB 直接转显示 sRGB 编码 RGB，不经过 Rec.2020 往返矩阵。
 /// 非有限输入归零；其余输入先截负再乘曝光，随后执行完整 primeDRT。
 /// 返回范围为 [0,encoded_output_peak]；alpha、附件编码和最终量化由调用方处理。
-public float3 prime_drt_bt709(float3 hdr_bt709, PrimeDrtParameters parameters)
+public func prime_drt_bt709(hdr_bt709: float3, parameters: PrimeDrtParameters)->float3
 {
     if (any(isnan(hdr_bt709)) || any(isinf(hdr_bt709)))
         return float3(0.0);
-    float3 exposed = max(hdr_bt709, float3(0.0)) * parameters.exposure_multiplier;
+    let exposed : float3 = max(hdr_bt709, float3(0.0)) * parameters.exposure_multiplier;
     return clamp(tonemap(exposed, parameters), 0.0, parameters.encoded_output_peak);
 }
 
 /// 场景线性 Rec.2020 转显示 sRGB 编码 RGB，按显示原色变换后裁剪。
 /// 非有限输入归零；先截负并乘曝光，再转 BT.709 和截负，负 outset 在后续 HSV 前保留。
 /// 返回范围为 [0,encoded_output_peak]；不负责 HDR 输出协议或附件传递函数。
-public float3 prime_drt_rec2020(float3 hdr_rec2020, PrimeDrtParameters parameters)
+public func prime_drt_rec2020(hdr_rec2020: float3, parameters: PrimeDrtParameters)->float3
 {
     if (any(isnan(hdr_rec2020)) || any(isinf(hdr_rec2020)))
         return float3(0.0);
-    float3 exposed = max(hdr_rec2020, float3(0.0)) * parameters.exposure_multiplier;
-    float3 linear709 = max(color::rec2020_to_bt709(exposed), float3(0.0));
+    let exposed : float3 = max(hdr_rec2020, float3(0.0)) * parameters.exposure_multiplier;
+    let linear709 : float3 = max(color::rec2020_to_bt709(exposed), float3(0.0));
     return clamp(tonemap(linear709, parameters), 0.0, parameters.encoded_output_peak);
 }
 
 /// 将完整 primeDRT 的编码输出解码为显示线性 BT.709，供 sRGB attachment 或线性图像接口。
 /// 输入与数值前提同 prime_drt_bt709；范围为 [0,headroom]，不重复执行原色变换。
-public float3 prime_drt_linear_bt709(float3 hdr_bt709, PrimeDrtParameters parameters)
+public func prime_drt_linear_bt709(hdr_bt709: float3, parameters: PrimeDrtParameters)->float3
 {
     return decode_srgb(prime_drt_bt709(hdr_bt709, parameters));
 }

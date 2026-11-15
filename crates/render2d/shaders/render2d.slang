@@ -2,26 +2,26 @@ module render2d;
 
 struct Instance
 {
-    float4 rect;
-    float4 uv;
-    float4 color;
-    float4 params;
+    var rect : float4;
+    var uv : float4;
+    var color : float4;
+    var params : float4;
 };
 
 struct View
 {
-    float4 transform;
-    float4 pixel;
+    var transform : float4;
+    var pixel : float4;
 };
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<Instance> instances;
+var instances : StructuredBuffer<Instance>;
 [[vk::binding(1, 0)]]
-ConstantBuffer<View> view;
+var view : ConstantBuffer<View>;
 [[vk::binding(0, 1)]]
-Texture2D<float4> image;
+var image : Texture2D<float4>;
 [[vk::binding(1, 1)]]
-SamplerState image_sampler;
+var image_sampler : SamplerState;
 
 struct VertexOutput
 {
@@ -39,18 +39,19 @@ struct VertexOutput
 };
 
 [shader("vertex")]
-VertexOutput vertex_main(uint vertex_id: SV_VulkanVertexID, uint instance_id: SV_VulkanInstanceID)
+func vertex_main(uint vertex_id: SV_VulkanVertexID, uint instance_id: SV_VulkanInstanceID)
+    ->VertexOutput
 {
-    const float2 corners[6] = {
+    let corners : float2[6] = {
         float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
         float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0),
     };
-    Instance item = instances[instance_id];
-    float2 corner = corners[vertex_id];
-    float2 margin = item.params.x == 0.0 ? view.pixel.xy : float2(0.0);
-    float2 local = corner * (item.rect.zw + 2.0 * margin) - margin;
-    float2 position = item.rect.xy + local;
-    VertexOutput output;
+    let item : Instance = instances[instance_id];
+    let corner : float2 = corners[vertex_id];
+    let margin : float2 = item.params.x == 0.0 ? view.pixel.xy : float2(0.0);
+    var local : float2 = corner * (item.rect.zw + 2.0 * margin) - margin;
+    var position : float2 = item.rect.xy + local;
+    var output : VertexOutput;
     output.position = float4(position * view.transform.xy + view.transform.zw, 0.0, 1.0);
     output.uv = item.uv.xy + corner * item.uv.zw;
     output.local = local;
@@ -63,19 +64,19 @@ VertexOutput vertex_main(uint vertex_id: SV_VulkanVertexID, uint instance_id: SV
 [shader("fragment")]
 float4 fragment_main(VertexOutput input) : SV_Target0
 {
-    float radius = clamp(input.params.y, 0.0, min(input.extent.x, input.extent.y) * 0.5);
-    float2 q = abs(input.local - input.extent * 0.5) - input.extent * 0.5 + radius;
-    float distance = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-    float width = max(fwidth(distance), 0.00001);
+    let radius : float = clamp(input.params.y, 0.0, min(input.extent.x, input.extent.y) * 0.5);
+    let q : float2 = abs(input.local - input.extent * 0.5) - input.extent * 0.5 + radius;
+    let distance : float = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    let width : float = max(fwidth(distance), 0.00001);
     if (input.params.x == 0.0)
     {
-        float coverage = saturate(0.5 - distance / width);
+        var coverage : float = saturate(0.5 - distance / width);
         if (input.params.z > 0.0)
             coverage -= saturate(0.5 - (distance + input.params.z) / width);
         return input.color * coverage;
     }
     // UI 图片和 atlas 固定 LOD 0；不在非一致分支内依赖隐式导数。
-    float4 sampled = image.SampleLevel(image_sampler, input.uv, 0.0);
+    let sampled : float4 = image.SampleLevel(image_sampler, input.uv, 0.0);
     if (input.params.x == 3.0)
         return input.color * sampled.r;
     return sampled * input.color;

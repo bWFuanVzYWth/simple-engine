@@ -2,146 +2,112 @@
 import atmosphere.parameters;
 import atmosphere.sampling;
 using namespace atmosphere;
-static const bool SKIP_INACTIVE_SPECIES = true;
-static const bool CACHE_PHASE_COORDINATE = false;
+static const let SKIP_INACTIVE_SPECIES = true;
+static const let CACHE_PHASE_COORDINATE = false;
 struct AerialView
 {
-    column_major float4x4 matrix;
-    float4 settings;
+    column_major var matrix : float4x4;
+    var settings : float4;
 };
-#if defined(ATM_STAGE_OPTICAL)
-static const uint B0 = 0, B1 = 1, B2 = 66, B3 = 67, B4 = 68, B5 = 69, B6 = 70, B7 = 71, B8 = 72,
-                  B9 = 73, B10 = 74, B11 = 2, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 80,
-                  B17 = 81, B18 = 82, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_DIRECTIONS)
-static const uint B0 = 0, B1 = 1, B2 = 66, B3 = 67, B4 = 68, B5 = 69, B6 = 70, B7 = 71, B8 = 72,
-                  B9 = 73, B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 2,
-                  B17 = 81, B18 = 82, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_INCIDENT)
-static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 8, B8 = 72, B9 = 73,
-                  B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 7, B17 = 81,
-                  B18 = 9, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_MOMENTS)
-static const uint B0 = 0, B1 = 65, B2 = 66, B3 = 67, B4 = 68, B5 = 69, B6 = 70, B7 = 2, B8 = 72,
-                  B9 = 5, B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 1,
-                  B17 = 3, B18 = 82, B19 = 4, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_SOURCE)
-static const uint B0 = 0, B1 = 1, B2 = 66, B3 = 67, B4 = 3, B5 = 69, B6 = 70, B7 = 5, B8 = 2,
-                  B9 = 73, B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 4,
-                  B17 = 6, B18 = 82, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_GROUND)
-static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 67, B4 = 68, B5 = 69, B6 = 3, B7 = 5, B8 = 72,
-                  B9 = 73, B10 = 6, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 4,
-                  B17 = 81, B18 = 82, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_SKY)
-static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 71, B8 = 72, B9 = 73,
-                  B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 9, B15 = 79, B16 = 80, B17 = 81,
-                  B18 = 7, B19 = 83, B20 = 8, B21 = 85, B22 = 86, B23 = 87;
-#elif defined(ATM_STAGE_AERIAL)
-static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 71, B8 = 72, B9 = 73,
-                  B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 80, B17 = 81,
-                  B18 = 7, B19 = 83, B20 = 84, B21 = 8, B22 = 9, B23 = 10;
-#elif defined(ATM_STAGE_TERRAIN) || defined(ATM_STAGE_PROBE)
-static const uint B0 = 0, B1 = 1, B2 = 2, B3 = 3, B4 = 4, B5 = 5, B6 = 6, B7 = 71, B8 = 72, B9 = 73,
-                  B10 = 74, B11 = 75, B12 = 76, B13 = 77, B14 = 78, B15 = 79, B16 = 80, B17 = 81,
-                  B18 = 7, B19 = 83, B20 = 84, B21 = 85, B22 = 86, B23 = 87;
-#else
-#error ATM_STAGE_* is required
-#endif
+import atmosphere_bindings;
 [[vk::binding(B0, 0)]]
-ConstantBuffer<Params> p;
+var p : ConstantBuffer<Params>;
 [[vk::binding(B1, 0)]]
-StructuredBuffer<float4> data;
+var data : StructuredBuffer<float4>;
 [[vk::binding(B2, 0)]]
-Texture2D<float4> tau_read;
+var tau_read : Texture2D<float4>;
 [[vk::binding(B3, 0)]]
-Texture2D<float4> source_read;
+var source_read : Texture2D<float4>;
 [[vk::binding(B4, 0)]]
-Texture2D<float4> mean_read;
+var mean_read : Texture2D<float4>;
 [[vk::binding(B5, 0)]]
-Texture2D<float4> ground_read;
+var ground_read : Texture2D<float4>;
 [[vk::binding(B6, 0)]]
-SamplerState linear_sampler;
+var linear_sampler : SamplerState;
 [[vk::binding(B7, 0)]]
-RWStructuredBuffer<float4> incoming;
+var incoming : RWStructuredBuffer<float4>;
 [vk::image_format("rgba16f")]
 [[vk::binding(B8, 0)]]
-RWTexture2D<float4> source_write;
+var source_write : RWTexture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B9, 0)]]
-RWTexture2D<float4> mean_write;
+var mean_write : RWTexture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B10, 0)]]
-RWTexture2D<float4> ground_write;
+var ground_write : RWTexture2D<float4>;
 [vk::image_format("rgba16f")]
 [[vk::binding(B11, 0)]]
-RWTexture2D<float4> tau_write;
+var tau_write : RWTexture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B12, 0)]]
-RWTexture2D<float4> output;
+var output : RWTexture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B13, 0)]]
-RWTexture2D<float4> output_t;
+var output_t : RWTexture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B14, 0)]]
-RWTexture2D<float4> sky_write;
+var sky_write : RWTexture2D<float4>;
 [[vk::binding(B15, 0)]]
-Texture2D<float4> sky_read;
+var sky_read : Texture2D<float4>;
 [[vk::binding(B16, 0)]]
-RWStructuredBuffer<float4> directions;
+var directions : RWStructuredBuffer<float4>;
 [[vk::binding(B17, 0)]]
-RWStructuredBuffer<float4> moments;
+var moments : RWStructuredBuffer<float4>;
 [[vk::binding(B18, 0)]]
-Texture2D<float4> high_read;
+var high_read : Texture2D<float4>;
 [vk::image_format("rgba32f")]
 [[vk::binding(B19, 0)]]
-RWTexture2D<float4> high_write;
+var high_write : RWTexture2D<float4>;
 [[vk::binding(B20, 0)]]
-StructuredBuffer<float4> sky_mapping;
+var sky_mapping : StructuredBuffer<float4>;
 [[vk::binding(B21, 0)]]
-ConstantBuffer<AerialView> aerial_view;
+var aerial_view : ConstantBuffer<AerialView>;
 [vk::image_format("rgba16f")]
 [[vk::binding(B22, 0)]]
-RWTexture3D<float4> aerial_light;
+var aerial_light : RWTexture3D<float4>;
 [vk::image_format("rgba16f")]
 [[vk::binding(B23, 0)]]
-RWTexture3D<float4> aerial_t;
-uint2 dimensions(Texture2D<float4> t)
+var aerial_t : RWTexture3D<float4>;
+func dimensions(t: Texture2D<float4>)->uint2
 {
-    uint w, h;
+    var w : uint;
+    var h : uint;
     t.GetDimensions(w, h);
     return uint2(w, h);
 }
-uint2 dimensions(RWTexture2D<float4> t)
+func dimensions(t: RWTexture2D<float4>)->uint2
 {
-    uint w, h;
+    var w : uint;
+    var h : uint;
     t.GetDimensions(w, h);
     return uint2(w, h);
 }
-uint3 dimensions(RWTexture3D<float4> t)
+func dimensions(t: RWTexture3D<float4>)->uint3
 {
-    uint w, h, d;
+    var w : uint;
+    var h : uint;
+    var d : uint;
     t.GetDimensions(w, h, d);
     return uint3(w, h, d);
 }
 
-float phase_coord(float nu)
+func phase_coord(nu: float)->float
 {
     let a = select((mapping_flags(p) & 4u) != 0u, p.angular_mapping.x, 0.5);
     return a * acos(clamp(nu, -1.0, 1.0)) / atmosphere::PI +
            (1.0 - a) * pow(max((1.0 - nu) * 0.5, 0.0), 1.0 / 3.0);
 }
-float4 shape(uint hi, uint si, float2 uv)
+func shape(hi: uint, si: uint, uv: float2)->float4
 {
     let pixel = float2(float(si * p.solve.y), float(hi * p.solve.z)) +
                 uv * float2(float(p.solve.y - 1u), float(p.solve.z - 1u)) + 0.5;
     return source_read.SampleLevel(linear_sampler, pixel / float2(dimensions(source_read)), 0.0);
 }
-float4 log_mean(uint hi, uint si)
+func log_mean(hi: uint, si: uint)->float4
 {
     return mean_read.Load(int3(int2(int(si), int(hi)), 0));
 }
-float4 high_basis(float mu, float mu_s, float nu)
+func high_basis(mu: float, mu_s: float, nu: float)->float4
 {
     let y = clamp(mu, -1.0, 1.0);
     let radial = sqrt(max(1.0 - y * y, 0.0));
@@ -149,16 +115,16 @@ float4 high_basis(float mu, float mu_s, float nu)
     let z = clamp((nu - y * mu_s) / sqrt(max(1.0 - mu_s * mu_s, 1e-20)), -radial, radial);
     return float4(1.0, y * y, z * z, y * z);
 }
-float4 high_shape(uint hi, uint si, float4 b)
+func high_shape(hi: uint, si: uint, b: float4)->float4
 {
-    float4 m[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
+    var m : float4[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
     for (var k = 0u; k < 5u; k++)
     {
         m[k] = high_read.Load(int3(int2(int(si * 5u + k), int(hi + 1u - p.offsets1.y)), 0));
     }
     return (m[0] + m[1] * b.y + m[2] * b.z + m[3] * b.w) / max(dot(m[4], b), 1e-20);
 }
-float4 indirect(float h, float mu, float mu_s, float nu, float cached_phase, Medium c)
+func indirect(h: float, mu: float, mu_s: float, nu: float, cached_phase: float, c: Medium)->float4
 {
     if ((p.size_steps.w & 1u) == 0u)
     {
@@ -224,14 +190,14 @@ float4 indirect(float h, float mu, float mu_s, float nu, float cached_phase, Med
     }
     return max(v * brightness * sigma, float4(0.0));
 }
-float4 ground_light(float mu_s)
+func ground_light(mu_s: float)->float4
 {
     let x = solar_layer(0u, asin(clamp(mu_s, -1.0, 1.0))) * float(p.dims.y - 1u);
     let i = min(uint(x), p.dims.y - 2u);
     return lerp(ground_read.Load(int3(int2(int(i), 0), 0)),
                 ground_read.Load(int3(int2(int(i + 1u), 0), 0)), x - float(i));
 }
-void write_optical_depth(uint3 id)
+func write_optical_depth(id: uint3)->void
 {
     if (id.x >= p.dims.w || id.y >= p.dims.z)
     {
@@ -258,14 +224,14 @@ void write_optical_depth(uint3 id)
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void optical_depth(uint3 id: SV_DispatchThreadID)
+func optical_depth(uint3 id: SV_DispatchThreadID)->void
 {
     write_optical_depth(id);
 }
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void optical_depth_rows(uint3 id: SV_DispatchThreadID)
+func optical_depth_rows(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.y >= p.batch.w)
     {
@@ -275,7 +241,7 @@ void optical_depth_rows(uint3 id: SV_DispatchThreadID)
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void prepare_directions(uint3 id: SV_DispatchThreadID)
+func prepare_directions(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x >= p.solve.x || id.y >= p.batch.y * p.dims.y)
     {
@@ -286,8 +252,8 @@ void prepare_directions(uint3 id: SV_DispatchThreadID)
     let mu_s = state.y;
     let sun = float3(0.0, mu_s, state.z);
     let n = p.solve.x / 3u;
-    float3 v = (float3)0;
-    float w = (float)0;
+    var v : float3 = (float3)0;
+    var w : float = (float)0;
     let sample_index = select(id.x < n, id.x, n + id.x % n);
     let q = data[p.extra.y + sample_index];
     if (q.w == 0.0)
@@ -330,7 +296,7 @@ void prepare_directions(uint3 id: SV_DispatchThreadID)
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void trace_incident(uint3 id: SV_DispatchThreadID)
+func trace_incident(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x >= p.solve.x || id.y >= p.batch.y * p.dims.y)
     {
@@ -352,14 +318,15 @@ void trace_incident(uint3 id: SV_DispatchThreadID)
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void incident_moments(uint3 id: SV_DispatchThreadID)
+func incident_moments(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x >= p.batch.y * p.dims.y)
     {
         return;
     }
     let state_index = p.batch.x * p.dims.y + id.x;
-    float4 m[7] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
+    var m : float4[7] = { (float4)0, (float4)0, (float4)0, (float4)0,
+                          (float4)0, (float4)0, (float4)0 };
     for (var j = 0u; j < p.solve.x; j++)
     {
         let q = directions[id.x * p.solve.x + j];
@@ -381,7 +348,7 @@ void incident_moments(uint3 id: SV_DispatchThreadID)
     {
         let scale = max(m[0] / (4.0 * atmosphere::PI), float4(1e-30));
 
-        float4 packed[5] = {
+        let packed : float4[5] = {
             (m[0] + m[1]) / scale, (m[2] - m[1]) / scale, (m[3] - m[1]) / scale, 2.0 * m[4] / scale,
             float4(m[5].x + m[5].y, m[5].z - m[5].y, m[5].w - m[5].y, 2.0 * m[6].x)
         };
@@ -396,7 +363,7 @@ void incident_moments(uint3 id: SV_DispatchThreadID)
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void scattering_source(uint3 id: SV_DispatchThreadID)
+func scattering_source(uint3 id: SV_DispatchThreadID)->void
 {
     let pixel = id.xy + uint2(0u, p.batch.x * p.solve.z);
     if (any(pixel >= dimensions(source_write)) || id.y >= p.batch.y * p.solve.z)
@@ -427,10 +394,10 @@ void scattering_source(uint3 id: SV_DispatchThreadID)
 
     if (h < 35.0)
     {
-        float4 sums[4] = { (float4)0, (float4)0, (float4)0, (float4)0 };
-        float4 norms[4] = { (float4)0, (float4)0, (float4)0, (float4)0 };
+        var sums : float4[4] = { (float4)0, (float4)0, (float4)0, (float4)0 };
+        var norms : float4[4] = { (float4)0, (float4)0, (float4)0, (float4)0 };
 
-        bool species_enabled[4] = { (bool)0, (bool)0, (bool)0, (bool)0 };
+        var species_enabled : bool[4] = { (bool)0, (bool)0, (bool)0, (bool)0 };
         for (var species = 0u; species < 4u; species++)
         {
             species_enabled[species] =
@@ -471,7 +438,7 @@ void scattering_source(uint3 id: SV_DispatchThreadID)
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void ground_irradiance(uint3 id: SV_DispatchThreadID)
+func ground_irradiance(uint3 id: SV_DispatchThreadID)->void
 {
     if (id.x >= p.dims.y || p.batch.x != 0u)
     {
@@ -491,7 +458,7 @@ void ground_irradiance(uint3 id: SV_DispatchThreadID)
     ground_write[int2(int(id.x), 0)] = irradiance * (p.medium.y / atmosphere::PI);
 }
 
-float solar_layer(uint layer, float e)
+func solar_layer(layer: uint, e: float)->float
 {
     if ((mapping_flags(p) & 2u) == 0u)
     {
@@ -511,10 +478,10 @@ float solar_layer(uint layer, float e)
 }
 struct Medium
 {
-    float4 extinction;
-    float4 scattering[5];
+    var extinction : float4;
+    var scattering : float4[5];
 };
-Medium medium(float h)
+func medium(h: float)->Medium
 {
     var lo = 0u;
     var hi = p.offsets1.z - 1u;
@@ -533,7 +500,7 @@ Medium medium(float h)
     let a = p.offsets0.z + lo * 7u;
     let b = p.offsets0.z + hi * 7u;
     let t = clamp((h - data[a].x) / (data[b].x - data[a].x), 0.0, 1.0);
-    Medium result = (Medium)0;
+    var result : Medium = (Medium)0;
     result.extinction = lerp(data[a + 1u], data[b + 1u], t);
     for (var j = 0u; j < 5u; j++)
     {
@@ -543,31 +510,32 @@ Medium medium(float h)
 }
 struct PhaseStencil
 {
-    uint index;
-    float fraction;
+    var index : uint;
+    var fraction : float;
 };
-PhaseStencil phase_stencil(float mu)
+func phase_stencil(mu: float)->PhaseStencil
 {
     let x = clamp(pow(max((1.0 - mu) * 0.5, 0.0), 1.0 / 3.0) * 1024.0 - 0.5, 0.0, 1023.0);
     let i = min(uint(x), 1022u);
     return PhaseStencil(i, x - float(i));
 }
-float4 tabulated_phase(PhaseStencil stencil, uint species)
+func tabulated_phase(stencil: PhaseStencil, species: uint)->float4
 {
     let offset = p.offsets0.w + species * 1024u + stencil.index;
     return lerp(data[offset], data[offset + 1u], stencil.fraction);
 }
 struct Transport
 {
-    float4 light;
-    float4 transmittance;
+    var light : float4;
+    var transmittance : float4;
 };
 // 四波长共同积分核；include_ground 仅控制末端理想行星表面的边界辐射。
 // Aerial 组合显式场景表面，因此传 false；求解器与 SkyView 保留源边界条件 true。
-Transport integrate_core(float3 ray, float3 sun, float initial_height, float segment, uint steps,
-                         bool include_ground)
+func integrate_core(ray: float3, sun: float3, initial_height: float, segment: float, steps: uint,
+                    include_ground: bool)
+    ->Transport
 {
-    Transport result = (Transport)0;
+    var result : Transport = (Transport)0;
     result.light = float4(0.0);
     result.transmittance = float4(1.0);
     var h = initial_height;
@@ -630,7 +598,7 @@ Transport integrate_core(float3 ray, float3 sun, float initial_height, float seg
     {
         split = clamp(split, 1u, count - 1u);
     }
-    float4 solar_phase[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
+    var solar_phase : float4[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
     let cosine = clamp(nu, -1.0, 1.0);
     let stencil = phase_stencil(cosine);
     solar_phase[0] = float4(3.0 * (1.0 + cosine * cosine) / (16.0 * atmosphere::PI));
@@ -693,7 +661,6 @@ Transport integrate_core(float3 ray, float3 sun, float initial_height, float seg
 
         if (p.solve.w != 1u)
         {
-
             if (CACHE_PHASE_COORDINATE && !phase_cached && hp < 35.0 && (p.size_steps.w & 1u) != 0u)
             {
                 cached_phase = phase_coord(nu);
@@ -715,16 +682,17 @@ Transport integrate_core(float3 ray, float3 sun, float initial_height, float seg
     return result;
 }
 
-Transport integrate_at(float3 ray, float3 sun, float initial_height, float segment, uint steps)
+func integrate_at(ray: float3, sun: float3, initial_height: float, segment: float, steps: uint)
+    ->Transport
 {
     return integrate_core(ray, sun, initial_height, segment, steps, true);
 }
 
-Transport integrate(float3 ray, float3 sun)
+func integrate(ray: float3, sun: float3)->Transport
 {
     return integrate_at(ray, sun, p.view.w, p.medium.z, p.size_steps.z);
 }
-float3 camera_ray(uint2 id)
+func camera_ray(id: uint2)->float3
 {
     let uv = (float2(id) + 0.5) / float2(p.size_steps.xy) * 2.0 - 1.0;
     let sy = sin(p.view.x);
@@ -739,13 +707,13 @@ float3 camera_ray(uint2 id)
                          float(p.size_steps.y) -
                      up * uv.y * tan(p.view.z * 0.5));
 }
-float3 world_sun()
+func world_sun()->float3
 {
     return float3(sin(p.sun.x) * cos(p.sun.y), sin(p.sun.y), cos(p.sun.x) * cos(p.sun.y));
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void render(uint3 id: SV_DispatchThreadID)
+func render(uint3 id: SV_DispatchThreadID)->void
 {
     if (any(id.xy >= p.size_steps.xy))
     {
@@ -778,7 +746,7 @@ void render(uint3 id: SV_DispatchThreadID)
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void build_sky(uint3 id: SV_DispatchThreadID)
+func build_sky(uint3 id: SV_DispatchThreadID)->void
 {
     if (any(id.xy >= p.sky.xy))
     {
@@ -838,19 +806,22 @@ void build_sky(uint3 id: SV_DispatchThreadID)
 
 [shader("compute")]
 [numthreads(4, 4, 4)]
-void build_aerial(uint3 id: SV_DispatchThreadID)
+func build_aerial(uint3 id: SV_DispatchThreadID)->void
 {
-    uint3 dims = dimensions(aerial_light);
+    let dims : uint3 = dimensions(aerial_light);
     if (any(id >= dims))
         return;
-    float2 uv = (float2(id.xy) + .5) / float2(dims.xy);
-    float3 ray =
-        normalize(mul(aerial_view.matrix, float4(uv.x * 2. - 1., 1. - uv.y * 2., 0, 1)).xyz);
-    float z = (float(id.z) + .5) / float(dims.z);
-    Transport result = integrate_core(ray, world_sun(), p.view.w, aerial_view.settings.x * z * z,
-                                      p.size_steps.z, false);
-    float3 light = 0, clear = 0, filtered = 0;
-    for (uint k = 0; k < 4; k++)
+    let uv : float2 = (float2(id.xy) + .5) / float2(dims.xy);
+    let ray
+        : float3 =
+              normalize(mul(aerial_view.matrix, float4(uv.x * 2. - 1., 1. - uv.y * 2., 0, 1)).xyz);
+    let z : float = (float(id.z) + .5) / float(dims.z);
+    let result : Transport = integrate_core(ray, world_sun(), p.view.w,
+                                            aerial_view.settings.x * z * z, p.size_steps.z, false);
+    var light : float3 = 0;
+    var clear : float3 = 0;
+    var filtered : float3 = 0;
+    for (var k: uint = 0; k < 4; k++)
     {
         light += result.light[k] * p.rgb[k].xyz;
         clear += p.solar[k] * p.rgb[k].xyz;
@@ -859,29 +830,3 @@ void build_aerial(uint3 id: SV_DispatchThreadID)
     aerial_light[id] = float4(max(light * aerial_view.settings.yzw, 0), 1);
     aerial_t[id] = float4(clamp(filtered / max(clear, 1e-20), 0, 1), 1);
 }
-
-#if defined(ATM_STAGE_PROBE)
-[[vk::binding(8, 0)]]
-StructuredBuffer<float4> probe_queries;
-[[vk::binding(9, 0)]]
-RWStructuredBuffer<float4> probe_outputs;
-
-// 独立测试入口：每查询两行 ray.xyz/segmentKm、sun.xyz/initialHeightKm；输出 L4、T4。
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void transport_probe(uint3 id: SV_DispatchThreadID)
-{
-    uint rows, stride;
-    probe_queries.GetDimensions(rows, stride);
-    if (id.x >= rows / 2)
-        return;
-    float4 ray = probe_queries[2 * id.x], sun = probe_queries[2 * id.x + 1];
-    Transport result = integrate_at(ray.xyz, sun.xyz, sun.w, ray.w, p.size_steps.z);
-    probe_outputs[2 * id.x] = result.light;
-    probe_outputs[2 * id.x + 1] = result.transmittance;
-}
-#endif
-
-#if defined(ATM_STAGE_TERRAIN)
-#include "terrain_integrate.inc.slang"
-#endif

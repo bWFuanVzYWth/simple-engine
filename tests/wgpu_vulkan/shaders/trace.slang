@@ -2,38 +2,40 @@ module trace;
 
 struct Payload
 {
-    uint hit;
+    var hit : uint;
 };
 
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-RWTexture2D<float4> input;
+var input : RWTexture2D<float4>;
 [[vk::binding(2, 0)]]
-RWTexture2D<float4> output;
+var output : RWTexture2D<float4>;
 
 [shader("raygeneration")]
-void raygen_main()
+func raygen_main()->void
 {
-    uint2 pixel = DispatchRaysIndex().xy;
-    RayDesc ray;
+    let pixel : uint2 = DispatchRaysIndex().xy;
+    var ray : RayDesc;
     ray.Origin = float3((pixel.x & 1) == 0 ? 0 : 100, 0, -1);
     ray.Direction = float3(0, 0, 1);
     ray.TMin = 0;
     ray.TMax = 2;
-    Payload payload = {};
+    var payload : Payload = {};
     TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 1, 0, ray, payload);
     output[pixel] = input[pixel] + float4(payload.hit * 1000, 2000, 3000, 0);
 }
 
 [shader("miss")]
-void miss_main(inout Payload payload)
+func miss_main(inout payload_value: Payload)->void
 {
-    payload.hit = 0;
+    payload_value.hit = 0;
 }
 
 [shader("closesthit")]
-void closest_hit_main(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func closest_hit_main(inout payload_value: Payload,
+                      attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.hit = 1;
+    payload_value.hit = 1;
 }

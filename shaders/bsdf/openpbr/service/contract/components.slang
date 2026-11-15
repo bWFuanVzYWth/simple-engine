@@ -5,7 +5,7 @@ module "bsdf/openpbr/service/contract/components.slang";
 
 public struct PrimeBsdfComponents
 {
-    public float3 diffuseResponse;
-    public float3 specularResponse;
-    public float pdf;
+    public var diffuseResponse : float3;
+    public var specularResponse : float3;
+    public var pdf : float;
 };

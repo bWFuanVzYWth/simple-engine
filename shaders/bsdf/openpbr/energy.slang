@@ -11,7 +11,7 @@ import "bsdf/openpbr/math/microfacet_energy.slang";
 public struct PrimeFullTransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     public Sampler3D<float4> texture;
-    public float4 sampleLevel(float3 uvw)
+    public func sampleLevel(uvw: float3)->float4
     {
         return texture.SampleLevel(uvw, 0.0);
     }

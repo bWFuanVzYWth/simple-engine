@@ -1,45 +1,45 @@
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<uint> result;
+var result : RWStructuredBuffer<uint>;
 struct Payload
 {
-    uint value;
-    float distance;
-    uint instance;
-    uint primitive;
+    var value : uint;
+    var distance : float;
+    var instance : uint;
+    var primitive : uint;
 };
 interface ITracer<State>
 {
-    void trace(inout State state, RayDesc ray);
-    void shade(inout State state, uint index, inout Payload payload);
+    func trace(inout state: State, ray: RayDesc)->void;
+    func shade(inout state: State, index: uint, inout payload_value: Payload)->void;
 };
 struct Tracer : ITracer<HitObject>
 {
-    void trace(inout HitObject state, RayDesc ray)
+    func trace(inout state: HitObject, ray: RayDesc)->void
     {
-        uint unused = 0;
+        var unused : uint = 0;
         state = HitObject::TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 1, 0, ray, unused);
     }
-    void shade(inout HitObject state, uint index, inout Payload payload)
+    func shade(inout state: HitObject, index: uint, inout payload_value: Payload)->void
     {
-        payload.distance = state.GetRayDesc().TMax;
-        payload.instance = state.GetInstanceID();
-        payload.primitive = state.GetPrimitiveIndex();
+        payload_value.distance = state.GetRayDesc().TMax;
+        payload_value.instance = state.GetInstanceID();
+        payload_value.primitive = state.GetPrimitiveIndex();
         state.SetShaderTableIndex(index);
         ReorderThread(state, 0u, 0u);
-        HitObject::Invoke(state, payload);
+        HitObject::Invoke(state, payload_value);
     }
 };
 [shader("raygeneration")]
-void hit_groups_raygen()
+func hit_groups_raygen()->void
 {
-    uint index = DispatchRaysIndex().x;
-    RayDesc ray = { float3(.25, .25, -1), 0, float3(0, 0, 1), 4 };
-    Tracer tracer;
-    HitObject state;
+    var index : uint = DispatchRaysIndex().x;
+    var ray : RayDesc = { float3(.25, .25, -1), 0, float3(0, 0, 1), 4 };
+    var tracer : Tracer;
+    var state : HitObject;
     tracer.trace(state, ray);
-    Payload payload = {};
+    var payload : Payload = {};
     tracer.shade(state, index % 3, payload);
     CallShader(index % 2, payload.value);
     result[index * 4] = payload.value;
@@ -48,32 +48,38 @@ void hit_groups_raygen()
     result[index * 4 + 3] = payload.primitive;
 }
 [shader("miss")]
-void hit_groups_miss(inout Payload payload)
+func hit_groups_miss(inout payload_value: Payload)->void
 {
-    payload.value = 99;
+    payload_value.value = 99;
 }
 [shader("closesthit")]
-void hit_groups_first(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func hit_groups_first(inout payload_value: Payload,
+                      attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.value = 10;
+    payload_value.value = 10;
 }
 [shader("closesthit")]
-void hit_groups_second(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func hit_groups_second(inout payload_value: Payload,
+                       attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.value = 20;
+    payload_value.value = 20;
 }
 [shader("closesthit")]
-void hit_groups_third(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func hit_groups_third(inout payload_value: Payload,
+                      attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.value = 30;
+    payload_value.value = 30;
 }
 [shader("callable")]
-void hit_groups_add(inout uint value)
+func hit_groups_add(inout value: uint)->void
 {
     value += 3;
 }
 [shader("callable")]
-void hit_groups_scale(inout uint value)
+func hit_groups_scale(inout value: uint)->void
 {
     value *= 2;
 }

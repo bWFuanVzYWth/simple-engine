@@ -8,7 +8,7 @@ import "bsdf/openpbr/contract/volume.slang";
 
 public struct PrimeFullOpenPbrSampleResult
 {
-    public PrimeFullOpenPbrSample bsdfSample;
-    public PrimeFullOpenPbrVolume medium;
-    public float rayT;
+    public var bsdfSample : PrimeFullOpenPbrSample;
+    public var medium : PrimeFullOpenPbrVolume;
+    public var rayT : float;
 };

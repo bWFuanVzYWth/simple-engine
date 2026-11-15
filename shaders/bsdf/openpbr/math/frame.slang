@@ -5,24 +5,24 @@ module "bsdf/openpbr/math/frame.slang";
 
 import "bsdf/openpbr/contract/material.slang";
 
-public PrimeFullOpenPbrOnb primeFullOpenPbrOnbFromNormal(float3 normal)
+public func primeFullOpenPbrOnbFromNormal(normal: float3)->PrimeFullOpenPbrOnb
 {
-    float signZ = normal.z >= 0.0 ? 1.0 : -1.0;
-    float a = -1.0 / (signZ + normal.z);
-    float b = normal.x * normal.y * a;
-    PrimeFullOpenPbrOnb result;
+    let signZ : float = normal.z >= 0.0 ? 1.0 : -1.0;
+    let a : float = -1.0 / (signZ + normal.z);
+    let b : float = normal.x * normal.y * a;
+    var result : PrimeFullOpenPbrOnb;
     result.tangent = float3(1.0 + signZ * normal.x * normal.x * a, signZ * b, -signZ * normal.x);
     result.bitangent = float3(b, signZ + normal.y * normal.y * a, -normal.y);
     result.normal = normal;
     return result;
 }
 
-public float3 primeFullOpenPbrOnbToWorld(PrimeFullOpenPbrOnb onb, float3 value)
+public func primeFullOpenPbrOnbToWorld(onb: PrimeFullOpenPbrOnb, value: float3)->float3
 {
     return value.x * onb.tangent + value.y * onb.bitangent + value.z * onb.normal;
 }
 
-public float3 primeFullOpenPbrOnbToLocal(PrimeFullOpenPbrOnb onb, float3 value)
+public func primeFullOpenPbrOnbToLocal(onb: PrimeFullOpenPbrOnb, value: float3)->float3
 {
     return float3(dot(onb.tangent, value), dot(onb.bitangent, value), dot(onb.normal, value));
 }

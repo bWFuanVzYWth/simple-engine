@@ -33,9 +33,9 @@ module rng;
 namespace restir_pt
 {
 /// 把像素低16bits交错成32-bit Morton code，与NV interleave_32bit完全一致。
-public uint interleave32(uint2 pixel)
+public func interleave32(pixel: uint2)->uint
 {
-    uint2 value = pixel & 0xffffu;
+    var value : uint2 = pixel & 0xffffu;
     value = (value | (value << 8)) & 0x00ff00ffu;
     value = (value | (value << 4)) & 0x0f0f0f0fu;
     value = (value | (value << 2)) & 0x33333333u;
@@ -44,10 +44,12 @@ public uint interleave32(uint2 pixel)
 }
 
 /// NV固定128-bit key的16-round TEA；所有uint运算按2^32环绕。
-public uint2 block_cipher_tea(uint first, uint second)
+public func block_cipher_tea(first: uint, second: uint)->uint2
 {
-    uint sum = 0;
-    for (uint i = 0; i < 16; ++i)
+    var first = first;
+    var second = second;
+    var sum : uint = 0;
+    for (var i: uint = 0; i < 16; ++i)
     {
         sum += 0x9e3779b9u;
         first += ((second << 4) + 0xa341316cu) ^ (second + sum) ^ ((second >> 5) + 0xc8013ea4u);
@@ -59,39 +61,39 @@ public uint2 block_cipher_tea(uint first, uint second)
 /// 完整状态仅4B；初采保存消费前state，replay由相同state恢复并按相同分支消费。
 public struct TinyUniformSampleGenerator
 {
-    public uint state;
+    public var state : uint;
     [mutating]
-    public uint next()
+    public func next()->uint
     {
         state = 1664525u * state + 1013904223u;
         return state;
     }
     [mutating]
-    public float next1D()
+    public func next1D()->float
     {
         return float(next() >> 8) * 0x1p-24f;
     }
     [mutating]
-    public float2 next2D()
+    public func next2D()->float2
     {
-        float2 value;
+        var value : float2;
         value.x = next1D();
         value.y = next1D();
         return value;
     }
     [mutating]
-    public float3 next3D()
+    public func next3D()->float3
     {
-        float3 value;
+        var value : float3;
         value.x = next1D();
         value.y = next1D();
         value.z = next1D();
         return value;
     }
     [mutating]
-    public float4 next4D()
+    public func next4D()->float4
     {
-        float4 value;
+        var value : float4;
         value.x = next1D();
         value.y = next1D();
         value.z = next1D();
@@ -101,15 +103,15 @@ public struct TinyUniformSampleGenerator
 };
 
 /// 由原始LCG状态恢复，不额外hash；用于prefix/rc后缀的精确随机重放。
-public TinyUniformSampleGenerator rng_from_seed(uint seed)
+public func rng_from_seed(seed: uint)->TinyUniformSampleGenerator
 {
-    TinyUniformSampleGenerator result;
+    var result : TinyUniformSampleGenerator;
     result.state = seed;
     return result;
 }
 
 /// NV像素/样本播种：TEA(interleave32(pixel),sampleNumber).x，随后才开始LCG。
-public TinyUniformSampleGenerator rng_for_pixel(uint2 pixel, uint sampleNumber)
+public func rng_for_pixel(pixel: uint2, sampleNumber: uint)->TinyUniformSampleGenerator
 {
     return rng_from_seed(block_cipher_tea(interleave32(pixel), sampleNumber).x);
 }

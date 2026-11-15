@@ -15,17 +15,17 @@ namespace pt
 /// 同一次 Invoke 内先消费入射状态，再发布出射状态。
 public struct MaterialCall
 {
-    public float3 origin_pixel;
-    public float3 direction;
-    public float3 throughput;
-    public float3 radiance;
-    public float4 medium;
-    public float3 previous;
-    public float previous_pdf;
-    public float eta_scale;
-    public uint state;
+    public var origin_pixel : float3;
+    public var direction : float3;
+    public var throughput : float3;
+    public var radiance : float3;
+    public var medium : float4;
+    public var previous : float3;
+    public var previous_pdf : float;
+    public var eta_scale : float;
+    public var state : uint;
 
-    public static MaterialCall input(TransportCall data)
+    public static func input(data: TransportCall)->MaterialCall
     {
         return { float3(asfloat(data.sample), 0, 0),
                  float3(0),
@@ -38,16 +38,16 @@ public struct MaterialCall
                  data.path.depth | (data.path.dielectric_events << 7u) };
     }
     /// 首面输入只有样本身份、分离通道和已完成路径的辐射和；其余字段仅作为输出。
-    public static MaterialCall primaryInput(uint sample, uint lane, float3 radiance)
+    public static func primaryInput(sample_value: uint, lane: uint, radiance: float3)->MaterialCall
     {
-        MaterialCall call;
-        call.origin_pixel = float3(asfloat(sample), asfloat(lane), 0);
+        var call : MaterialCall;
+        call.origin_pixel = float3(asfloat(sample_value), asfloat(lane), 0);
         call.radiance = radiance;
         return call;
     }
     /// 首面叶子建立相机路径的不变量，避免调度器为常量初态搬运完整路径。
     [mutating]
-    public void initializePrimary(float4 incident)
+    public func initializePrimary(incident: float4)->void
     {
         direction = 0;
         throughput = 1;
@@ -58,17 +58,18 @@ public struct MaterialCall
         state = 0;
     }
     [mutating]
-    public void finishVertex(uint depth, uint events, uint status)
+    public func finishVertex(depth: uint, events: uint, status: uint)->void
     {
+        var status = status;
         if (!all(isfinite(throughput)) || !all(isfinite(radiance)))
             status = PATH_INVALID;
         state = status | ((depth + 1u) << 2u) | (events << 9u);
-        bool active = status == PATH_ACTIVE;
+        let active : bool = status == PATH_ACTIVE;
         origin_pixel = select(active, origin_pixel, float3(0));
         previous = select(active, previous, float3(0));
         previous_pdf = select(active, previous_pdf, 0.0);
     }
-    public PathState result()
+    public func result()->PathState
     {
         return { origin_pixel,
                  direction,
@@ -87,21 +88,25 @@ public struct MaterialCall
 // 阴影射线、BVH 和灯的临时身份仅活到当前策略的可见性与辐射求值。
 struct VisibleLight
 {
-    float3 direction;
-    float3 incidentRadiance;
-    float pdf;
+    var direction : float3;
+    var incidentRadiance : float3;
+    var pdf : float;
 };
 
-VisibleLight visible_light<let Flow : uint, let Solar : bool, Scene : IFlowScene>(
-    Scene scene, Hit hit, SurfaceMaterial material, float3 view, float4 incident, LightSample light)
+func visible_light<let Flow : uint, let Solar : bool, Scene : IFlowScene>(scene: Scene, hit: Hit,
+                                                                          material: SurfaceMaterial,
+                                                                          view: float3,
+                                                                          incident: float4,
+                                                                          light: LightSample)
+    ->VisibleLight
 {
-    VisibleLight visible = {};
+    var visible : VisibleLight = {};
     if (light.pdf <= 0 ||
         !openpbr::may_evaluate_flow<Flow>(material.pbr, shading_normal(hit, material), view,
                                           light.direction, incident, material.transmitted) ||
         scene.occluded(light.visibility))
         return visible;
-    float3 extinction = incident.yzw;
+    var extinction : float3 = incident.yzw;
     if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
         dot(view, hit.surface.normal) * dot(light.direction, hit.surface.normal) < 0)
         extinction = material.transmitted.yzw;
@@ -113,36 +118,39 @@ VisibleLight visible_light<let Flow : uint, let Solar : bool, Scene : IFlowScene
 }
 
 /// 已解码的本次命中由一个材质入口消费；路径结果直接原位发布。
-public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : uint = 3,
-                           let Primary : bool = false>(Scene scene, inout MaterialCall call,
-                                                       Hit hit, SurfaceMaterial material,
-                                                       float3 incoming, Settings settings,
-                                                       uint primarySamples = 1,
-                                                       uint primaryLane = 0)
+public func shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : uint = 3,
+                           let Primary : bool = false>(scene: Scene, inout call: MaterialCall,
+                                                       hit: Hit, material: SurfaceMaterial,
+                                                       incoming: float3, settings: Settings,
+                                                       primarySamples: uint = 1,
+                                                       primaryLane: uint = 0)
+    ->void
 {
-    uint depth = call.state & 127u;
-    uint events = (call.state >> 7u) & 127u;
-    uint sample = asuint(call.origin_pixel.x);
+    let depth : uint = call.state & 127u;
+    var events : uint = (call.state >> 7u) & 127u;
+    let sample : uint = asuint(call.origin_pixel.x);
     call.throughput *= segment_transmittance(call.medium.yzw, hit.distance);
     if ((Flow & openpbr::FLOW_EMISSION) != 0 && any(material.emission > 0))
     {
-        float w = call.previous_pdf > 0
-                      ? power_heuristic(call.previous_pdf, scene.emission_pdf(hit, call.previous))
-                      : 1;
+        let w : float =
+                    call.previous_pdf > 0
+                        ? power_heuristic(call.previous_pdf, scene.emission_pdf(hit, call.previous))
+                        : 1;
         call.radiance += call.throughput * material.emission * w;
     }
-    bool continuation = depth < settings.budget;
-    bool solid = (Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0;
+    let continuation : bool = depth < settings.budget;
+    let solid : bool = (Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0;
     if (solid && continuation)
         events++;
-    bool limited = solid && events > settings.dielectric_limit;
-    float3 view = -incoming;
-    PathSampler sampler =
-        path_sampler(DispatchRaysIndex().xy, sample, settings.resolution, settings.seed);
-    static const bool Continuous =
-        (Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
-                 openpbr::FLOW_CONTINUOUS_REFLECTION | openpbr::FLOW_CONTINUOUS_TRANSMISSION)) != 0;
-    VisibleLight sun = {}, lamp = {};
+    let limited : bool = solid && events > settings.dielectric_limit;
+    let view : float3 = -incoming;
+    let sampler : PathSampler = path_sampler(DispatchRaysIndex().xy, sample, settings.resolution,
+                                             settings.seed);
+    static const let Continuous : bool = (Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
+                                                  openpbr::FLOW_CONTINUOUS_REFLECTION |
+                                                  openpbr::FLOW_CONTINUOUS_TRANSMISSION)) != 0;
+    var sun : VisibleLight = {};
+    var lamp : VisibleLight = {};
     if (Continuous &&
         !openpbr::is_discrete_only_flow<Flow>(material.pbr, call.medium, material.transmitted))
     {
@@ -154,8 +162,8 @@ public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
                 visible_light<Flow, false>(scene, hit, material, view, call.medium,
                                            scene.sample_light(hit.surface, sampler.light(depth)));
     }
-    bool scatter = continuation && !limited;
-    openpbr::Batch bsdf;
+    let scatter : bool = continuation && !limited;
+    var bsdf : openpbr::Batch;
 #if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
     if (Primary)
         bsdf = openpbr::shade_primary_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
@@ -179,7 +187,7 @@ public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
             call.throughput *
             triple_product(bsdf.second.response, lamp.incidentRadiance,
                            power_heuristic_over_pdf(lamp.pdf, continuation ? bsdf.second.pdf : 0));
-    openpbr::Sample next = bsdf.scattered;
+    var next : openpbr::Sample = bsdf.scattered;
     if (!scatter || next.events == 0)
     {
         call.direction = incoming;
@@ -201,13 +209,13 @@ public void shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
     call.previous_pdf = (next.events & openpbr::DISCRETE) != 0 ? 0 : next.pdf;
     call.previous = hit.surface.position;
     call.origin_pixel = geometry::offset_origin(hit.surface, next.direction);
-    uint status = PATH_ACTIVE;
+    var status : uint = PATH_ACTIVE;
     if (max(call.throughput.x, max(call.throughput.y, call.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (depth + 1u >= 2u)
     {
-        float survival =
-            roulette_probability(call.throughput, call.eta_scale, settings.square_root_roulette);
+        let survival : float = roulette_probability(call.throughput, call.eta_scale,
+                                                    settings.square_root_roulette);
         if (survival == 0 || (survival < 1 && sampler.roulette(depth) >= survival))
             status = PATH_DONE;
         else if (survival < 1)

@@ -8,20 +8,21 @@ import bsdf.openpbr.flow;
 namespace restir_pt
 {
 /// 仅BSDF使用着色法线；介质跨界和路径偏移始终使用几何法线。
-public float3 material_normal(Surface surface, pt::SurfaceMaterial material)
+public func material_normal(surface: Surface, material: pt::SurfaceMaterial)->float3
 {
     return select(any(material.normal != 0), material.normal, surface.point.normal);
 }
 
 /// 采样结果不携带未被point算法消费的闭包；保留精确proposal、介质和delta过滤语义。
-public BsdfSample material_sample<let Flow : uint>(Surface surface, pt::SurfaceMaterial material,
-                                                   openpbr::Sample sampled)
+public func material_sample<let Flow : uint>(surface: Surface, material: pt::SurfaceMaterial,
+                                             sampled: openpbr::Sample)
+    ->BsdfSample
 {
-    BsdfSample result = {};
+    var result : BsdfSample = {};
     result.medium = surface.incident;
     if (sampled.events == 0)
         return result;
-    float3 response = sampled.response;
+    var response : float3 = sampled.response;
     if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
         (sampled.events & openpbr::DISCRETE) != 0 &&
         dot(surface.wo, surface.point.normal) * dot(sampled.direction, surface.point.normal) < 0)
@@ -39,8 +40,9 @@ public BsdfSample material_sample<let Flow : uint>(Surface surface, pt::SurfaceM
 }
 
 /// 连接段介质；非solid程序不包含穿界分支或transmitted读取。
-public float4 material_medium<let Flow : uint>(Surface surface, pt::SurfaceMaterial material,
-                                               float3 direction)
+public func material_medium<let Flow : uint>(surface: Surface, material: pt::SurfaceMaterial,
+                                             direction: float3)
+    ->float4
 {
     if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
         dot(surface.wo, surface.point.normal) * dot(direction, surface.point.normal) < 0)
@@ -49,22 +51,23 @@ public float4 material_medium<let Flow : uint>(Surface surface, pt::SurfaceMater
 }
 
 /// 沿连接方向的实际均匀介质Beer。
-public float3 material_transmittance<let Flow : uint>(Surface surface, pt::SurfaceMaterial material,
-                                                      float3 direction, float distance)
+public func material_transmittance<let Flow : uint>(surface: Surface, material: pt::SurfaceMaterial,
+                                                    direction: float3, distance: float)
+    ->float3
 {
     return exp(-material_medium<Flow>(surface, material, direction).yzw * distance);
 }
 
 /// 重连第一端同时产生BSDF与Beer；第二端应使用纯evaluate_flow，不能为距离0搬运介质RGB。
-public ConnectionEvaluation evaluate_connection<let Flow : uint>(Surface surface,
-                                                                 pt::SurfaceMaterial material,
-                                                                 openpbr::Energy energy,
-                                                                 float3 direction, float distance)
+public func evaluate_connection<let Flow : uint>(surface: Surface, material: pt::SurfaceMaterial,
+                                                 energy: openpbr::Energy, direction: float3,
+                                                 distance: float)
+    ->ConnectionEvaluation
 {
-    openpbr::Evaluation evaluated =
-        openpbr::evaluate_flow<Flow>(energy, material.pbr, material_normal(surface, material),
-                                     surface.wo, direction, surface.incident, material.transmitted);
-    float4 medium = material_medium<Flow>(surface, material, direction);
+    let evaluated : openpbr::Evaluation = openpbr::evaluate_flow<Flow>(
+                        energy, material.pbr, material_normal(surface, material), surface.wo,
+                        direction, surface.incident, material.transmitted);
+    let medium : float4 = material_medium<Flow>(surface, material, direction);
     return { { evaluated.response, evaluated.pdf }, exp(-medium.yzw * distance), medium.x };
 }
 }

@@ -5,6 +5,6 @@ module "bsdf/openpbr/service/contract/albedo.slang";
 
 public struct PrimeDenoiseAlbedos
 {
-    public float3 diffuse;
-    public float3 specular;
+    public var diffuse : float3;
+    public var specular : float3;
 };

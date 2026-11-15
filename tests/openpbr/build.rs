@@ -217,6 +217,23 @@ fn main() -> Result<(), shader_build::Error> {
         target: Target::Spirv("spirv_1_4"),
         args,
     }));
+    let guide_outputs: Vec<_> = FLOWS
+        .iter()
+        .map(|(output, _)| format!("{}-guide.spv", output.trim_end_matches(".spv")))
+        .collect();
+    recipes.extend(
+        FLOWS
+            .into_iter()
+            .zip(&guide_outputs)
+            .map(|((_, args), output)| Recipe {
+                source: "shaders/flow.slang",
+                entry: "guide_main",
+                stage: "compute",
+                output,
+                target: Target::Spirv("spirv_1_4"),
+                args,
+            }),
+    );
     const SHARING: [(&str, &[&str]); 4] = [
         (
             "flow-shared-opaque.spv",

@@ -7,7 +7,8 @@ import "bsdf/openpbr/contract/material.slang";
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public bool primeFullOpenPbrMicrofacetEffectivelySmooth(PrimeFullOpenPbrMicrofacet microfacet)
+public func primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet: PrimeFullOpenPbrMicrofacet)
+    ->bool
 {
     return primeFullOpenPbrReduceMax(microfacet.alpha) < 1.0e-4;
 }

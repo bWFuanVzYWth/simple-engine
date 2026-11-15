@@ -6,11 +6,11 @@ module "bsdf/openpbr/pt_subsurface.slang";
 // Source RGB denotes the desired diffuse reflection. The thin SSS branch keeps
 // that reflection and the old half-color transmission while absorption allows it.
 // Scale all channels together when the derived albedo reaches one.
-public float3 primeFullPtSubsurfaceColor(float3 color)
+public func primeFullPtSubsurfaceColor(color: float3)->float3
 {
-    float maximum = max(color.x, max(color.y, color.z));
-    float gain = 1.5 / max(1.0, 1.5 * maximum);
+    let maximum : float = max(color.x, max(color.y, color.z));
+    let gain : float = 1.5 / max(1.0, 1.5 * maximum);
     return color * gain;
 }
 
-public static const float PRIME_FULL_PT_SUBSURFACE_ANISOTROPY = -1.0 / 3.0;
+public static const let PRIME_FULL_PT_SUBSURFACE_ANISOTROPY : float = -1.0 / 3.0;

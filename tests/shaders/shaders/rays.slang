@@ -3,62 +3,62 @@ module rays;
 import geometry.ray;
 
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-StructuredBuffer<float4> inputs;
+var inputs : StructuredBuffer<float4>;
 [[vk::binding(2, 0)]]
-RWStructuredBuffer<uint4> outputs;
+var outputs : RWStructuredBuffer<uint4>;
 
 struct Payload
 {
-    uint primitive;
-    float2 barycentric;
+    var primitive : uint;
+    var barycentric : float2;
 };
 
 [shader("miss")]
-void miss_main(inout Payload payload)
+func miss_main(inout payload_value: Payload)->void
 {
-    payload.primitive = 0xffffffffu;
+    payload_value.primitive = 0xffffffffu;
 }
 
 [shader("closesthit")]
-void hit_main(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func hit_main(inout payload_value: Payload, attributes: BuiltInTriangleIntersectionAttributes)->void
 {
-    payload.primitive = PrimitiveIndex();
-    payload.barycentric = attributes.barycentrics;
+    payload_value.primitive = PrimitiveIndex();
+    payload_value.barycentric = attributes.barycentrics;
 }
 
-bool occluded(geometry::Ray input)
+func occluded(input: geometry::Ray)->bool
 {
-    RayDesc ray = { input.origin, input.t_min, input.direction, input.t_max };
-    Payload payload = {};
+    let ray : RayDesc = { input.origin, input.t_min, input.direction, input.t_max };
+    var payload : Payload = {};
     TraceRay(scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
              0xff, 0, 1, 0, ray, payload);
     return payload.primitive != 0xffffffffu;
 }
 
 [shader("raygeneration")]
-void outgoing_main()
+func outgoing_main()->void
 {
-    uint index = DispatchRaysIndex().x;
-    float4 data = inputs[index + 3];
-    float3 edge_u = inputs[1].xyz - inputs[0].xyz;
-    float3 edge_v = inputs[2].xyz - inputs[0].xyz;
-    float3 normal = normalize(cross(edge_u, edge_v));
-    float3 point = inputs[0].xyz + data.x * edge_u + data.y * edge_v;
-    RayDesc incoming = { point + normal * 10, 0, -normal, 20 };
-    Payload payload;
+    let index : uint = DispatchRaysIndex().x;
+    let data : float4 = inputs[index + 3];
+    let edge_u : float3 = inputs[1].xyz - inputs[0].xyz;
+    let edge_v : float3 = inputs[2].xyz - inputs[0].xyz;
+    let normal : float3 = normalize(cross(edge_u, edge_v));
+    let point : float3 = inputs[0].xyz + data.x * edge_u + data.y * edge_v;
+    let incoming : RayDesc = { point + normal * 10, 0, -normal, 20 };
+    var payload : Payload;
     payload.primitive = 0xffffffffu;
     payload.barycentric = 0;
     TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 1, 0, incoming, payload);
-    uint flags = 0;
+    var flags : uint = 0;
     if (payload.primitive == 0xffffffffu)
         flags |= 1;
     else
     {
-        geometry::SurfacePoint surface = geometry::triangle_point(
-            inputs[0].xyz, inputs[1].xyz, inputs[2].xyz, payload.barycentric);
-        float3 direction = normalize(normal * 0.01 + normalize(edge_u));
+        let surface : geometry::SurfacePoint = geometry::triangle_point(
+                          inputs[0].xyz, inputs[1].xyz, inputs[2].xyz, payload.barycentric);
+        var direction : float3 = normalize(normal * 0.01 + normalize(edge_u));
         if (data.w < 0)
             direction = -direction;
         if (occluded(geometry::spawn_ray(surface, direction, 10)))
@@ -68,23 +68,24 @@ void outgoing_main()
 }
 
 [shader("raygeneration")]
-void connection_main()
+func connection_main()->void
 {
-    uint index = DispatchRaysIndex().x;
-    float4 data = inputs[index + 3];
-    float3 tangent = normalize(inputs[1].xyz - inputs[0].xyz);
-    geometry::TriangleEndpoint target =
-        geometry::triangle_endpoint(inputs[0].xyz, inputs[1].xyz, inputs[2].xyz, data.xy);
-    geometry::SurfacePoint source;
+    let index : uint = DispatchRaysIndex().x;
+    let data : float4 = inputs[index + 3];
+    let tangent : float3 = normalize(inputs[1].xyz - inputs[0].xyz);
+    let target
+        : geometry::TriangleEndpoint =
+              geometry::triangle_endpoint(inputs[0].xyz, inputs[1].xyz, inputs[2].xyz, data.xy);
+    var source : geometry::SurfacePoint;
     source.position = target.position + target.normal * 10 + tangent * data.z;
     source.normal = -target.normal;
     source.offset = 0;
-    geometry::Ray connection;
-    bool valid = geometry::connection_ray(source, target, connection);
-    bool blocked = false;
+    var connection : geometry::Ray;
+    let valid : bool = geometry::connection_ray(source, target, connection);
+    var blocked = false;
     if (valid)
         blocked = occluded(connection);
-    uint flags = valid ? 0 : 1;
+    var flags : uint = valid ? 0 : 1;
     if (blocked != (data.w > 0))
         flags |= 2;
     outputs[index] = uint4(flags, index + 1, blocked ? 1 : 0, valid ? 1 : 0);

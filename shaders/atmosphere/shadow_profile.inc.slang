@@ -2,16 +2,16 @@
 // Copyright 2017 Intel Corporation; Apache-2.0. See THIRD_PARTY_NOTICES.md.
 import atmosphere.shadow_math;
 using namespace atmosphere;
-public static const int SUN_SHADOW_CASCADE_COUNT = 5;
-public static const float SUN_SHADOW_MAX_DISTANCE_METERS = 2048.0;
-public static const float SUN_SHADOW_DEPTH_BIAS_METERS = 0.02;
-public static const float SUN_SHADOW_CASCADE_RADIUS_TEXELS = 254.0;
-public static const float SUN_SHADOW_TRAVERSAL_EPSILON = 1.0e-5;
+public static const let SUN_SHADOW_CASCADE_COUNT = 5;
+public static const let SUN_SHADOW_MAX_DISTANCE_METERS = 2048.0;
+public static const let SUN_SHADOW_DEPTH_BIAS_METERS = 0.02;
+public static const let SUN_SHADOW_CASCADE_RADIUS_TEXELS = 254.0;
+public static const let SUN_SHADOW_TRAVERSAL_EPSILON = 1.0e-5;
 
 public interface IPrimeSunShadowProfileSource
 {
-    float texelSize(int cascade);
-    float blockerDepth(int cascade, int2 worldNode);
+    func texelSize(cascade: int)->float;
+    func blockerDepth(cascade: int, worldNode: int2)->float;
 }
 
 // Adapted from Intel's Outdoor Light Scattering Sample.
@@ -23,85 +23,85 @@ public interface IPrimeSunShadowProfileSource
 // are replaced by an exact leaf-cell profile over world-space RT clipmaps.
 // Missing coverage and profile overflow stay shadowed to prevent cave light leaks.
 
-public static const int SUN_SHADOW_PROFILE_NEAR_CAPACITY = 512;
-public static const int SUN_SHADOW_PROFILE_FAR_CAPACITY = 256;
-public static const int SUN_SHADOW_PROFILE_TOTAL_CAPACITY =
-    SUN_SHADOW_PROFILE_NEAR_CAPACITY +
-    (SUN_SHADOW_CASCADE_COUNT - 1) * SUN_SHADOW_PROFILE_FAR_CAPACITY;
-public static const float SUN_SHADOW_PROFILE_EPSILON = 1.0e-4;
+public static const let SUN_SHADOW_PROFILE_NEAR_CAPACITY = 512;
+public static const let SUN_SHADOW_PROFILE_FAR_CAPACITY = 256;
+public static const let SUN_SHADOW_PROFILE_TOTAL_CAPACITY
+    : int = SUN_SHADOW_PROFILE_NEAR_CAPACITY +
+            (SUN_SHADOW_CASCADE_COUNT - 1) * SUN_SHADOW_PROFILE_FAR_CAPACITY;
+public static const let SUN_SHADOW_PROFILE_EPSILON = 1.0e-4;
 
-public groupshared float3 sunShadowProfileBasisU;
-public groupshared float3 sunShadowProfileBasisV;
-public groupshared float3 sunShadowProfileDirectionToSun;
-public groupshared float2 sunShadowProfileCamera;
-public groupshared float2 sunShadowProfileDirection;
-public groupshared float sunShadowProfileDirectionMax;
-public groupshared float sunShadowProfileCameraDepth;
-public groupshared int sunShadowProfileCounts[SUN_SHADOW_CASCADE_COUNT];
-public groupshared float2 sunShadowProfileEntries[SUN_SHADOW_PROFILE_TOTAL_CAPACITY];
+public groupshared var sunShadowProfileBasisU : float3;
+public groupshared var sunShadowProfileBasisV : float3;
+public groupshared var sunShadowProfileDirectionToSun : float3;
+public groupshared var sunShadowProfileCamera : float2;
+public groupshared var sunShadowProfileDirection : float2;
+public groupshared var sunShadowProfileDirectionMax : float;
+public groupshared var sunShadowProfileCameraDepth : float;
+public groupshared var sunShadowProfileCounts : int[SUN_SHADOW_CASCADE_COUNT];
+public groupshared var sunShadowProfileEntries : float2[SUN_SHADOW_PROFILE_TOTAL_CAPACITY];
 
-public void primeInitializeSunShadowProfile(float3 directionToSun, float2 projectedCamera,
-                                            float cameraDepth, float3 edgeDirection, float3 basisU,
-                                            float3 basisV)
+public func primeInitializeSunShadowProfile(directionToSun: float3, projectedCamera: float2,
+                                            cameraDepth: float, edgeDirection: float3,
+                                            basisU: float3, basisV: float3)
+    ->void
 {
     sunShadowProfileDirectionToSun = normalize(directionToSun);
     sunShadowProfileBasisU = basisU;
     sunShadowProfileBasisV = basisV;
     sunShadowProfileCamera = projectedCamera;
     sunShadowProfileCameraDepth = cameraDepth;
-    float2 projectedEdge = float2(dot(edgeDirection, sunShadowProfileBasisU),
-                                  dot(edgeDirection, sunShadowProfileBasisV));
-    float projectedLength = length(projectedEdge);
+    let projectedEdge = float2(dot(edgeDirection, sunShadowProfileBasisU),
+                               dot(edgeDirection, sunShadowProfileBasisV));
+    let projectedLength : float = length(projectedEdge);
     sunShadowProfileDirection =
         projectedLength > 1.0e-6 ? projectedEdge / projectedLength : float2(1.0, 0.0);
     sunShadowProfileDirectionMax =
         max(abs(sunShadowProfileDirection.x), abs(sunShadowProfileDirection.y));
 }
 
-int sunShadowProfileBase(int cascade)
+func sunShadowProfileBase(cascade: int)->int
 {
     return cascade == 0
                ? 0
                : SUN_SHADOW_PROFILE_NEAR_CAPACITY + (cascade - 1) * SUN_SHADOW_PROFILE_FAR_CAPACITY;
 }
 
-int sunShadowProfileCapacity(int cascade)
+func sunShadowProfileCapacity(cascade: int)->int
 {
     return cascade == 0 ? SUN_SHADOW_PROFILE_NEAR_CAPACITY : SUN_SHADOW_PROFILE_FAR_CAPACITY;
 }
 
-public float sunShadowProfileCascadeEnd<Source>(Source source, int cascade)
+public func sunShadowProfileCascadeEnd<Source>(source: Source, cascade: int)->float
     where Source : IPrimeSunShadowProfileSource
 {
-    float radius = SUN_SHADOW_CASCADE_RADIUS_TEXELS * source.texelSize(cascade);
+    let radius : float = SUN_SHADOW_CASCADE_RADIUS_TEXELS * source.texelSize(cascade);
     return min(radius / max(sunShadowProfileDirectionMax, SUN_SHADOW_PROFILE_EPSILON),
                SUN_SHADOW_MAX_DISTANCE_METERS);
 }
 
-public void sunShadowBuildProfileCascade<Source>(Source source, int cascade)
+public func sunShadowBuildProfileCascade<Source>(source: Source, cascade: int)->void
     where Source : IPrimeSunShadowProfileSource
 {
-
-    float startScalar = cascade == 0 ? 0.0 : sunShadowProfileCascadeEnd(source, cascade - 1);
-    float endScalar = sunShadowProfileCascadeEnd(source, cascade);
+    let startScalar : float = cascade == 0 ? 0.0 : sunShadowProfileCascadeEnd(source, cascade - 1);
+    let endScalar : float = sunShadowProfileCascadeEnd(source, cascade);
     if (endScalar <= startScalar + SUN_SHADOW_PROFILE_EPSILON)
     {
         sunShadowProfileCounts[cascade] = 0;
         return;
     }
 
-    float texelSize = source.texelSize(cascade);
-    float2 gridRate = sunShadowProfileDirection / texelSize;
+    let texelSize : float = source.texelSize(cascade);
+    let gridRate : float2 = sunShadowProfileDirection / texelSize;
     // Only the toroidal storage coordinate matters. Keeping DDA coordinates
     // within one clipmap period prevents the directional boundary offset from
     // disappearing into the ULP of a large world-space grid coordinate.
-    float2 absoluteGridOrigin = sunShadowProfileCamera / texelSize;
-    float2 gridPoint =
-        fmod(absoluteGridOrigin + gridRate * startScalar, float(PRIME_SUN_SHADOW_RESOLUTION));
-    int2 cell = int2(floor(gridPoint + sign(gridRate) * SUN_SHADOW_PROFILE_EPSILON));
-    int2 cellStep = int2(sign(gridRate));
-    float2 nextCrossing = float2(1.0e20);
-    float2 crossingStep = float2(1.0e20);
+    let absoluteGridOrigin : float2 = sunShadowProfileCamera / texelSize;
+    let gridPoint : float2 = fmod(absoluteGridOrigin + gridRate * startScalar,
+                                  float(PRIME_SUN_SHADOW_RESOLUTION));
+    var cell = int2(floor(gridPoint + sign(gridRate) * SUN_SHADOW_PROFILE_EPSILON));
+    let cellStep = int2(sign(gridRate));
+    var nextCrossing = float2(1.0e20);
+    var crossingStep = float2(1.0e20);
     if (gridRate.x > 0.0)
     {
         nextCrossing.x = (float(cell.x + 1) - gridPoint.x) / gridRate.x;
@@ -122,22 +122,22 @@ public void sunShadowBuildProfileCascade<Source>(Source source, int cascade)
         nextCrossing.y = (float(cell.y) - gridPoint.y) / gridRate.y;
         crossingStep.y = -1.0 / gridRate.y;
     }
-    float profileLength = endScalar - startScalar;
-    float cursor = 0.0;
-    int count = 0;
-    int base = sunShadowProfileBase(cascade);
-    int capacity = sunShadowProfileCapacity(cascade);
+    let profileLength : float = endScalar - startScalar;
+    var cursor = 0.0;
+    var count = 0;
+    let base : int = sunShadowProfileBase(cascade);
+    let capacity : int = sunShadowProfileCapacity(cascade);
 
     for (; count < capacity; ++count)
     {
-        float spanEnd = min(profileLength, min(nextCrossing.x, nextCrossing.y));
+        let spanEnd : float = min(profileLength, min(nextCrossing.x, nextCrossing.y));
         if (spanEnd <= cursor + SUN_SHADOW_PROFILE_EPSILON)
         {
             sunShadowProfileCounts[cascade] = -1;
             return;
         }
 
-        float resolvedShadow = source.blockerDepth(cascade, cell);
+        let resolvedShadow : float = source.blockerDepth(cascade, cell);
         sunShadowProfileEntries[base + count] = float2(startScalar + spanEnd, resolvedShadow);
         cursor = spanEnd;
         if (cursor + SUN_SHADOW_PROFILE_EPSILON >= profileLength)
@@ -146,8 +146,8 @@ public void sunShadowBuildProfileCascade<Source>(Source source, int cascade)
             return;
         }
 
-        bool crossesX = nextCrossing.x <= spanEnd + SUN_SHADOW_PROFILE_EPSILON;
-        bool crossesY = nextCrossing.y <= spanEnd + SUN_SHADOW_PROFILE_EPSILON;
+        let crossesX : bool = nextCrossing.x <= spanEnd + SUN_SHADOW_PROFILE_EPSILON;
+        let crossesY : bool = nextCrossing.y <= spanEnd + SUN_SHADOW_PROFILE_EPSILON;
         if (!crossesX && !crossesY)
         {
             sunShadowProfileCounts[cascade] = -1;
@@ -169,15 +169,15 @@ public void sunShadowBuildProfileCascade<Source>(Source source, int cascade)
     sunShadowProfileCounts[cascade] = -1;
 }
 
-int sunShadowProfileFind(int cascade, float scalar)
+func sunShadowProfileFind(cascade: int, scalar: float)->int
 {
-    int count = sunShadowProfileCounts[cascade];
-    int base = sunShadowProfileBase(cascade);
-    int low = 0;
-    int high = count;
+    let count : int = sunShadowProfileCounts[cascade];
+    let base : int = sunShadowProfileBase(cascade);
+    var low = 0;
+    var high : int = count;
     while (low < high)
     {
-        int middle = (low + high) >> 1;
+        let middle : int = (low + high) >> 1;
         if (sunShadowProfileEntries[base + middle].x <= scalar + SUN_SHADOW_PROFILE_EPSILON)
         {
             low = middle + 1;
@@ -190,16 +190,17 @@ int sunShadowProfileFind(int cascade, float scalar)
     return low;
 }
 
-float sunShadowProfileCascadeLitLength(int cascade, float startDistance, float endDistance,
-                                       float scalarRate, float rayDepthRate)
+func sunShadowProfileCascadeLitLength(cascade: int, startDistance: float, endDistance: float,
+                                      scalarRate: float, rayDepthRate: float)
+    ->float
 {
-    int count = sunShadowProfileCounts[cascade];
+    let count : int = sunShadowProfileCounts[cascade];
     if (count <= 0 || endDistance <= startDistance)
     {
         return 0.0;
     }
 
-    int base = sunShadowProfileBase(cascade);
+    let base : int = sunShadowProfileBase(cascade);
     if (scalarRate <= SUN_SHADOW_PROFILE_EPSILON)
     {
         return primeSunShadowLeafVisibleLength(
@@ -207,17 +208,17 @@ float sunShadowProfileCascadeLitLength(int cascade, float startDistance, float e
             sunShadowProfileEntries[base].y, SUN_SHADOW_DEPTH_BIAS_METERS);
     }
 
-    float startScalar = scalarRate * startDistance;
-    int index = sunShadowProfileFind(cascade, startScalar);
-    float cursor = startDistance;
-    float litLength = 0.0;
-    int capacity = sunShadowProfileCapacity(cascade);
-    for (int traversal = 0; traversal < capacity && index < count &&
+    let startScalar : float = scalarRate * startDistance;
+    var index : int = sunShadowProfileFind(cascade, startScalar);
+    var cursor : float = startDistance;
+    var litLength = 0.0;
+    let capacity : int = sunShadowProfileCapacity(cascade);
+    for (var traversal = 0; traversal < capacity && index < count &&
                             cursor + SUN_SHADOW_TRAVERSAL_EPSILON < endDistance;
          ++traversal, ++index)
     {
-        float2 entry = sunShadowProfileEntries[base + index];
-        float spanEnd = min(entry.x / scalarRate, endDistance);
+        let entry : float2 = sunShadowProfileEntries[base + index];
+        let spanEnd : float = min(entry.x / scalarRate, endDistance);
         if (spanEnd <= cursor + SUN_SHADOW_TRAVERSAL_EPSILON)
         {
             continue;
@@ -231,40 +232,41 @@ float sunShadowProfileCascadeLitLength(int cascade, float startDistance, float e
     return litLength;
 }
 
-public float localSunVisibilityInterval<Source>(Source source, float3 rayDirection,
-                                                float startDistance, float endDistance)
+public func localSunVisibilityInterval<Source>(source: Source, rayDirection: float3,
+                                               startDistance: float, endDistance: float)
+    ->float
     where Source : IPrimeSunShadowProfileSource
 {
     if (endDistance <= startDistance)
     {
         return 1.0;
     }
-    float tracedEnd = min(endDistance, SUN_SHADOW_MAX_DISTANCE_METERS);
+    let tracedEnd : float = min(endDistance, SUN_SHADOW_MAX_DISTANCE_METERS);
     if (tracedEnd <= startDistance)
     {
         return 0.0;
     }
 
-    float2 projectedRay = float2(dot(rayDirection, sunShadowProfileBasisU),
-                                 dot(rayDirection, sunShadowProfileBasisV));
-    float scalarRate = dot(projectedRay, sunShadowProfileDirection);
-    float perpendicularRate = abs(projectedRay.x * sunShadowProfileDirection.y -
-                                  projectedRay.y * sunShadowProfileDirection.x);
+    let projectedRay = float2(dot(rayDirection, sunShadowProfileBasisU),
+                              dot(rayDirection, sunShadowProfileBasisV));
+    var scalarRate : float = dot(projectedRay, sunShadowProfileDirection);
+    let perpendicularRate : float = abs(projectedRay.x * sunShadowProfileDirection.y -
+                                        projectedRay.y * sunShadowProfileDirection.x);
     if (scalarRate < -SUN_SHADOW_PROFILE_EPSILON || perpendicularRate > 2.0e-4)
     {
         return 0.0;
     }
     scalarRate = max(scalarRate, 0.0);
-    float rayDepthRate = dot(rayDirection, sunShadowProfileDirectionToSun);
+    let rayDepthRate : float = dot(rayDirection, sunShadowProfileDirectionToSun);
 
-    float cursor = startDistance;
-    float litLength = 0.0;
-    for (int cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT && cursor < tracedEnd; ++cascade)
+    var cursor : float = startDistance;
+    var litLength = 0.0;
+    for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT && cursor < tracedEnd; ++cascade)
     {
-        float cascadeEnd =
-            scalarRate > SUN_SHADOW_PROFILE_EPSILON
-                ? min(tracedEnd, sunShadowProfileCascadeEnd(source, cascade) / scalarRate)
-                : tracedEnd;
+        let cascadeEnd
+            : float = scalarRate > SUN_SHADOW_PROFILE_EPSILON
+                          ? min(tracedEnd, sunShadowProfileCascadeEnd(source, cascade) / scalarRate)
+                          : tracedEnd;
         if (cascadeEnd > cursor)
         {
             litLength += sunShadowProfileCascadeLitLength(cascade, cursor, cascadeEnd, scalarRate,

@@ -13,15 +13,15 @@ import "bsdf/openpbr/opaque/state.slang";
 
 public struct PrimeFullCompactOpaqueDiscreteState
 {
-    public PrimeFullOpenPbrOnb onb;
-    public PrimeFullOpenPbrMicrofacet microfacet;
-    public PrimeFullOpenPbrConductorFresnel conductorFresnel;
+    public var onb : PrimeFullOpenPbrOnb;
+    public var microfacet : PrimeFullOpenPbrMicrofacet;
+    public var conductorFresnel : PrimeFullOpenPbrConductorFresnel;
 };
 
-public PrimeFullCompactOpaqueDiscreteState primeFullCompactOpaqueDiscreteStateInit(
-    PrimeFullOpenPbrMaterial material)
+public func primeFullCompactOpaqueDiscreteStateInit(material: PrimeFullOpenPbrMaterial)
+    ->PrimeFullCompactOpaqueDiscreteState
 {
-    PrimeFullCompactOpaqueDiscreteState state;
+    var state : PrimeFullCompactOpaqueDiscreteState;
     state.onb = material.geometry.onb;
     state.microfacet.alpha = primeFullOpenPbrSpecularNdfRoughnesses(
         material.specular.roughness, material.specular.roughnessAnisotropy);
@@ -35,20 +35,22 @@ public PrimeFullCompactOpaqueDiscreteState primeFullCompactOpaqueDiscreteStateIn
     return state;
 }
 
-public PrimeFullCompactOpaqueDiscreteState primeFullCompactOpaqueDiscreteStateFromFull(
-    PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueDiscreteStateFromFull(state: PrimeFullCompactOpaqueState)
+    ->PrimeFullCompactOpaqueDiscreteState
 {
-    PrimeFullCompactOpaqueDiscreteState result;
+    var result : PrimeFullCompactOpaqueDiscreteState;
     result.onb = state.onb;
     result.microfacet = state.microfacet;
     result.conductorFresnel = state.conductorFresnel;
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactConductorDiscreteSample(
-    float3 wi, PrimeFullCompactOpaqueDiscreteState state, uint samplingFlags)
+public func primeFullCompactConductorDiscreteSample(wi: float3,
+                                                    state: PrimeFullCompactOpaqueDiscreteState,
+                                                    samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (wi.z <= 0.0 || (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION) == 0u)
     {
         return result;
@@ -61,8 +63,9 @@ public PrimeFullOpenPbrSample primeFullCompactConductorDiscreteSample(
     return result;
 }
 
-public float3 primeFullCompactConductorDiscreteEnergy(float3 wi,
-                                                      PrimeFullCompactOpaqueDiscreteState state)
+public func primeFullCompactConductorDiscreteEnergy(wi: float3,
+                                                    state: PrimeFullCompactOpaqueDiscreteState)
+    ->float3
 {
     if (wi.z < 0.0)
     {

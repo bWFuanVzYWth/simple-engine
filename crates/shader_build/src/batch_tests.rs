@@ -26,10 +26,10 @@ impl Fixture {
         std::mem::forget(root);
         let source = root_path.join("source");
         fs::create_dir(&source).unwrap();
-        fs::write(source.join("main.slang"), "module main; import constant; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = value() + VALUE; }").unwrap();
+        fs::write(source.join("main.slang"), "module main; import constant; var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = value() + VALUE; }").unwrap();
         fs::write(
             source.join("constant.slang"),
-            "module constant; public uint value() { return 17; }",
+            "module constant; public func value() -> uint { return 17; }",
         )
         .unwrap();
         Self {
@@ -136,7 +136,7 @@ fn cached_reflection_survives_a_different_output_slot() {
 fn only_consumers_of_changed_modules_are_recompiled() {
     let f = Fixture::new();
     let out = f.output("out");
-    fs::write(f.source.join("other.slang"), "module other; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = 9; }").unwrap();
+    fs::write(f.source.join("other.slang"), "module other; var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = 9; }").unwrap();
     let one = f.task(&out, 1, false);
     let mut two = f.task(&out, 2, false);
     two.arguments[0] = command_path(&f.source.join("other.slang"));
@@ -144,7 +144,7 @@ fn only_consumers_of_changed_modules_are_recompiled() {
     assert!(f.run(&out, &tasks, 2).contains("compiled=2"));
     fs::write(
         f.source.join("constant.slang"),
-        "module constant; public uint value() { return 18; }",
+        "module constant; public func value() -> uint { return 18; }",
     )
     .unwrap();
     let result = f.run(&out, &tasks, 2);
@@ -172,7 +172,7 @@ fn new_generated_include_shadows_the_cached_module() {
     let first = read(&out.join("1.spv")).unwrap();
     fs::write(
         out.join("constant.slang"),
-        "module constant; public uint value() { return 23; }",
+        "module constant; public func value() -> uint { return 23; }",
     )
     .unwrap();
     assert!(f.run(&out, &[task()], 1).contains("compiled=1"));
@@ -213,10 +213,10 @@ fn corrupted_cache_is_repaired_instead_of_published() {
 #[ignore = "需要 Slang；不创建 GPU"]
 fn generated_module_content_disambiguates_output_slots() {
     let f = Fixture::new();
-    fs::write(f.source.join("main.slang"), "module main; import generated; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = generated_value(); }").unwrap();
+    fs::write(f.source.join("main.slang"), "module main; import generated; var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = generated_value(); }").unwrap();
     let a = f.output("first");
     let b = f.output("second");
-    let same = "module generated; public uint generated_value() { return 11; }";
+    let same = "module generated; public func generated_value() -> uint { return 11; }";
     fs::write(a.join("generated.slang"), same).unwrap();
     fs::write(b.join("generated.slang"), same).unwrap();
     assert!(f.run(&a, &[f.task(&a, 1, false)], 1).contains("compiled=1"));
@@ -226,7 +226,7 @@ fn generated_module_content_disambiguates_output_slots() {
     );
     fs::write(
         b.join("generated.slang"),
-        "module generated; public uint generated_value() { return 12; }",
+        "module generated; public func generated_value() -> uint { return 12; }",
     )
     .unwrap();
     assert!(f.run(&b, &[f.task(&b, 1, false)], 1).contains("compiled=1"));
@@ -295,7 +295,11 @@ fn restoring_a_previous_source_version_reuses_its_artifact() {
     let original = read(&path).unwrap();
     f.run(&out, &[f.task(&out, 1, true)], 1);
     let first = read(&out.join("1.spv")).unwrap();
-    fs::write(&path, "module constant; public uint value() { return 18; }").unwrap();
+    fs::write(
+        &path,
+        "module constant; public func value() -> uint { return 18; }",
+    )
+    .unwrap();
     assert!(
         f.run(&out, &[f.task(&out, 1, true)], 1)
             .contains("compiled=1")

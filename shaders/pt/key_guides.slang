@@ -8,60 +8,63 @@ import geometry.ray;
 
 namespace pt
 {
-public static const uint KEY_GUIDE_DISCRETE = 1u;
-public static const uint KEY_GUIDE_REFLECTION = 2u;
-public static const uint KEY_GUIDE_REFRACTED = 4u;
-public static const uint KEY_GUIDE_POSE_KNOWN = 8u;
-public static const uint KEY_GUIDE_POSE_FIXED = 16u;
+public static const let KEY_GUIDE_DISCRETE = 1u;
+public static const let KEY_GUIDE_REFLECTION = 2u;
+public static const let KEY_GUIDE_REFRACTED = 4u;
+public static const let KEY_GUIDE_POSE_KNOWN = 8u;
+public static const let KEY_GUIDE_POSE_FIXED = 16u;
 
 /// 128B无损数值顶点；无完整PBR闭包、材质身份、纹素、随机状态或光源。
 /// normal_roughness.xyz保留实际着色法线朝向；输出投影最后朝向相机。
 public struct KeyGuideVertex
 {
-    public geometry::SurfacePoint point;
-    public float distance;
-    public float4 normal_roughness;
-    public float3 diffuse;
-    public float3 specular;
-    public float3 canonicalDirection;
-    public float3 reflectionDirection;
-    public float4 medium;
-    public float3 previousPosition;
-    public uint flags;
+    public var point : geometry::SurfacePoint;
+    public var distance : float;
+    public var normal_roughness : float4;
+    public var diffuse : float3;
+    public var specular : float3;
+    public var canonicalDirection : float3;
+    public var reflectionDirection : float3;
+    public var medium : float4;
+    public var previousPosition : float3;
+    public var flags : uint;
 };
 
 /// 命中程序输入仅medium为当前介质，输出复用全128B。
 /// known-surface适配器可在未使用输入字段中编码稳定命中与观察方向，须先消费再写输出。
 public struct KeyGuideCall
 {
-    public KeyGuideVertex value;
-    public static KeyGuideCall input(float4 incident)
+    public var value : KeyGuideVertex;
+    public static func input(incident: float4)->KeyGuideCall
     {
-        KeyGuideCall result = {};
+        var result : KeyGuideCall = {};
         result.value.medium = incident;
         return result;
     }
 };
 
 /// 材质已按guide操作投影解码；不消费发光、alias、边界颜色filter或任何光照策略。
-public KeyGuideVertex make_key_guide<let Flow : uint>(Hit hit, SurfaceMaterial material,
-                                                      openpbr::Energy energy, GuidePose pose,
-                                                      float3 incoming, float4 incident)
+public func make_key_guide<let Flow : uint>(hit: Hit, material: SurfaceMaterial,
+                                            energy: openpbr::Energy, pose: GuidePose,
+                                            incoming: float3, incident: float4)
+    ->KeyGuideVertex
 {
-    float3 normal = shading_normal(hit, material);
-    DenoiseGuides albedos =
-        denoise_surface_flow<Flow>(energy, material, normal, -incoming, incident);
-    bool reflection = true, refracted = false;
-    float3 next = reflect(incoming, normal);
-    static const bool Delta =
-        (Flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) != 0;
+    let normal : float3 = shading_normal(hit, material);
+    let albedos : DenoiseGuides =
+                      denoise_surface_flow<Flow>(energy, material, normal, -incoming, incident);
+    var reflection = true;
+    var refracted = false;
+    var next : float3 = reflect(incoming, normal);
+    static const let Delta
+        : bool = (Flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) != 0;
     if (Delta && (Flow & (openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0)
         next = guide_delta_direction(material, normal, incoming, incident, reflection, refracted);
-    bool discrete =
-        openpbr::is_discrete_only_flow<Flow>(material.pbr, incident, material.transmitted);
-    float4 medium =
-        !reflection && (material.pbr.control.x & 2u) == 0 ? material.transmitted : incident;
-    uint flags = (discrete ? KEY_GUIDE_DISCRETE : 0u) | (reflection ? KEY_GUIDE_REFLECTION : 0u) |
+    let discrete
+        : bool = openpbr::is_discrete_only_flow<Flow>(material.pbr, incident, material.transmitted);
+    let medium : float4 = !reflection && (material.pbr.control.x & 2u) == 0 ? material.transmitted
+                                                                            : incident;
+    let flags
+        : uint = (discrete ? KEY_GUIDE_DISCRETE : 0u) | (reflection ? KEY_GUIDE_REFLECTION : 0u) |
                  (refracted ? KEY_GUIDE_REFRACTED : 0u) | (pose.known ? KEY_GUIDE_POSE_KNOWN : 0u) |
                  (pose.fixed ? KEY_GUIDE_POSE_FIXED : 0u);
     return { hit.surface,
@@ -79,18 +82,19 @@ public KeyGuideVertex make_key_guide<let Flow : uint>(Hit hit, SurfaceMaterial m
 /// 每个新命中的原子追踪/专用导引操作，不能先通用读取材质再分流。
 public interface IKeyGuideTrace
 {
-    bool intersect_guide(float3 origin, float3 direction, float4 incident,
-                         out KeyGuideVertex vertex);
+    func intersect_guide(origin: float3, direction: float3, incident: float4,
+                         out vertex: KeyGuideVertex)
+        ->bool;
 };
 
 /// 兼容原有投影记录，只在endpoint.material中使用数值着色法线，不再从记录求BSDF或albedo。
 public struct KeyGuideEndpoint
 {
-    public GuideEndpoint endpoint;
-    public DenoiseGuides albedos;
+    public var endpoint : GuideEndpoint;
+    public var albedos : DenoiseGuides;
 };
 
-void set_key_guide_vertex(inout KeyGuideEndpoint result, KeyGuideVertex vertex)
+func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex)->void
 {
     result.endpoint.hit.surface = vertex.point;
     result.endpoint.hit.distance = vertex.distance;
@@ -102,11 +106,13 @@ void set_key_guide_vertex(inout KeyGuideEndpoint result, KeyGuideVertex vertex)
 
 /// 与trace_guide相同的预算、PSR、候选回退及查询计数，首面材料只解码一次。
 /// firstReflection只选择首面的理想反射数值，不改变后续材质/随机域，不重解首面。
-public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(
-    Scene scene, KeyGuideVertex first, float3 cameraOrigin, float3 cameraDirection,
-    float4 initialMedium, uint budget, bool firstReflection, bool deltaOnly = false)
+public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuideVertex,
+                                                    cameraOrigin: float3, cameraDirection: float3,
+                                                    initialMedium: float4, budget: uint,
+                                                    firstReflection: bool, deltaOnly: bool = false)
+    ->KeyGuideEndpoint
 {
-    KeyGuideEndpoint result = {};
+    var result : KeyGuideEndpoint = {};
     result.endpoint.incident = initialMedium;
     result.endpoint.direction = cameraDirection;
     result.endpoint.camera_origin = cameraOrigin;
@@ -114,14 +120,15 @@ public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(
     result.endpoint.psr = psr_initial();
     result.endpoint.queries = 1;
     set_key_guide_vertex(result, first);
-    KeyGuideEndpoint candidate = result;
-    KeyGuideVertex vertex = first;
+    var candidate : KeyGuideEndpoint = result;
+    var vertex : KeyGuideVertex = first;
     while (true)
     {
-        bool discrete = (vertex.flags & KEY_GUIDE_DISCRETE) != 0;
+        let discrete : bool = (vertex.flags & KEY_GUIDE_DISCRETE) != 0;
         if (!discrete && (deltaOnly || !(firstReflection && result.endpoint.queries == 1)))
         {
-            float3 position, normal;
+            var position : float3;
+            var normal : float3;
             if (psr_surface(result.endpoint.psr, cameraOrigin, cameraDirection,
                             vertex.point.position, vertex.point.normal, vertex.normal_roughness.xyz,
                             position, normal))
@@ -138,10 +145,10 @@ public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(
             candidate.endpoint.flags |= GUIDE_SURFACE_PROXY | GUIDE_BUDGET_PROXY;
             return candidate;
         }
-        bool forced = firstReflection && result.endpoint.queries == 1;
-        bool reflection = forced || (vertex.flags & KEY_GUIDE_REFLECTION) != 0;
-        bool refracted = !forced && (vertex.flags & KEY_GUIDE_REFRACTED) != 0;
-        float3 next = forced ? vertex.reflectionDirection : vertex.canonicalDirection;
+        let forced : bool = firstReflection && result.endpoint.queries == 1;
+        let reflection : bool = forced || (vertex.flags & KEY_GUIDE_REFLECTION) != 0;
+        let refracted : bool = !forced && (vertex.flags & KEY_GUIDE_REFRACTED) != 0;
+        let next : float3 = forced ? vertex.reflectionDirection : vertex.canonicalDirection;
         if (result.endpoint.queries == 1 && !reflection && !firstReflection)
         {
             result.endpoint.interface_specular = vertex.specular;
@@ -152,12 +159,12 @@ public KeyGuideEndpoint trace_key_guide<Scene : IKeyGuideTrace>(
                        reflection, refracted, (vertex.flags & KEY_GUIDE_POSE_FIXED) != 0);
         if (refracted)
             result.endpoint.flags |= GUIDE_REFRACTION_PROXY;
-        float3 origin = geometry::offset_origin(vertex.point, next);
+        let origin : float3 = geometry::offset_origin(vertex.point, next);
         if (!reflection)
             result.endpoint.incident = vertex.medium;
         result.endpoint.direction = next;
         ++result.endpoint.queries;
-        KeyGuideVertex following;
+        var following : KeyGuideVertex;
         if (!scene.intersect_guide(origin, next, result.endpoint.incident, following))
         {
             result.endpoint.flags |= GUIDE_SKY;

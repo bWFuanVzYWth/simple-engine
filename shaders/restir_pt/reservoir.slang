@@ -34,50 +34,53 @@ import restir_pt.types;
 namespace restir_pt
 {
 /// NV默认标量target：BT.601 luminance；所有相关MIS target必须使用同一映射。
-public float target(float3 integrand)
+public func target(integrand: float3)->float
 {
     return PathRISState::toScalar(integrand);
 }
 
 /// 清空整份80B状态；空reservoir的M、weight和identity均为0。
-public PathReservoir empty_reservoir()
+public func empty_reservoir()->PathReservoir
 {
-    PathReservoir result = {};
+    var result : PathReservoir = {};
     result.init();
     return result;
 }
 
 /// 第一个已完成路径候选；seed必须是阈值/散射随机流消费前的可重放状态。
-public PathReservoir create_initial_reservoir(PathRISState sample, uint seed)
+public func create_initial_reservoir(sample_value: PathRISState, seed: uint)->PathReservoir
 {
-    return PathReservoir::createFromRisState(sample, seed);
+    return PathReservoir::createFromRisState(sample_value, seed);
 }
 
 /// 加入后续初始路径；每个完成路径使M加1，返回其是否取代当前选中项。
-public bool stream_ris(inout PathReservoir result, PathRISState sample, uint seed, float u)
+public func stream_ris(inout result: PathReservoir, sample_value: PathRISState, seed: uint,
+                       u: float)
+    ->bool
 {
-    return result.add(sample, seed, u);
+    return result.add(sample_value, seed, u);
 }
 
 /// 保留source完整重放身份，以目标域integrand与Jacobian合并一个已finalize的source。
 /// 调用方须先把source.reconnectionJacobian更新为本次连接的目标几何因子。
-public bool merge_reservoir(inout PathReservoir result, PathReservoir source, float3 integrand,
-                            float Jacobian, float misWeight, float u)
+public func merge_reservoir(inout result: PathReservoir, source: PathReservoir, integrand: float3,
+                            Jacobian: float, misWeight: float, u: float)
+    ->bool
 {
     return result.merge(integrand, Jacobian, source, u, misWeight);
 }
 
 /// 初始SPP结束：w_sum/(M*p_hat)，随后M设为1；与NV populateReservoir一致。
-public void finalize_initial(inout PathReservoir result)
+public func finalize_initial(inout result: PathReservoir)->void
 {
-    float pHat = target(result.integrand);
+    let pHat : float = target(result.integrand);
     result.weight = pHat == 0.f ? 0.f : result.weight / (result.M * pHat);
     result.M = 1.f;
 }
 
 /// GRIS轮结束：w_sum/p_hat；不再除M，MIS已包含各source的有效量。
 /// 无效/负的最终W清为0，保持NV重采样pass的最终数值处理。
-public void finalize_reuse(inout PathReservoir result)
+public func finalize_reuse(inout result: PathReservoir)->void
 {
     result.finalizeReservoirWeight();
     result.weight = isnan(result.weight) || isinf(result.weight) ? 0.f : max(0.f, result.weight);

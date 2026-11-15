@@ -10,12 +10,12 @@ import "bsdf/openpbr/math/frame.slang";
 // OpenPBR's default metallic material initializer.
 // These are compact boundary utilities, not a retained generic closure graph.
 
-public PrimeFullOpenPbrMaterial primeFullCompactMaterialFromMetallic(float3 baseColor,
-                                                                     float roughness,
-                                                                     float metalness, float3 normal)
+public func primeFullCompactMaterialFromMetallic(baseColor: float3, roughness: float,
+                                                 metalness: float, normal: float3)
+    ->PrimeFullOpenPbrMaterial
 {
-    PrimeFullOpenPbrOnb onb = primeFullOpenPbrOnbFromNormal(normal);
-    PrimeFullOpenPbrMaterial material;
+    var onb : PrimeFullOpenPbrOnb = primeFullOpenPbrOnbFromNormal(normal);
+    var material : PrimeFullOpenPbrMaterial;
     material.weight.base = 1.0;
     material.weight.diffuseRoughness = 0.0;
     material.weight.specular = 1.0;

@@ -19,8 +19,20 @@ impl Fixture {
                 SERIAL.fetch_add(1, Ordering::Relaxed)
             ));
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("main.slang"),
-            "#ifndef OPENPBR_VARIANT\n#define OPENPBR_VARIANT VARIANT\n#endif\nstruct Payload { uint value; }; [shader(\"callable\")] void shade(inout Payload data) { data.value = OPENPBR_FLOW + OPENPBR_VARIANT; }").unwrap();
+        fs::write(
+            root.join("main.slang"),
+            r#"#ifndef OPENPBR_VARIANT
+#define OPENPBR_VARIANT VARIANT
+#endif
+struct Payload { var value : uint; };
+[shader("callable")]
+func shade(inout data : Payload) -> void
+{
+    data.value = OPENPBR_FLOW + OPENPBR_VARIANT;
+}
+"#,
+        )
+        .unwrap();
         Self(root)
     }
 

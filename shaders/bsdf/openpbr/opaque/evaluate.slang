@@ -7,10 +7,11 @@ import "bsdf/openpbr/opaque/state.slang";
 import "bsdf/openpbr/opaque/lobes.slang";
 import "bsdf/openpbr/contract/flags.slang";
 
-public PrimeFullCompactOpaqueEvaluation primeFullCompactOpaqueEvaluate(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueEvaluate(wi: float3, wo: float3,
+                                           state: PrimeFullCompactOpaqueState)
+    ->PrimeFullCompactOpaqueEvaluation
 {
-    PrimeFullCompactOpaqueEvaluation result;
+    var result : PrimeFullCompactOpaqueEvaluation;
     if (state.metalness > 0.0 && state.metalness < 1.0)
     {
         result.throughput = primeFullCompactMixEval(
@@ -32,10 +33,11 @@ public PrimeFullCompactOpaqueEvaluation primeFullCompactOpaqueEvaluate(
     return result;
 }
 
-public PrimeFullCompactOpaqueComponents primeFullCompactOpaqueEvaluateComponents(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueEvaluateComponents(wi: float3, wo: float3,
+                                                     state: PrimeFullCompactOpaqueState)
+    ->PrimeFullCompactOpaqueComponents
 {
-    PrimeFullCompactOpaqueComponents result;
+    var result : PrimeFullCompactOpaqueComponents;
     result.diffuse = float3(0.0);
     result.specular = float3(0.0);
     if (state.metalness > 0.0 && state.metalness < 1.0)

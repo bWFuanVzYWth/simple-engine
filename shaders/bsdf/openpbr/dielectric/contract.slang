@@ -7,33 +7,34 @@ import "bsdf/openpbr/contract/material.slang";
 import "bsdf/openpbr/contract/volume.slang";
 import "bsdf/openpbr/contract/sample.slang";
 
-public static const float3 PRIME_FULL_COMPACT_TRANSMISSION_WAVELENGTHS_NM =
+public static const let PRIME_FULL_COMPACT_TRANSMISSION_WAVELENGTHS_NM =
     float3(630.0, 532.0, 467.0);
 
 public struct PrimeFullCompactTransmissionState
 {
-    public PrimeFullOpenPbrOnb onb;
-    public uint geometryThinWalled;
-    public uint entering;
-    public float rayT;
-    public float originalIor;
-    public float3 transmissionColor;
-    public PrimeFullOpenPbrMicrofacet specularMicrofacet;
-    public PrimeFullOpenPbrSpecularFresnel specularFresnel;
-    public PrimeFullOpenPbrMicrofacet transmissionMicrofacet;
-    public float3 transmissionTint;
-    public PrimeFullOpenPbrVolume transmissionVolume;
-    public float3 transmissionMultipleScattering;
+    public var onb : PrimeFullOpenPbrOnb;
+    public var geometryThinWalled : uint;
+    public var entering : uint;
+    public var rayT : float;
+    public var originalIor : float;
+    public var transmissionColor : float3;
+    public var specularMicrofacet : PrimeFullOpenPbrMicrofacet;
+    public var specularFresnel : PrimeFullOpenPbrSpecularFresnel;
+    public var transmissionMicrofacet : PrimeFullOpenPbrMicrofacet;
+    public var transmissionTint : float3;
+    public var transmissionVolume : PrimeFullOpenPbrVolume;
+    public var transmissionMultipleScattering : float3;
 };
 
 public struct PrimeFullCompactTransmissionEvaluation
 {
-    public PrimeFullOpenPbrThroughput throughput;
-    public float pdf;
+    public var throughput : PrimeFullOpenPbrThroughput;
+    public var pdf : float;
 };
 
-public float3 primeFullCompactTransmissionMaterialFrame(float3 w,
-                                                        PrimeFullCompactTransmissionState state)
+public func primeFullCompactTransmissionMaterialFrame(w: float3,
+                                                      state: PrimeFullCompactTransmissionState)
+    ->float3
 {
     return state.entering != 0u ? w : float3(-w.x, w.y, -w.z);
 }

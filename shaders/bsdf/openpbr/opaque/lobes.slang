@@ -13,15 +13,15 @@ import "bsdf/openpbr/contract/flags.slang";
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 
-public PrimeFullCompactLayerState primeFullCompactMakeLayerState(float3 baseEnergy,
-                                                                 float3 transmittanceIn,
-                                                                 float3 specularEnergy)
+public func primeFullCompactMakeLayerState(baseEnergy: float3, transmittanceIn: float3,
+                                           specularEnergy: float3)
+    ->PrimeFullCompactLayerState
 {
-    PrimeFullCompactLayerState result;
+    var result : PrimeFullCompactLayerState;
     result.transmittanceIn = transmittanceIn;
     result.baseSampleWeight = primeFullOpenPbrSpectrumToWeight(transmittanceIn * baseEnergy);
     result.specularSampleWeight = primeFullOpenPbrSpectrumToWeight(specularEnergy);
-    float sum = result.baseSampleWeight + result.specularSampleWeight;
+    let sum : float = result.baseSampleWeight + result.specularSampleWeight;
     if (sum > 0.0)
     {
         result.baseSampleWeight /= sum;
@@ -30,10 +30,10 @@ public PrimeFullCompactLayerState primeFullCompactMakeLayerState(float3 baseEner
     return result;
 }
 
-public PrimeFullCompactMixState primeFullCompactMakeMixState(float weight, float3 firstEnergy,
-                                                             float3 secondEnergy)
+public func primeFullCompactMakeMixState(weight: float, firstEnergy: float3, secondEnergy: float3)
+    ->PrimeFullCompactMixState
 {
-    PrimeFullCompactMixState result;
+    var result : PrimeFullCompactMixState;
     if (weight == 0.0)
     {
         result.firstSampleWeight = 1.0;
@@ -48,7 +48,7 @@ public PrimeFullCompactMixState primeFullCompactMakeMixState(float weight, float
     }
     result.firstSampleWeight = (1.0 - weight) * primeFullOpenPbrSpectrumToWeight(firstEnergy);
     result.secondSampleWeight = weight * primeFullOpenPbrSpectrumToWeight(secondEnergy);
-    float sum = result.firstSampleWeight + result.secondSampleWeight;
+    let sum : float = result.firstSampleWeight + result.secondSampleWeight;
     if (sum > 0.0)
     {
         result.firstSampleWeight /= sum;
@@ -57,11 +57,12 @@ public PrimeFullCompactMixState primeFullCompactMakeMixState(float weight, float
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactMixEval(PrimeFullOpenPbrThroughput first,
-                                                          PrimeFullOpenPbrThroughput second,
-                                                          float weight)
+public func primeFullCompactMixEval(first: PrimeFullOpenPbrThroughput,
+                                    second: PrimeFullOpenPbrThroughput, weight: float)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrThroughput result = primeFullOpenPbrZeroThroughput();
+    var second = second;
+    var result : PrimeFullOpenPbrThroughput = primeFullOpenPbrZeroThroughput();
     if (weight < 1.0)
     {
         result = first;
@@ -75,57 +76,59 @@ public PrimeFullOpenPbrThroughput primeFullCompactMixEval(PrimeFullOpenPbrThroug
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactLayerEval(PrimeFullOpenPbrThroughput base,
-                                                            PrimeFullOpenPbrThroughput specular,
-                                                            PrimeFullCompactLayerState layer)
+public func primeFullCompactLayerEval(base: PrimeFullOpenPbrThroughput,
+                                      specular: PrimeFullOpenPbrThroughput,
+                                      layer: PrimeFullCompactLayerState)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrThroughput result =
-        primeFullOpenPbrThroughputScale(base, layer.transmittanceIn);
+    let result : PrimeFullOpenPbrThroughput =
+                     primeFullOpenPbrThroughputScale(base, layer.transmittanceIn);
     return primeFullOpenPbrThroughputAdd(result, specular);
 }
 
-public float3x3 primeFullCompactEonBasis(float3 wi)
+public func primeFullCompactEonBasis(wi: float3)->float3x3
 {
-    float lengthSquared = dot(wi.xy, wi.xy);
-    float3 x = lengthSquared > 0.0 ? float3(wi.x, wi.y, 0.0) * rsqrt(lengthSquared)
-                                   : float3(1.0, 0.0, 0.0);
-    float3 y = float3(-x.y, x.x, 0.0);
+    let lengthSquared : float = dot(wi.xy, wi.xy);
+    let x : float3 = lengthSquared > 0.0 ? float3(wi.x, wi.y, 0.0) * rsqrt(lengthSquared)
+                                         : float3(1.0, 0.0, 0.0);
+    let y = float3(-x.y, x.x, 0.0);
     return float3x3(x, y, float3(0.0, 0.0, 1.0));
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactLambertEval(float3 wi, float3 wo,
-                                                              PrimeFullCompactOpaqueState state,
-                                                              uint samplingFlags)
+public func primeFullCompactLambertEval(wi: float3, wo: float3, state: PrimeFullCompactOpaqueState,
+                                        samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     if (wi.z < 0.0 || wo.z < 0.0 ||
         (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) == 0u)
     {
         return primeFullOpenPbrZeroThroughput();
     }
-    PrimeFullOpenPbrThroughput result;
+    var result : PrimeFullOpenPbrThroughput;
     result.value = state.baseColor * (PRIME_FULL_OPENPBR_INV_PI * wo.z);
     result.flags = PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION;
     return result;
 }
 
-public float primeFullCompactLambertPdf(float3 wi, float3 wo)
+public func primeFullCompactLambertPdf(wi: float3, wo: float3)->float
 {
     return wi.z >= 0.0 && wo.z > 0.0 ? PRIME_FULL_OPENPBR_INV_PI * wo.z : 0.0;
 }
 
-public float3 primeFullCompactLambertEnergy(float3 wi, PrimeFullCompactOpaqueState state,
-                                            uint samplingFlags)
+public func primeFullCompactLambertEnergy(wi: float3, state: PrimeFullCompactOpaqueState,
+                                          samplingFlags: uint)
+    ->float3
 {
     return wi.z >= 0.0 && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u
                ? state.baseColor
                : float3(0.0);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactLambertSample(float3 wi, float3 randomValue,
-                                                            PrimeFullCompactOpaqueState state,
-                                                            uint samplingFlags)
+public func primeFullCompactLambertSample(wi: float3, randomValue: float3,
+                                          state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (wi.z < 0.0 || (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) == 0u)
     {
         return result;
@@ -141,10 +144,12 @@ public PrimeFullOpenPbrSample primeFullCompactLambertSample(float3 wi, float3 ra
 // Its value, PDF and energy reduce to Lambert, but its cLTC sampler rotates the
 // cosine sample into the incident-direction basis. Preserve that exact mapping
 // for fractional diffuse/subsurface mixtures without retaining general EON state.
-public PrimeFullOpenPbrSample primeFullCompactZeroRoughnessEonSample(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactZeroRoughnessEonSample(wi: float3, randomValue: float3,
+                                                   state: PrimeFullCompactOpaqueState,
+                                                   samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (wi.z < 0.0 || (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) == 0u)
     {
         return result;
@@ -158,29 +163,29 @@ public PrimeFullOpenPbrSample primeFullCompactZeroRoughnessEonSample(
         result.throughput = primeFullCompactLambertEval(wi, result.wo, state, samplingFlags);
         return result;
     }
-    float radius = sqrt(randomValue.x);
-    float phi = 2.0 * PRIME_FULL_OPENPBR_PI * randomValue.y;
-    float x = -radius * cos(phi);
-    float y = radius * sin(phi);
-    float3 wo = float3(x, y, sqrt(max(1.0 - (x * x + y * y), 0.0)));
-    float woLength = length(wo);
+    let radius : float = sqrt(randomValue.x);
+    let phi : float = 2.0 * PRIME_FULL_OPENPBR_PI * randomValue.y;
+    let x : float = -radius * cos(phi);
+    let y : float = radius * sin(phi);
+    var wo = float3(x, y, sqrt(max(1.0 - (x * x + y * y), 0.0)));
+    let woLength : float = length(wo);
     result.pdf = wo.z * PRIME_FULL_OPENPBR_INV_PI * woLength * woLength * woLength;
     result.wo = normalize(mul(wo, primeFullCompactEonBasis(wi)));
     result.throughput = primeFullCompactLambertEval(wi, result.wo, state, samplingFlags);
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactSubsurfaceEval<
-    let FixedSubsurface : bool = false>(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                                        uint samplingFlags)
+public func primeFullCompactSubsurfaceEval<let FixedSubsurface : bool = false>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    bool reflected = wo.z * wi.z > 0.0;
+    let reflected : bool = wo.z * wi.z > 0.0;
     if ((reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) == 0u) ||
         (!reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_TRANSMISSION) == 0u))
     {
         return primeFullOpenPbrZeroThroughput();
     }
-    PrimeFullOpenPbrThroughput result;
+    var result : PrimeFullOpenPbrThroughput;
     result.value = float3(PRIME_FULL_OPENPBR_INV_PI * abs(wo.z)) * state.subsurfaceColor * 0.5 *
                    (FixedSubsurface ? (reflected ? 1.3333333730697632 : 0.6666666269302368)
                                     : (reflected ? 1.0 - state.subsurfaceAnisotropy
@@ -190,29 +195,34 @@ public PrimeFullOpenPbrThroughput primeFullCompactSubsurfaceEval<
     return result;
 }
 
-public float primeFullCompactSubsurfaceReflectionProbability<let FixedSubsurface : bool = false>(
-    PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactSubsurfaceReflectionProbability<let FixedSubsurface : bool = false>(
+    state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
-    float probability =
-        FixedSubsurface ? 0.6666666865348816 : (1.0 - state.subsurfaceAnisotropy) * 0.5;
+    let probability : float = FixedSubsurface ? 0.6666666865348816
+                                              : (1.0 - state.subsurfaceAnisotropy) * 0.5;
     return primeFullOpenPbrIsReflective(samplingFlags) ? probability : 0.0;
 }
 
-public float primeFullCompactSubsurfaceTransmissionProbability<let FixedSubsurface : bool = false>(
-    PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactSubsurfaceTransmissionProbability<let FixedSubsurface : bool = false>(
+    state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
-    float probability =
-        FixedSubsurface ? 0.3333333134651184 : (1.0 + state.subsurfaceAnisotropy) * 0.5;
+    let probability : float = FixedSubsurface ? 0.3333333134651184
+                                              : (1.0 + state.subsurfaceAnisotropy) * 0.5;
     return primeFullOpenPbrIsTransmissive(samplingFlags) ? probability : 0.0;
 }
 
-public float primeFullCompactSubsurfacePdf<let FixedSubsurface : bool = false>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactSubsurfacePdf<let FixedSubsurface : bool = false>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
-    float reflectionProbability =
-        primeFullCompactSubsurfaceReflectionProbability<FixedSubsurface>(state, samplingFlags);
-    float transmissionProbability =
-        primeFullCompactSubsurfaceTransmissionProbability<FixedSubsurface>(state, samplingFlags);
+    let reflectionProbability
+        : float = primeFullCompactSubsurfaceReflectionProbability<FixedSubsurface>(state,
+                                                                                   samplingFlags);
+    let transmissionProbability
+        : float = primeFullCompactSubsurfaceTransmissionProbability<FixedSubsurface>(state,
+                                                                                     samplingFlags);
     if (!FixedSubsurface && reflectionProbability == 0.0 && transmissionProbability == 0.0)
     {
         return 0.0;
@@ -221,8 +231,9 @@ public float primeFullCompactSubsurfacePdf<let FixedSubsurface : bool = false>(
            (wi.z * wo.z > 0.0 ? reflectionProbability : transmissionProbability);
 }
 
-public float3 primeFullCompactSubsurfaceEnergy(PrimeFullCompactOpaqueState state,
-                                               uint samplingFlags)
+public func primeFullCompactSubsurfaceEnergy(state: PrimeFullCompactOpaqueState,
+                                             samplingFlags: uint)
+    ->float3
 {
     if ((samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u)
     {
@@ -231,18 +242,21 @@ public float3 primeFullCompactSubsurfaceEnergy(PrimeFullCompactOpaqueState state
     return float3(0.0);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactSubsurfaceSample<let FixedSubsurface : bool = false>(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactSubsurfaceSample<let FixedSubsurface : bool = false>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if ((samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE) == 0u)
     {
         return result;
     }
-    float reflectionProbability =
-        primeFullCompactSubsurfaceReflectionProbability<FixedSubsurface>(state, samplingFlags);
-    float transmissionProbability =
-        primeFullCompactSubsurfaceTransmissionProbability<FixedSubsurface>(state, samplingFlags);
+    let reflectionProbability
+        : float = primeFullCompactSubsurfaceReflectionProbability<FixedSubsurface>(state,
+                                                                                   samplingFlags);
+    let transmissionProbability
+        : float = primeFullCompactSubsurfaceTransmissionProbability<FixedSubsurface>(state,
+                                                                                     samplingFlags);
     if (!FixedSubsurface && reflectionProbability == 0.0 && transmissionProbability == 0.0)
     {
         return result;
@@ -271,9 +285,9 @@ public PrimeFullOpenPbrSample primeFullCompactSubsurfaceSample<let FixedSubsurfa
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactMixedDiffuseEval<
-    let FixedSubsurface : bool = false>(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                                        uint samplingFlags)
+public func primeFullCompactMixedDiffuseEval<let FixedSubsurface : bool = false>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     return primeFullCompactMixEval(
         state.subsurfaceWeight < 1.0 ? primeFullCompactLambertEval(wi, wo, state, samplingFlags)
@@ -284,35 +298,37 @@ public PrimeFullOpenPbrThroughput primeFullCompactMixedDiffuseEval<
         state.subsurfaceWeight);
 }
 
-public float primeFullCompactMixedDiffusePdf<let FixedSubsurface : bool = false>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactMixedDiffusePdf<let FixedSubsurface : bool = false>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
     if (state.diffuseMix.firstSampleWeight + state.diffuseMix.secondSampleWeight <= 0.0)
     {
         return 0.0;
     }
-    float first = state.subsurfaceWeight < 1.0 &&
-                          (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u
-                      ? primeFullCompactLambertPdf(wi, wo)
+    let first : float = state.subsurfaceWeight < 1.0 &&
+                                (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u
+                            ? primeFullCompactLambertPdf(wi, wo)
+                            : 0.0;
+    let second
+        : float = state.subsurfaceWeight > 0.0
+                      ? primeFullCompactSubsurfacePdf<FixedSubsurface>(wi, wo, state, samplingFlags)
                       : 0.0;
-    float second =
-        state.subsurfaceWeight > 0.0
-            ? primeFullCompactSubsurfacePdf<FixedSubsurface>(wi, wo, state, samplingFlags)
-            : 0.0;
     return lerp(first, second, state.diffuseMix.secondSampleWeight);
 }
 
-public float3 primeFullCompactMixedDiffuseEnergy(PrimeFullCompactOpaqueState state,
-                                                 uint samplingFlags)
+public func primeFullCompactMixedDiffuseEnergy(state: PrimeFullCompactOpaqueState,
+                                               samplingFlags: uint)
+    ->float3
 {
-    float3 first = state.subsurfaceWeight < 1.0 &&
-                           (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u
-                       ? state.baseColor
-                       : float3(0.0);
-    float3 second = state.subsurfaceWeight > 0.0
-                        ? primeFullCompactSubsurfaceEnergy(state, samplingFlags)
-                        : float3(0.0);
-    float3 result = float3(0.0);
+    let first : float3 = state.subsurfaceWeight < 1.0 &&
+                                 (samplingFlags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION) != 0u
+                             ? state.baseColor
+                             : float3(0.0);
+    let second : float3 = state.subsurfaceWeight > 0.0
+                              ? primeFullCompactSubsurfaceEnergy(state, samplingFlags)
+                              : float3(0.0);
+    var result = float3(0.0);
     if (state.subsurfaceWeight < 1.0)
     {
         result = first;
@@ -325,9 +341,10 @@ public float3 primeFullCompactMixedDiffuseEnergy(PrimeFullCompactOpaqueState sta
 }
 
 /// FixedSubsurface 固定当前子集的各向异性；InteriorWeight 要求 0 < subsurfaceWeight < 1。
-public PrimeFullOpenPbrSample primeFullCompactMixedDiffuseSample<let FixedSubsurface : bool = false,
-                                                                 let InteriorWeight : bool = false>(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactMixedDiffuseSample<let FixedSubsurface : bool = false,
+                                               let InteriorWeight : bool = false>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     if (state.diffuseMix.firstSampleWeight + state.diffuseMix.secondSampleWeight <= 0.0)
     {
@@ -336,9 +353,10 @@ public PrimeFullOpenPbrSample primeFullCompactMixedDiffuseSample<let FixedSubsur
     if (randomValue.z <= state.diffuseMix.secondSampleWeight &&
         state.diffuseMix.secondSampleWeight > 0.0)
     {
-        PrimeFullOpenPbrSample result = primeFullCompactSubsurfaceSample<FixedSubsurface>(
-            wi, float3(randomValue.xy, randomValue.z / state.diffuseMix.secondSampleWeight), state,
-            samplingFlags);
+        var result
+            : PrimeFullOpenPbrSample = primeFullCompactSubsurfaceSample<FixedSubsurface>(
+                  wi, float3(randomValue.xy, randomValue.z / state.diffuseMix.secondSampleWeight),
+                  state, samplingFlags);
         if (InteriorWeight)
             result.throughput.value *= state.subsurfaceWeight;
         else
@@ -347,11 +365,11 @@ public PrimeFullOpenPbrSample primeFullCompactMixedDiffuseSample<let FixedSubsur
         result.pdf *= state.diffuseMix.secondSampleWeight;
         return result;
     }
-    PrimeFullOpenPbrSample result = primeFullCompactZeroRoughnessEonSample(
-        wi,
-        float3(randomValue.xy, (randomValue.z - state.diffuseMix.secondSampleWeight) /
-                                   state.diffuseMix.firstSampleWeight),
-        state, samplingFlags);
+    var result : PrimeFullOpenPbrSample = primeFullCompactZeroRoughnessEonSample(
+                     wi,
+                     float3(randomValue.xy, (randomValue.z - state.diffuseMix.secondSampleWeight) /
+                                                state.diffuseMix.firstSampleWeight),
+                     state, samplingFlags);
     if (InteriorWeight)
         result.throughput.value *= 1.0 - state.subsurfaceWeight;
     else
@@ -361,30 +379,33 @@ public PrimeFullOpenPbrSample primeFullCompactMixedDiffuseSample<let FixedSubsur
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactDielectricEval(float3 wi, float3 wo,
-                                                                 PrimeFullCompactOpaqueState state,
-                                                                 uint samplingFlags)
+public func primeFullCompactDielectricEval(wi: float3, wo: float3,
+                                           state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     return primeFullCompactDielectricEvalImpl<false>(wi, wo, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactDielectricEvalImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactDielectricEvalImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrReflectiveEvalBase base = primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
-        wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    let base : PrimeFullOpenPbrReflectiveEvalBase =
+                   primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+                       wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     return primeFullCompactDielectricEvalFromBase<Continuous>(base, state);
 }
 
 /// Fresnel 与能量补偿；base 可供同方向的反射分量及 PDF 共用。
-public PrimeFullOpenPbrThroughput primeFullCompactDielectricEvalFromBase<let Continuous : bool>(
-    PrimeFullOpenPbrReflectiveEvalBase base, PrimeFullCompactOpaqueState state)
+public func primeFullCompactDielectricEvalFromBase<let Continuous : bool>(
+    base: PrimeFullOpenPbrReflectiveEvalBase, state: PrimeFullCompactOpaqueState)
+    ->PrimeFullOpenPbrThroughput
 {
     if (base.flags == PRIME_FULL_OPENPBR_FLAG_NONE)
     {
         return primeFullOpenPbrZeroThroughput();
     }
-    PrimeFullOpenPbrThroughput result;
+    var result : PrimeFullOpenPbrThroughput;
     result.value =
         primeFullOpenPbrSpecularFresnelUnpolarized(state.dielectricFresnel, base.microCosine) *
         base.factor;
@@ -396,27 +417,31 @@ public PrimeFullOpenPbrThroughput primeFullCompactDielectricEvalFromBase<let Con
     return result;
 }
 
-public float primeFullCompactDielectricPdf(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                                           uint samplingFlags)
+public func primeFullCompactDielectricPdf(wi: float3, wo: float3,
+                                          state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
     return primeFullCompactDielectricPdfImpl<false>(wi, wo, state, samplingFlags);
 }
 
-public float primeFullCompactDielectricPdfImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactDielectricPdfImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
     return primeFullOpenPbrReflectivePdfImpl<Continuous>(wi, wo, state.microfacet, samplingFlags,
                                                          PRIME_FULL_OPENPBR_FLAG_REFLECTION);
 }
 
-public float3 primeFullCompactDielectricEnergy(float3 wi, PrimeFullCompactOpaqueState state,
-                                               uint samplingFlags)
+public func primeFullCompactDielectricEnergy(wi: float3, state: PrimeFullCompactOpaqueState,
+                                             samplingFlags: uint)
+    ->float3
 {
     return primeFullCompactDielectricEnergyImpl<false>(wi, state, samplingFlags);
 }
 
-public float3 primeFullCompactDielectricEnergyImpl<let Continuous : bool>(
-    float3 wi, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactDielectricEnergyImpl<let Continuous : bool>(
+    wi: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float3
 {
     if (wi.z < 0.0)
     {
@@ -441,20 +466,23 @@ public float3 primeFullCompactDielectricEnergyImpl<let Continuous : bool>(
     return state.dielectricMultipleScattering.z * state.dielectricFresnel.color;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactDielectricSample(float3 wi, float3 randomValue,
-                                                               PrimeFullCompactOpaqueState state,
-                                                               uint samplingFlags)
+public func primeFullCompactDielectricSample(wi: float3, randomValue: float3,
+                                             state: PrimeFullCompactOpaqueState,
+                                             samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     return primeFullCompactDielectricSampleImpl<false>(wi, randomValue, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactDielectricSampleImpl<let Continuous : bool>(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactDielectricSampleImpl<let Continuous : bool>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
-    PrimeFullOpenPbrReflectiveSampleBase base =
-        primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
-            wi, randomValue, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
+    let base : PrimeFullOpenPbrReflectiveSampleBase =
+                   primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
+                       wi, randomValue, state.microfacet, samplingFlags,
+                       PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     result = base.bsdfSample;
     result.throughput.value *=
         primeFullOpenPbrSpecularFresnelUnpolarized(state.dielectricFresnel, base.microCosine);
@@ -465,30 +493,33 @@ public PrimeFullOpenPbrSample primeFullCompactDielectricSampleImpl<let Continuou
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactConductorEval(float3 wi, float3 wo,
-                                                                PrimeFullCompactOpaqueState state,
-                                                                uint samplingFlags)
+public func primeFullCompactConductorEval(wi: float3, wo: float3,
+                                          state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     return primeFullCompactConductorEvalImpl<false>(wi, wo, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactConductorEvalImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactConductorEvalImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrReflectiveEvalBase base = primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
-        wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    let base : PrimeFullOpenPbrReflectiveEvalBase =
+                   primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+                       wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     return primeFullCompactConductorEvalFromBase<Continuous>(base, state);
 }
 
 /// 金属端复用反射几何；不改变原 Fresnel 与多散射补偿算序。
-public PrimeFullOpenPbrThroughput primeFullCompactConductorEvalFromBase<let Continuous : bool>(
-    PrimeFullOpenPbrReflectiveEvalBase base, PrimeFullCompactOpaqueState state)
+public func primeFullCompactConductorEvalFromBase<let Continuous : bool>(
+    base: PrimeFullOpenPbrReflectiveEvalBase, state: PrimeFullCompactOpaqueState)
+    ->PrimeFullOpenPbrThroughput
 {
     if (base.flags == PRIME_FULL_OPENPBR_FLAG_NONE)
     {
         return primeFullOpenPbrZeroThroughput();
     }
-    PrimeFullOpenPbrThroughput result;
+    var result : PrimeFullOpenPbrThroughput;
     result.value =
         primeFullOpenPbrConductorFresnelUnpolarized(state.conductorFresnel, base.microCosine) *
         base.factor;
@@ -502,30 +533,34 @@ public PrimeFullOpenPbrThroughput primeFullCompactConductorEvalFromBase<let Cont
 }
 
 /// 同方向联合金属响应与 marginal PDF；不更改采样测度。
-public PrimeFullCompactOpaqueEvaluation primeFullCompactConductorEvaluateImpl<
-    let Continuous : bool>(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                           uint samplingFlags)
+public func primeFullCompactConductorEvaluateImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullCompactOpaqueEvaluation
 {
-    PrimeFullOpenPbrReflectiveEvalBase base = primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
-        wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    let base : PrimeFullOpenPbrReflectiveEvalBase =
+                   primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+                       wi, wo, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     return { primeFullCompactConductorEvalFromBase<Continuous>(base, state), base.pdf };
 }
 
-public float primeFullCompactConductorPdf(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                                          uint samplingFlags)
+public func primeFullCompactConductorPdf(wi: float3, wo: float3, state: PrimeFullCompactOpaqueState,
+                                         samplingFlags: uint)
+    ->float
 {
     return primeFullCompactConductorPdfImpl<false>(wi, wo, state, samplingFlags);
 }
 
-public float primeFullCompactConductorPdfImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactConductorPdfImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->float
 {
     return primeFullOpenPbrReflectivePdfImpl<Continuous>(wi, wo, state.microfacet, samplingFlags,
                                                          PRIME_FULL_OPENPBR_FLAG_REFLECTION);
 }
 
-public float3 primeFullCompactConductorEnergy(float3 wi, PrimeFullCompactOpaqueState state,
-                                              uint samplingFlags)
+public func primeFullCompactConductorEnergy(wi: float3, state: PrimeFullCompactOpaqueState,
+                                            samplingFlags: uint)
+    ->float3
 {
     if (wi.z < 0.0)
     {
@@ -542,32 +577,34 @@ public float3 primeFullCompactConductorEnergy(float3 wi, PrimeFullCompactOpaqueS
     {
         return float3(0.0);
     }
-    float3 f0 = state.conductorFresnel.energyF0;
+    let f0 : float3 = state.conductorFresnel.energyF0;
     return primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
                state.microfacet, wi.z, f0,
                clamp(float3(state.conductorFresnel.weight), float3(0.0), float3(1.0))) *
            (float3(1.0) + f0 * (1.0 - state.conductorEss) / state.conductorEss);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactConductorSample(float3 wi, float3 randomValue,
-                                                              PrimeFullCompactOpaqueState state,
-                                                              uint samplingFlags)
+public func primeFullCompactConductorSample(wi: float3, randomValue: float3,
+                                            state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     return primeFullCompactConductorSampleImpl<false>(wi, randomValue, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactConductorSampleImpl<let Continuous : bool>(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactConductorSampleImpl<let Continuous : bool>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
     if (!Continuous && primeFullOpenPbrMicrofacetEffectivelySmooth(state.microfacet))
     {
         return primeFullCompactConductorDiscreteSample(
             wi, primeFullCompactOpaqueDiscreteStateFromFull(state), samplingFlags);
     }
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
-    PrimeFullOpenPbrReflectiveSampleBase base =
-        primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
-            wi, randomValue, state.microfacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
+    let base : PrimeFullOpenPbrReflectiveSampleBase =
+                   primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
+                       wi, randomValue, state.microfacet, samplingFlags,
+                       PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     result = base.bsdfSample;
     result.throughput.value *=
         primeFullOpenPbrConductorFresnelUnpolarized(state.conductorFresnel, base.microCosine);
@@ -580,77 +617,84 @@ public PrimeFullOpenPbrSample primeFullCompactConductorSampleImpl<let Continuous
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactOpaqueLayerEval(float3 wi, float3 wo,
-                                                                  PrimeFullCompactOpaqueState state,
-                                                                  uint samplingFlags)
+public func primeFullCompactOpaqueLayerEval(wi: float3, wo: float3,
+                                            state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     return primeFullCompactOpaqueLayerEvalImpl<false>(wi, wo, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactOpaqueLayerEvalImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state, uint samplingFlags)
+public func primeFullCompactOpaqueLayerEvalImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrThroughput base =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-            ? primeFullCompactMixedDiffuseEval(wi, wo, state, samplingFlags)
-        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-            ? primeFullCompactSubsurfaceEval(wi, wo, state, samplingFlags)
-            : primeFullCompactLambertEval(wi, wo, state, samplingFlags);
-    PrimeFullOpenPbrThroughput specular =
-        primeFullCompactDielectricEvalImpl<Continuous>(wi, wo, state, samplingFlags);
+    let base : PrimeFullOpenPbrThroughput =
+                   state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                       ? primeFullCompactMixedDiffuseEval(wi, wo, state, samplingFlags)
+                   : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                       ? primeFullCompactSubsurfaceEval(wi, wo, state, samplingFlags)
+                       : primeFullCompactLambertEval(wi, wo, state, samplingFlags);
+    let specular : PrimeFullOpenPbrThroughput =
+                       primeFullCompactDielectricEvalImpl<Continuous>(wi, wo, state, samplingFlags);
     return primeFullCompactLayerEval(base, specular, state.layer);
 }
 
 /// 联合层响应与完整混合 PDF，共享反射几何。
-public PrimeFullCompactOpaqueEvaluation primeFullCompactOpaqueLayerEvaluateImpl<
-    let Continuous : bool>(float3 wi, float3 wo, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueLayerEvaluateImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState)
+    ->PrimeFullCompactOpaqueEvaluation
 {
-    PrimeFullOpenPbrReflectiveEvalBase reflection =
-        primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(wi, wo, state.microfacet,
-                                                           PRIME_FULL_OPENPBR_FLAG_ALL,
-                                                           PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+    let reflection : PrimeFullOpenPbrReflectiveEvalBase =
+                         primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+                             wi, wo, state.microfacet, PRIME_FULL_OPENPBR_FLAG_ALL,
+                             PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     return primeFullCompactOpaqueLayerEvaluateFromBase<Continuous>(wi, wo, state, reflection);
 }
 
 /// 已准备反射几何时，仅补充当前层的 base 与原混合权重。
-public PrimeFullCompactOpaqueEvaluation primeFullCompactOpaqueLayerEvaluateFromBase<
-    let Continuous : bool>(float3 wi, float3 wo, PrimeFullCompactOpaqueState state,
-                           PrimeFullOpenPbrReflectiveEvalBase reflection)
+public func primeFullCompactOpaqueLayerEvaluateFromBase<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState,
+    reflection: PrimeFullOpenPbrReflectiveEvalBase)
+    ->PrimeFullCompactOpaqueEvaluation
 {
-    PrimeFullOpenPbrThroughput base =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-            ? primeFullCompactMixedDiffuseEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-            ? primeFullCompactSubsurfaceEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactLambertEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
-    float basePdf =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-            ? primeFullCompactMixedDiffusePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-            ? primeFullCompactSubsurfacePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactLambertPdf(wi, wo);
-    PrimeFullOpenPbrThroughput specular =
-        primeFullCompactDielectricEvalFromBase<Continuous>(reflection, state);
+    let base
+        : PrimeFullOpenPbrThroughput =
+              state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                  ? primeFullCompactMixedDiffuseEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+              : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                  ? primeFullCompactSubsurfaceEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                  : primeFullCompactLambertEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+    let basePdf
+        : float = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                      ? primeFullCompactMixedDiffusePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                  : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                      ? primeFullCompactSubsurfacePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                      : primeFullCompactLambertPdf(wi, wo);
+    let specular : PrimeFullOpenPbrThroughput =
+                       primeFullCompactDielectricEvalFromBase<Continuous>(reflection, state);
     return { primeFullCompactLayerEval(base, specular, state.layer),
              state.layer.baseSampleWeight + state.layer.specularSampleWeight <= 0.0
                  ? 0.0
                  : lerp(basePdf, reflection.pdf, state.layer.specularSampleWeight) };
 }
 
-public float primeFullCompactOpaqueLayerPdf(float3 wi, float3 wo, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueLayerPdf(wi: float3, wo: float3,
+                                           state: PrimeFullCompactOpaqueState)
+    ->float
 {
     return primeFullCompactOpaqueLayerPdfImpl<false>(wi, wo, state);
 }
 
-public float primeFullCompactOpaqueLayerPdfImpl<let Continuous : bool>(
-    float3 wi, float3 wo, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueLayerPdfImpl<let Continuous : bool>(
+    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState)
+    ->float
 {
-    float basePdf =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-            ? primeFullCompactMixedDiffusePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-            ? primeFullCompactSubsurfacePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactLambertPdf(wi, wo);
+    let basePdf
+        : float = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                      ? primeFullCompactMixedDiffusePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                  : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                      ? primeFullCompactSubsurfacePdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                      : primeFullCompactLambertPdf(wi, wo);
     if (state.layer.baseSampleWeight + state.layer.specularSampleWeight <= 0.0)
     {
         return 0.0;
@@ -661,16 +705,18 @@ public float primeFullCompactOpaqueLayerPdfImpl<let Continuous : bool>(
         state.layer.specularSampleWeight);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactOpaqueLayerSample(float3 wi, float3 randomValue,
-                                                                PrimeFullCompactOpaqueState state,
-                                                                bool useEonDiffuseMapping)
+public func primeFullCompactOpaqueLayerSample(wi: float3, randomValue: float3,
+                                              state: PrimeFullCompactOpaqueState,
+                                              useEonDiffuseMapping: bool)
+    ->PrimeFullOpenPbrSample
 {
     return primeFullCompactOpaqueLayerSampleImpl<false>(wi, randomValue, state,
                                                         useEonDiffuseMapping);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactOpaqueLayerSampleImpl<let Continuous : bool>(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state, bool useEonDiffuseMapping)
+public func primeFullCompactOpaqueLayerSampleImpl<let Continuous : bool>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactOpaqueState, useEonDiffuseMapping: bool)
+    ->PrimeFullOpenPbrSample
 {
     if (state.layer.baseSampleWeight + state.layer.specularSampleWeight <= 0.0)
     {
@@ -678,36 +724,38 @@ public PrimeFullOpenPbrSample primeFullCompactOpaqueLayerSampleImpl<let Continuo
     }
     if (randomValue.z <= state.layer.specularSampleWeight && state.layer.specularSampleWeight > 0.0)
     {
-        PrimeFullOpenPbrSample result = primeFullCompactDielectricSampleImpl<Continuous>(
-            wi, float3(randomValue.xy, randomValue.z / state.layer.specularSampleWeight), state,
-            PRIME_FULL_OPENPBR_FLAG_ALL);
+        var result
+            : PrimeFullOpenPbrSample = primeFullCompactDielectricSampleImpl<Continuous>(
+                  wi, float3(randomValue.xy, randomValue.z / state.layer.specularSampleWeight),
+                  state, PRIME_FULL_OPENPBR_FLAG_ALL);
         result.pdf *= state.layer.specularSampleWeight;
         return result;
     }
-    PrimeFullOpenPbrSample result =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-            ? primeFullCompactMixedDiffuseSample(
-                  wi,
-                  float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
-                                             state.layer.baseSampleWeight),
-                  state, PRIME_FULL_OPENPBR_FLAG_ALL)
-        : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-            ? primeFullCompactSubsurfaceSample(
-                  wi,
-                  float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
-                                             state.layer.baseSampleWeight),
-                  state, PRIME_FULL_OPENPBR_FLAG_ALL)
-        : useEonDiffuseMapping
-            ? primeFullCompactZeroRoughnessEonSample(
-                  wi,
-                  float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
-                                             state.layer.baseSampleWeight),
-                  state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactLambertSample(
-                  wi,
-                  float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
-                                             state.layer.baseSampleWeight),
-                  state, PRIME_FULL_OPENPBR_FLAG_ALL);
+    var result
+        : PrimeFullOpenPbrSample =
+              state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                  ? primeFullCompactMixedDiffuseSample(
+                        wi,
+                        float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
+                                                   state.layer.baseSampleWeight),
+                        state, PRIME_FULL_OPENPBR_FLAG_ALL)
+              : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                  ? primeFullCompactSubsurfaceSample(
+                        wi,
+                        float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
+                                                   state.layer.baseSampleWeight),
+                        state, PRIME_FULL_OPENPBR_FLAG_ALL)
+              : useEonDiffuseMapping
+                  ? primeFullCompactZeroRoughnessEonSample(
+                        wi,
+                        float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
+                                                   state.layer.baseSampleWeight),
+                        state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                  : primeFullCompactLambertSample(
+                        wi,
+                        float3(randomValue.xy, (randomValue.z - state.layer.specularSampleWeight) /
+                                                   state.layer.baseSampleWeight),
+                        state, PRIME_FULL_OPENPBR_FLAG_ALL);
     result.throughput =
         primeFullOpenPbrThroughputScale(result.throughput, state.layer.transmittanceIn);
     result.pdf *= state.layer.baseSampleWeight;

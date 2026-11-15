@@ -12,18 +12,19 @@ import "bsdf/openpbr/math/spectrum.slang";
 import "bsdf/openpbr/math/fresnel.slang";
 import "bsdf/openpbr/service/support/conversion.slang";
 
-PrimeFullOpenPbrSample primeFullCompactMetallicSample(float3 wi, float3 randomValue,
-                                                      PrimeFullCompactOpaqueState state,
-                                                      bool useEonDiffuseMapping)
+func primeFullCompactMetallicSample(wi: float3, randomValue: float3,
+                                    state: PrimeFullCompactOpaqueState, useEonDiffuseMapping: bool)
+    ->PrimeFullOpenPbrSample
 {
-    float m = state.metalness;
-    PrimeFullOpenPbrSample result =
-        randomValue.z < m
-            ? primeFullCompactConductorSample(wi, float3(randomValue.xy, randomValue.z / m), state,
-                                              PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactOpaqueLayerSample(
-                  wi, float3(randomValue.xy, (randomValue.z - m) / (1.0 - m)), state,
-                  useEonDiffuseMapping);
+    let m : float = state.metalness;
+    var result
+        : PrimeFullOpenPbrSample =
+              randomValue.z < m
+                  ? primeFullCompactConductorSample(wi, float3(randomValue.xy, randomValue.z / m),
+                                                    state, PRIME_FULL_OPENPBR_FLAG_ALL)
+                  : primeFullCompactOpaqueLayerSample(
+                        wi, float3(randomValue.xy, (randomValue.z - m) / (1.0 - m)), state,
+                        useEonDiffuseMapping);
     if (!primeFullOpenPbrHasSample(result))
         return result;
     if (primeFullOpenPbrIsDelta(result.throughput.flags))
@@ -38,16 +39,17 @@ PrimeFullOpenPbrSample primeFullCompactMetallicSample(float3 wi, float3 randomVa
     }
     else
     {
-        PrimeFullCompactOpaqueEvaluation evaluated =
-            primeFullCompactOpaqueEvaluate(wi, result.wo, state);
+        let evaluated : PrimeFullCompactOpaqueEvaluation =
+                            primeFullCompactOpaqueEvaluate(wi, result.wo, state);
         result.throughput = evaluated.throughput;
         result.pdf = evaluated.pdf;
     }
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactOpaqueSample(float3 wi, float3 randomValue,
-                                                           PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueSample(wi: float3, randomValue: float3,
+                                         state: PrimeFullCompactOpaqueState)
+    ->PrimeFullOpenPbrSample
 {
     if (state.metalness > 0.0 && state.metalness < 1.0)
         return primeFullCompactMetallicSample(wi, randomValue, state, false);
@@ -57,8 +59,9 @@ public PrimeFullOpenPbrSample primeFullCompactOpaqueSample(float3 wi, float3 ran
                : primeFullCompactOpaqueLayerSample(wi, randomValue, state, false);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactOpaqueSampleWithEonDiffuse(
-    float3 wi, float3 randomValue, PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueSampleWithEonDiffuse(wi: float3, randomValue: float3,
+                                                       state: PrimeFullCompactOpaqueState)
+    ->PrimeFullOpenPbrSample
 {
     if (state.metalness > 0.0 && state.metalness < 1.0)
         return primeFullCompactMetallicSample(wi, randomValue, state, true);

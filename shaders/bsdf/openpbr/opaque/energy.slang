@@ -7,10 +7,10 @@ import "bsdf/openpbr/opaque/state.slang";
 import "bsdf/openpbr/opaque/lobes.slang";
 import "bsdf/openpbr/contract/flags.slang";
 
-public PrimeFullCompactOpaqueEnergy primeFullCompactOpaqueEnergy(float3 wi,
-                                                                 PrimeFullCompactOpaqueState state)
+public func primeFullCompactOpaqueEnergy(wi: float3, state: PrimeFullCompactOpaqueState)
+    ->PrimeFullCompactOpaqueEnergy
 {
-    PrimeFullCompactOpaqueEnergy result;
+    var result : PrimeFullCompactOpaqueEnergy;
     result.diffuse = float3(0.0);
     result.specular = float3(0.0);
     if (state.kind == PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR)
@@ -18,11 +18,12 @@ public PrimeFullCompactOpaqueEnergy primeFullCompactOpaqueEnergy(float3 wi,
         result.specular = primeFullCompactConductorEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
         return result;
     }
-    float3 base = state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
-                      ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE)
-                  : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
-                      ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE)
-                      : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE);
+    let base : float3 =
+                   state.kind == PRIME_FULL_COMPACT_OPAQUE_MIXED_SUBSURFACE
+                       ? primeFullCompactMixedDiffuseEnergy(state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE)
+                   : state.kind == PRIME_FULL_COMPACT_OPAQUE_SUBSURFACE
+                       ? primeFullCompactSubsurfaceEnergy(state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE)
+                       : primeFullCompactLambertEnergy(wi, state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE);
     result.diffuse = base * state.layer.transmittanceIn;
     result.specular = primeFullCompactDielectricEnergy(
         wi, state, PRIME_FULL_OPENPBR_FLAG_SPECULAR | PRIME_FULL_OPENPBR_FLAG_DELTA);

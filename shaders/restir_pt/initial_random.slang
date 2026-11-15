@@ -4,23 +4,23 @@ import restir_pt.rng;
 
 namespace restir_pt
 {
-public uint initialRandomState<let Dimension : uint>(uint seed)
+public func initialRandomState<let Dimension : uint>(seed: uint)->uint
 {
-    uint multiplier = 1u;
-    uint increment = 0u;
+    var multiplier = 1u;
+    var increment = 0u;
     [unroll]
-    for (uint dimension = 0; dimension < Dimension; ++dimension)
+    for (var dimension: uint = 0; dimension < Dimension; ++dimension)
     {
         multiplier *= 1664525u;
         increment = 1664525u * increment + 1013904223u;
     }
     return multiplier * seed + increment;
 }
-public float initialRandomValue<let Dimension : uint>(uint seed)
+public func initialRandomValue<let Dimension : uint>(seed: uint)->float
 {
     return float(initialRandomState<Dimension>(seed) >> 8) * 0x1p-24f;
 }
-public float3 initialLightRandom<let LightSamples : uint>(uint seed, uint index)
+public func initialLightRandom<let LightSamples : uint>(seed: uint, index: uint)->float3
 {
     if (LightSamples == 2)
         return float3(index == 0 ? initialRandomValue<4>(seed) : initialRandomValue<6>(seed),
@@ -29,17 +29,18 @@ public float3 initialLightRandom<let LightSamples : uint>(uint seed, uint index)
     return float3(initialRandomValue<4>(seed), initialRandomValue<5>(seed),
                   initialRandomValue<3>(seed));
 }
-public float initialLightRISRandom(uint seed, uint index)
+public func initialLightRISRandom(seed: uint, index: uint)->float
 {
     if (index == 0)
         return initialRandomValue<2>(seed);
     return float(block_cipher_tea(seed, 0x6e656532u).x >> 8) * 0x1p-24f;
 }
-public float3 initialBsdfRandom(uint seed, bool useRussianRoulette)
+public func initialBsdfRandom(seed: uint, useRussianRoulette: bool)->float3
 {
-    uint selector = useRussianRoulette ? initialRandomState<9>(seed) : initialRandomState<8>(seed);
-    TinyUniformSampleGenerator sampler = rng_from_seed(selector);
-    float2 direction = sampler.next2D();
+    let selector : uint = useRussianRoulette ? initialRandomState<9>(seed)
+                                             : initialRandomState<8>(seed);
+    var sampler : TinyUniformSampleGenerator = rng_from_seed(selector);
+    let direction : float2 = sampler.next2D();
     return float3(direction, float(selector >> 8) * 0x1p-24f);
 }
 }

@@ -10,16 +10,16 @@ import "bsdf/openpbr/math/frame.slang";
 import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/contract/flags.slang";
 
-public bool3 lessThan(float3 first, float3 second)
+public func lessThan(first: float3, second: float3)->bool3
 {
     return first < second;
 }
-public bool3 lessThanEqual(float3 first, float3 second)
+public func lessThanEqual(first: float3, second: float3)->bool3
 {
     return first <= second;
 }
 
-public bool primeFullOpenPbrHasSample(PrimeFullOpenPbrSample sampleValue)
+public func primeFullOpenPbrHasSample(sampleValue: PrimeFullOpenPbrSample)->bool
 {
     if (sampleValue.throughput.flags == PRIME_FULL_OPENPBR_FLAG_NONE)
     {
@@ -41,9 +41,9 @@ public bool primeFullOpenPbrHasSample(PrimeFullOpenPbrSample sampleValue)
     return true;
 }
 
-public uint primeFullOpenPbrToBsdfContinuousEventFlags(uint flags)
+public func primeFullOpenPbrToBsdfContinuousEventFlags(flags: uint)->uint
 {
-    uint result = 0u;
+    var result = 0u;
     if (primeFullOpenPbrIsReflective(flags))
     {
         result |= PRIME_BSDF_EVENT_REFLECTION;
@@ -63,9 +63,9 @@ public uint primeFullOpenPbrToBsdfContinuousEventFlags(uint flags)
     return result;
 }
 
-public uint primeFullOpenPbrToBsdfEventFlags(uint flags)
+public func primeFullOpenPbrToBsdfEventFlags(flags: uint)->uint
 {
-    uint result = primeFullOpenPbrToBsdfContinuousEventFlags(flags);
+    var result : uint = primeFullOpenPbrToBsdfContinuousEventFlags(flags);
     if (primeFullOpenPbrIsDelta(flags))
     {
         result |= PRIME_BSDF_EVENT_DISCRETE;

@@ -5,110 +5,110 @@ module "bsdf/openpbr/contract/material.slang";
 
 public struct PrimeFullOpenPbrOnb
 {
-    public float3 tangent;
-    public float3 bitangent;
-    public float3 normal;
+    public var tangent : float3;
+    public var bitangent : float3;
+    public var normal : float3;
 };
 
 public struct PrimeFullOpenPbrWeight
 {
-    public float base;
-    public float diffuseRoughness;
-    public float specular;
-    public float metalness;
-    public float subsurface;
-    public float transmission;
-    public float coat;
-    public float fuzz;
-    public float thinFilm;
-    public float diffraction;
+    public var base : float;
+    public var diffuseRoughness : float;
+    public var specular : float;
+    public var metalness : float;
+    public var subsurface : float;
+    public var transmission : float;
+    public var coat : float;
+    public var fuzz : float;
+    public var thinFilm : float;
+    public var diffraction : float;
 };
 
 public struct PrimeFullOpenPbrGeometry
 {
-    public uint thinWalled;
-    public float thickness;
-    public PrimeFullOpenPbrOnb onb;
+    public var thinWalled : uint;
+    public var thickness : float;
+    public var onb : PrimeFullOpenPbrOnb;
 };
 
 public struct PrimeFullOpenPbrSpecular
 {
-    public float3 color;
-    public float roughness;
-    public float roughnessAnisotropy;
-    public float ior;
+    public var color : float3;
+    public var roughness : float;
+    public var roughnessAnisotropy : float;
+    public var ior : float;
 };
 
 public struct PrimeFullOpenPbrEmission
 {
-    public float3 luminance;
+    public var luminance : float3;
 };
 public struct PrimeFullOpenPbrBase
 {
-    public float3 color;
+    public var color : float3;
 };
 
 public struct PrimeFullOpenPbrSubsurface
 {
-    public float3 color;
-    public float3 radius;
-    public float scatterAnisotropy;
+    public var color : float3;
+    public var radius : float3;
+    public var scatterAnisotropy : float;
 };
 
 public struct PrimeFullOpenPbrTransmission
 {
-    public float3 color;
-    public float depth;
-    public float3 scatter;
-    public float scatterAnisotropy;
-    public float dispersionScale;
-    public float dispersionAbbeNumber;
+    public var color : float3;
+    public var depth : float;
+    public var scatter : float3;
+    public var scatterAnisotropy : float;
+    public var dispersionScale : float;
+    public var dispersionAbbeNumber : float;
 };
 
 public struct PrimeFullOpenPbrCoat
 {
-    public float3 color;
-    public float roughness;
-    public float roughnessAnisotropy;
-    public float ior;
-    public float darkening;
-    public float roughening;
-    public PrimeFullOpenPbrOnb onb;
+    public var color : float3;
+    public var roughness : float;
+    public var roughnessAnisotropy : float;
+    public var ior : float;
+    public var darkening : float;
+    public var roughening : float;
+    public var onb : PrimeFullOpenPbrOnb;
 };
 
 public struct PrimeFullOpenPbrFuzz
 {
-    public float3 color;
-    public float roughness;
+    public var color : float3;
+    public var roughness : float;
 };
 
 public struct PrimeFullOpenPbrThinFilm
 {
-    public float thickness;
-    public float ior;
+    public var thickness : float;
+    public var ior : float;
 };
 
 public struct PrimeFullOpenPbrDiffraction
 {
-    public float3 color;
-    public float thickness;
-    public float2 invPitch;
-    public float angle;
-    public uint lobeCount;
-    public uint kind;
+    public var color : float3;
+    public var thickness : float;
+    public var invPitch : float2;
+    public var angle : float;
+    public var lobeCount : uint;
+    public var kind : uint;
 };
 
 public struct PrimeFullOpenPbrMaterial
 {
-    public PrimeFullOpenPbrWeight weight;
-    public PrimeFullOpenPbrGeometry geometry;
-    public PrimeFullOpenPbrSpecular specular;
-    public PrimeFullOpenPbrEmission emission;
-    public PrimeFullOpenPbrBase base;
-    public PrimeFullOpenPbrSubsurface subsurface;
-    public PrimeFullOpenPbrTransmission transmission;
-    public PrimeFullOpenPbrCoat coat;
-    public PrimeFullOpenPbrFuzz fuzz;
-    public PrimeFullOpenPbrThinFilm thinFilm;
-    public PrimeFullOpenPbrDiffraction diffraction;
+    public var weight : PrimeFullOpenPbrWeight;
+    public var geometry : PrimeFullOpenPbrGeometry;
+    public var specular : PrimeFullOpenPbrSpecular;
+    public var emission : PrimeFullOpenPbrEmission;
+    public var base : PrimeFullOpenPbrBase;
+    public var subsurface : PrimeFullOpenPbrSubsurface;
+    public var transmission : PrimeFullOpenPbrTransmission;
+    public var coat : PrimeFullOpenPbrCoat;
+    public var fuzz : PrimeFullOpenPbrFuzz;
+    public var thinFilm : PrimeFullOpenPbrThinFilm;
+    public var diffraction : PrimeFullOpenPbrDiffraction;
 };

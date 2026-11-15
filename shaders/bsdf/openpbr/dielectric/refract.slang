@@ -16,12 +16,14 @@ import "bsdf/openpbr/math/spectrum.slang";
 
 // 连续 core 仅供已证明 max(alpha)>=1e-4 且实际界面 ior!=1 的 solid 入口。
 // 通用入口保留原光滑／匹配 IOR 分流；连续物理公式与后处理共用。
-public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEval(
-    float3 wi, float3 wo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveEval(wi: float3, wo: float3,
+                                           state: PrimeFullCompactTransmissionState,
+                                           samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrThroughput result = primeFullOpenPbrZeroThroughput();
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
+    let result : PrimeFullOpenPbrThroughput = primeFullOpenPbrZeroThroughput();
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
     if (primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet) || fresnel.ior == 1.0)
     {
         return result;
@@ -29,16 +31,19 @@ public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEval(
     return primeFullCompactRefractiveEvalContinuous(wi, wo, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEvalContinuous(
-    float3 wi, float3 wo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveEvalContinuous(wi: float3, wo: float3,
+                                                     state: PrimeFullCompactTransmissionState,
+                                                     samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    PrimeFullOpenPbrThroughput result = primeFullOpenPbrZeroThroughput();
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
-    bool reflected = wi.z * wo.z > 0.0;
-    float etaPath = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
-    float3 halfVector = wi + etaPath * wo;
-    float lengthSquared = dot(halfVector, halfVector);
+
+    var result : PrimeFullOpenPbrThroughput = primeFullOpenPbrZeroThroughput();
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
+    let reflected : bool = wi.z * wo.z > 0.0;
+    let etaPath : float = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
+    var halfVector : float3 = wi + etaPath * wo;
+    let lengthSquared : float = dot(halfVector, halfVector);
     if (wo.z == 0.0 || wi.z == 0.0 || lengthSquared == 0.0)
     {
         return result;
@@ -48,14 +53,14 @@ public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEvalContinuous(
     {
         halfVector = -halfVector;
     }
-    float microIncident = dot(wi, halfVector);
-    float microOutgoing = dot(wo, halfVector);
+    let microIncident : float = dot(wi, halfVector);
+    let microOutgoing : float = dot(wo, halfVector);
     if (microIncident * wi.z < 0.0 || microOutgoing * wo.z < 0.0)
     {
         return result;
     }
-    PrimeFullOpenPbrVecPair rt = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
-    float distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+    let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
+    let distribution : float = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
     if (reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION) != 0u)
     {
         result.value =
@@ -64,9 +69,9 @@ public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEvalContinuous(
     }
     else if (!reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION) != 0u)
     {
-        float denominator = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
-                                etaPath, microIncident, microOutgoing)) *
-                            wi.z;
+        let denominator : float = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                                      etaPath, microIncident, microOutgoing)) *
+                                  wi.z;
         result.value = rt.second * distribution *
                        primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
                        abs(microIncident * microOutgoing / denominator);
@@ -77,29 +82,32 @@ public PrimeFullOpenPbrThroughput primeFullCompactRefractiveEvalContinuous(
 }
 
 /// 连续 solid 同方向共享半向量、Fresnel 和 D，保留响应与密度各自算序。
-public PrimeFullCompactTransmissionEvaluation primeFullCompactRefractiveEvaluateContinuous(
-    float3 wi, float3 wo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveEvaluateContinuous(wi: float3, wo: float3,
+                                                         state: PrimeFullCompactTransmissionState,
+                                                         samplingFlags: uint)
+    ->PrimeFullCompactTransmissionEvaluation
 {
-    PrimeFullCompactTransmissionEvaluation result = {};
+
+    var result : PrimeFullCompactTransmissionEvaluation = {};
     if (!primeFullOpenPbrIsSpecular(samplingFlags))
         return result;
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
-    bool reflected = wi.z * wo.z > 0.0;
-    float etaPath = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
-    float3 halfVector = wi + etaPath * wo;
-    float lengthSquared = dot(halfVector, halfVector);
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
+    let reflected : bool = wi.z * wo.z > 0.0;
+    let etaPath : float = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
+    var halfVector : float3 = wi + etaPath * wo;
+    let lengthSquared : float = dot(halfVector, halfVector);
     if (wo.z == 0.0 || wi.z == 0.0 || lengthSquared == 0.0)
         return result;
     halfVector *= rsqrt(lengthSquared);
     if (halfVector.z <= 0.0)
         halfVector = -halfVector;
-    float microIncident = dot(wi, halfVector);
-    float microOutgoing = dot(wo, halfVector);
+    let microIncident : float = dot(wi, halfVector);
+    let microOutgoing : float = dot(wo, halfVector);
     if (microIncident * wi.z < 0.0 || microOutgoing * wo.z < 0.0)
         return result;
-    PrimeFullOpenPbrVecPair rt = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
-    float distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+    let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
+    let distribution : float = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
     if (reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION) != 0u)
     {
         result.throughput.value =
@@ -108,44 +116,46 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactRefractiveEvaluate
     }
     else if (!reflected && (samplingFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION) != 0u)
     {
-        float denominator = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
-                                etaPath, microIncident, microOutgoing)) *
-                            wi.z;
+        let denominator : float = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                                      etaPath, microIncident, microOutgoing)) *
+                                  wi.z;
         result.throughput.value = rt.second * distribution *
                                   primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
                                   abs(microIncident * microOutgoing / denominator);
         result.throughput.value *= 1.0 / primeFullOpenPbrSquare(etaPath);
         result.throughput.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION;
     }
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
         reflectionProbability = 0.0;
     if (!primeFullOpenPbrIsTransmissive(samplingFlags))
         transmissionProbability = 0.0;
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
         return result;
-    float microfacetPdf = primeFullOpenPbrMicrofacetPdfFromDistribution(
-        microfacet, wi.z > 0.0 ? wi : -wi, halfVector, false, distribution);
+    let microfacetPdf : float = primeFullOpenPbrMicrofacetPdfFromDistribution(
+                            microfacet, wi.z > 0.0 ? wi : -wi, halfVector, false, distribution);
     if (reflected)
         result.pdf =
             microfacetPdf / (4.0 * abs(microIncident)) * reflectionProbability / probabilitySum;
     else
     {
-        float denominator = primeFullOpenPbrSquare(
-            primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
+        let denominator : float = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                              etaPath, microIncident, microOutgoing));
         result.pdf = microfacetPdf * abs(microOutgoing) / denominator * transmissionProbability /
                      probabilitySum;
     }
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactRefractiveSample(
-    float3 wi, float3 randomValue, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveSample(wi: float3, randomValue: float3,
+                                             state: PrimeFullCompactTransmissionState,
+                                             samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
     if (primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet) || fresnel.ior == 1.0)
     {
         return primeFullCompactRefractiveDiscreteSample(wi, randomValue.z, state, samplingFlags);
@@ -153,29 +163,31 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSample(
     return primeFullCompactRefractiveSampleContinuous(wi, randomValue, state, samplingFlags);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
-    float3 wi, float3 randomValue, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactRefractiveSampleContinuous(wi: float3, randomValue: float3,
+                                                       state: PrimeFullCompactTransmissionState,
+                                                       samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
-    float3 halfVector = float3(0.0, 0.0, 1.0);
-    float microfacetPdf = 1.0;
-    float distribution = 1.0;
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
+    var halfVector = float3(0.0, 0.0, 1.0);
+    var microfacetPdf = 1.0;
+    var distribution = 1.0;
     if (!primeFullOpenPbrIsSpecular(samplingFlags))
     {
         return primeFullOpenPbrZeroSample();
     }
-    float3 sampleDirection = wi.z > 0.0 ? wi : -wi;
+    let sampleDirection : float3 = wi.z > 0.0 ? wi : -wi;
     halfVector =
         primeFullOpenPbrMicrofacetSample(microfacet, sampleDirection, randomValue.xy, false);
     microfacetPdf = primeFullOpenPbrMicrofacetPdf(microfacet, sampleDirection, halfVector, false);
     distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
-    float microIncident = dot(halfVector, wi);
-    PrimeFullOpenPbrVecPair rt = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
-    float3 reflection = rt.first;
-    float3 transmission = rt.second;
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(reflection);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(transmission);
+    let microIncident : float = dot(halfVector, wi);
+    let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
+    var reflection : float3 = rt.first;
+    let transmission : float3 = rt.second;
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(reflection);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(transmission);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
     {
         reflectionProbability = 0.0;
@@ -184,34 +196,34 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
     {
         transmissionProbability = 0.0;
     }
-    PrimeFullOpenPbrRefractResult refracted =
-        primeFullOpenPbrSpecularFresnelRefract(fresnel, -wi, halfVector);
+    let refracted : PrimeFullOpenPbrRefractResult =
+                        primeFullOpenPbrSpecularFresnelRefract(fresnel, -wi, halfVector);
     if (refracted.valid == 0u)
     {
         transmissionProbability = 0.0;
         reflection = float3(1.0);
     }
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
     {
         return primeFullOpenPbrZeroSample();
     }
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (randomValue.z < transmissionProbability / probabilitySum)
     {
-        float3 wo = refracted.wo;
+        var wo : float3 = refracted.wo;
         if (wi.z * wo.z >= 0.0)
         {
             return primeFullOpenPbrZeroSample();
         }
-        float etaPath = refracted.relativeIor;
+        let etaPath : float = refracted.relativeIor;
         result.wo = wo;
         result.eta = etaPath;
         result.throughput.value = transmission;
         result.pdf = transmissionProbability / probabilitySum;
-        float microOutgoing = dot(wo, halfVector);
-        float denominator = primeFullOpenPbrSquare(
-            primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
+        let microOutgoing : float = dot(wo, halfVector);
+        let denominator : float = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                              etaPath, microIncident, microOutgoing));
         result.pdf *= microfacetPdf * abs(microOutgoing) / denominator;
         result.throughput.value = transmission * distribution *
                                   primeFullOpenPbrMicrofacetG2t(microfacet, wi, wo) *
@@ -221,7 +233,7 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
     }
     else
     {
-        float3 wo = reflect(-wi, halfVector);
+        var wo : float3 = reflect(-wi, halfVector);
         if (wi.z * wo.z < 0.0)
         {
             return primeFullOpenPbrZeroSample();
@@ -237,9 +249,10 @@ public PrimeFullOpenPbrSample primeFullCompactRefractiveSampleContinuous(
     return result;
 }
 
-public float primeFullCompactRefractivePdf(float3 wi, float3 wo,
-                                           PrimeFullCompactTransmissionState state,
-                                           uint samplingFlags)
+public func primeFullCompactRefractivePdf(wi: float3, wo: float3,
+                                          state: PrimeFullCompactTransmissionState,
+                                          samplingFlags: uint)
+    ->float
 {
     if (primeFullOpenPbrMicrofacetEffectivelySmooth(state.specularMicrofacet) ||
         state.specularFresnel.ior == 1.0)
@@ -247,20 +260,22 @@ public float primeFullCompactRefractivePdf(float3 wi, float3 wo,
     return primeFullCompactRefractivePdfContinuous(wi, wo, state, samplingFlags);
 }
 
-public float primeFullCompactRefractivePdfContinuous(float3 wi, float3 wo,
-                                                     PrimeFullCompactTransmissionState state,
-                                                     uint samplingFlags)
+public func primeFullCompactRefractivePdfContinuous(wi: float3, wo: float3,
+                                                    state: PrimeFullCompactTransmissionState,
+                                                    samplingFlags: uint)
+    ->float
 {
-    PrimeFullOpenPbrMicrofacet microfacet = state.specularMicrofacet;
-    PrimeFullOpenPbrSpecularFresnel fresnel = state.specularFresnel;
+
+    let microfacet : PrimeFullOpenPbrMicrofacet = state.specularMicrofacet;
+    let fresnel : PrimeFullOpenPbrSpecularFresnel = state.specularFresnel;
     if (!primeFullOpenPbrIsSpecular(samplingFlags))
     {
         return 0.0;
     }
-    bool reflected = wi.z * wo.z > 0.0;
-    float etaPath = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
-    float3 halfVector = wi + etaPath * wo;
-    float lengthSquared = dot(halfVector, halfVector);
+    let reflected : bool = wi.z * wo.z > 0.0;
+    let etaPath : float = reflected ? 1.0 : (wi.z > 0.0 ? fresnel.ior : 1.0 / fresnel.ior);
+    var halfVector : float3 = wi + etaPath * wo;
+    let lengthSquared : float = dot(halfVector, halfVector);
     if (wo.z == 0.0 || wi.z == 0.0 || lengthSquared == 0.0)
     {
         return 0.0;
@@ -270,15 +285,15 @@ public float primeFullCompactRefractivePdfContinuous(float3 wi, float3 wo,
     {
         halfVector = -halfVector;
     }
-    float microIncident = dot(wi, halfVector);
-    float microOutgoing = dot(wo, halfVector);
+    let microIncident : float = dot(wi, halfVector);
+    let microOutgoing : float = dot(wo, halfVector);
     if (microIncident * wi.z < 0.0 || microOutgoing * wo.z < 0.0)
     {
         return 0.0;
     }
-    PrimeFullOpenPbrVecPair rt = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+    let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
     {
         reflectionProbability = 0.0;
@@ -287,26 +302,29 @@ public float primeFullCompactRefractivePdfContinuous(float3 wi, float3 wo,
     {
         transmissionProbability = 0.0;
     }
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
     {
         return 0.0;
     }
-    float microfacetPdf =
-        primeFullOpenPbrMicrofacetPdf(microfacet, wi.z > 0.0 ? wi : -wi, halfVector, false);
+    let microfacetPdf : float = primeFullOpenPbrMicrofacetPdf(microfacet, wi.z > 0.0 ? wi : -wi,
+                                                              halfVector, false);
     if (reflected)
     {
         return microfacetPdf / (4.0 * abs(microIncident)) * reflectionProbability / probabilitySum;
     }
-    float denominator = primeFullOpenPbrSquare(
-        primeFullOpenPbrRefractionDenominator(etaPath, microIncident, microOutgoing));
+    let denominator : float = primeFullOpenPbrSquare(primeFullOpenPbrRefractionDenominator(
+                          etaPath, microIncident, microOutgoing));
     return microfacetPdf * abs(microOutgoing) / denominator * transmissionProbability /
            probabilitySum;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactFinishSolidEvaluation(
-    PrimeFullOpenPbrThroughput result, PrimeFullCompactTransmissionState state, bool continuous)
+public func primeFullCompactFinishSolidEvaluation(result: PrimeFullOpenPbrThroughput,
+                                                  state: PrimeFullCompactTransmissionState,
+                                                  continuous: bool)
+    ->PrimeFullOpenPbrThroughput
 {
+    var result = result;
     if (result.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
     {
         if (primeFullOpenPbrIsTransmissive(result.flags))
@@ -323,14 +341,14 @@ public PrimeFullOpenPbrThroughput primeFullCompactFinishSolidEvaluation(
     return result;
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactTransmissionEvalRaw<
-    let Continuous : bool = false>(float3 wi, float3 inputWo,
-                                   PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionEvalRaw<let Continuous : bool = false>(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
     if (state.geometryThinWalled != 0u)
     {
-        float3 wo = inputWo;
-        bool transmitted = false;
+        var wo : float3 = inputWo;
+        var transmitted = false;
         if (wo.z < 0.0)
         {
             wo.z = -wo.z;
@@ -344,16 +362,17 @@ public PrimeFullOpenPbrThroughput primeFullCompactTransmissionEvalRaw<
         {
             return primeFullOpenPbrZeroThroughput();
         }
-        PrimeFullOpenPbrReflectiveEvalBase base =
-            primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
-                wi, wo, state.transmissionMicrofacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_ALL);
-        PrimeFullOpenPbrThroughput result;
+        let base : PrimeFullOpenPbrReflectiveEvalBase =
+                       primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+                           wi, wo, state.transmissionMicrofacet, samplingFlags,
+                           PRIME_FULL_OPENPBR_FLAG_ALL);
+        var result : PrimeFullOpenPbrThroughput;
         result.value = float3(base.factor);
         result.flags = base.flags;
         if (result.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
         {
-            PrimeFullOpenPbrVecPair rt =
-                primeFullCompactTransmissionThinWallRt(base.microCosine, state);
+            let rt : PrimeFullOpenPbrVecPair =
+                         primeFullCompactTransmissionThinWallRt(base.microCosine, state);
             if (transmitted)
             {
                 result.value *= rt.second;
@@ -373,31 +392,32 @@ public PrimeFullOpenPbrThroughput primeFullCompactTransmissionEvalRaw<
         }
         return result;
     }
-    float3 materialWi = primeFullCompactTransmissionMaterialFrame(wi, state);
-    float3 materialWo = primeFullCompactTransmissionMaterialFrame(inputWo, state);
-    PrimeFullOpenPbrThroughput result =
-        primeFullCompactRefractiveEval(materialWi, materialWo, state, samplingFlags);
+    let materialWi : float3 = primeFullCompactTransmissionMaterialFrame(wi, state);
+    let materialWo : float3 = primeFullCompactTransmissionMaterialFrame(inputWo, state);
+    let result : PrimeFullOpenPbrThroughput =
+                     primeFullCompactRefractiveEval(materialWi, materialWo, state, samplingFlags);
     return primeFullCompactFinishSolidEvaluation(result, state, false);
 }
 
-public PrimeFullOpenPbrThroughput primeFullCompactTransmissionEvalRawSolidContinuous(
-    float3 wi, float3 inputWo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionEvalRawSolidContinuous(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullOpenPbrThroughput
 {
-    float3 materialWi = primeFullCompactTransmissionMaterialFrame(wi, state);
-    float3 materialWo = primeFullCompactTransmissionMaterialFrame(inputWo, state);
-    PrimeFullOpenPbrThroughput result =
-        primeFullCompactRefractiveEvalContinuous(materialWi, materialWo, state, samplingFlags);
+    let materialWi : float3 = primeFullCompactTransmissionMaterialFrame(wi, state);
+    let materialWo : float3 = primeFullCompactTransmissionMaterialFrame(inputWo, state);
+    let result : PrimeFullOpenPbrThroughput = primeFullCompactRefractiveEvalContinuous(
+                     materialWi, materialWo, state, samplingFlags);
     return primeFullCompactFinishSolidEvaluation(result, state, true);
 }
 
 /// 显式边界状态的联合评估；光滑／匹配 IOR、thin 的数值拒绝保持原入口约定。
-public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvaluateRaw<
-    let Continuous : bool = false>(float3 wi, float3 inputWo,
-                                   PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionEvaluateRaw<let Continuous : bool = false>(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullCompactTransmissionEvaluation
 {
     if (state.geometryThinWalled == 0u)
     {
-        PrimeFullCompactTransmissionEvaluation result = {};
+        var result : PrimeFullCompactTransmissionEvaluation = {};
         if (primeFullOpenPbrMicrofacetEffectivelySmooth(state.specularMicrofacet) ||
             state.specularFresnel.ior == 1.0)
             return result;
@@ -407,13 +427,14 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvalua
         result.throughput = primeFullCompactFinishSolidEvaluation(result.throughput, state, false);
         return result;
     }
-    float3 wo = inputWo;
-    bool transmitted = wo.z < 0.0;
+    var wo : float3 = inputWo;
+    let transmitted : bool = wo.z < 0.0;
     if (transmitted)
         wo.z = -wo.z;
-    PrimeFullOpenPbrReflectiveEvalBase base = primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
-        wi, wo, state.transmissionMicrofacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_ALL);
-    PrimeFullCompactTransmissionEvaluation result = {};
+    let base
+        : PrimeFullOpenPbrReflectiveEvalBase = primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(
+              wi, wo, state.transmissionMicrofacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_ALL);
+    var result : PrimeFullCompactTransmissionEvaluation = {};
     if (transmitted ? primeFullOpenPbrIsTransmissive(samplingFlags)
                     : primeFullOpenPbrIsReflective(samplingFlags))
     {
@@ -421,8 +442,8 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvalua
         result.throughput.flags = base.flags;
         if (base.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
         {
-            PrimeFullOpenPbrVecPair rt =
-                primeFullCompactTransmissionThinWallRt(base.microCosine, state);
+            let rt : PrimeFullOpenPbrVecPair =
+                         primeFullCompactTransmissionThinWallRt(base.microCosine, state);
             if (transmitted)
             {
                 result.throughput.value *= rt.second;
@@ -438,15 +459,16 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvalua
         }
     }
     // PDF 的 Fresnel 原入口使用 normalize，保留该数值路径及无效输入边界。
-    float3 halfVector = normalize(wi + wo);
-    PrimeFullOpenPbrVecPair rt = primeFullCompactTransmissionThinWallRt(dot(wi, halfVector), state);
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+    let halfVector : float3 = normalize(wi + wo);
+    let rt : PrimeFullOpenPbrVecPair =
+                 primeFullCompactTransmissionThinWallRt(dot(wi, halfVector), state);
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
         reflectionProbability = 0.0;
     if (!primeFullOpenPbrIsTransmissive(samplingFlags))
         transmissionProbability = 0.0;
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum != 0.0)
         result.pdf = transmitted ? base.pdf * transmissionProbability / probabilitySum
                                  : base.pdf * reflectionProbability / probabilitySum;
@@ -454,21 +476,24 @@ public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvalua
 }
 
 /// 已证明连续且非匹配 IOR 的 solid 联合评估，补偿仍在几何响应之后应用。
-public PrimeFullCompactTransmissionEvaluation
-primeFullCompactTransmissionEvaluateRawSolidContinuous(float3 wi, float3 inputWo,
-                                                       PrimeFullCompactTransmissionState state,
-                                                       uint samplingFlags)
+public func primeFullCompactTransmissionEvaluateRawSolidContinuous(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullCompactTransmissionEvaluation
 {
-    PrimeFullCompactTransmissionEvaluation result = primeFullCompactRefractiveEvaluateContinuous(
-        primeFullCompactTransmissionMaterialFrame(wi, state),
-        primeFullCompactTransmissionMaterialFrame(inputWo, state), state, samplingFlags);
+    var result
+        : PrimeFullCompactTransmissionEvaluation = primeFullCompactRefractiveEvaluateContinuous(
+              primeFullCompactTransmissionMaterialFrame(wi, state),
+              primeFullCompactTransmissionMaterialFrame(inputWo, state), state, samplingFlags);
     result.throughput = primeFullCompactFinishSolidEvaluation(result.throughput, state, true);
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactFinishSolidSample(
-    PrimeFullOpenPbrSample result, PrimeFullCompactTransmissionState state, bool continuous)
+public func primeFullCompactFinishSolidSample(result: PrimeFullOpenPbrSample,
+                                              state: PrimeFullCompactTransmissionState,
+                                              continuous: bool)
+    ->PrimeFullOpenPbrSample
 {
+    var result = result;
     if (result.throughput.flags == PRIME_FULL_OPENPBR_FLAG_NONE)
     {
         return result;
@@ -487,10 +512,11 @@ public PrimeFullOpenPbrSample primeFullCompactFinishSolidSample(
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullCompactTransmissionSampleRaw<let Continuous : bool = false>(
-    float3 wi, float3 randomValue, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionSampleRaw<let Continuous : bool = false>(
+    wi: float3, randomValue: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (state.geometryThinWalled != 0u)
     {
         if (!Continuous &&
@@ -499,17 +525,17 @@ public PrimeFullOpenPbrSample primeFullCompactTransmissionSampleRaw<let Continuo
             return primeFullCompactThinWallDiscreteSampleRaw(wi, randomValue.z, state,
                                                              samplingFlags);
         }
-        PrimeFullOpenPbrReflectiveSampleBase base =
-            primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
-                wi, randomValue, state.transmissionMicrofacet, samplingFlags,
-                PRIME_FULL_OPENPBR_FLAG_ALL);
+        let base : PrimeFullOpenPbrReflectiveSampleBase =
+                       primeFullOpenPbrReflectiveSampleBaseImpl<Continuous>(
+                           wi, randomValue, state.transmissionMicrofacet, samplingFlags,
+                           PRIME_FULL_OPENPBR_FLAG_ALL);
         result = base.bsdfSample;
         if (result.throughput.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
         {
-            PrimeFullOpenPbrVecPair rt =
-                primeFullCompactTransmissionThinWallRt(base.microCosine, state);
-            float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-            float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+            let rt : PrimeFullOpenPbrVecPair =
+                         primeFullCompactTransmissionThinWallRt(base.microCosine, state);
+            var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+            var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
             if (!primeFullOpenPbrIsReflective(samplingFlags))
             {
                 reflectionProbability = 0.0;
@@ -518,7 +544,7 @@ public PrimeFullOpenPbrSample primeFullCompactTransmissionSampleRaw<let Continuo
             {
                 transmissionProbability = 0.0;
             }
-            float probabilitySum = reflectionProbability + transmissionProbability;
+            let probabilitySum : float = reflectionProbability + transmissionProbability;
             if (probabilitySum == 0.0)
             {
                 result = primeFullOpenPbrZeroSample();
@@ -548,37 +574,39 @@ public PrimeFullOpenPbrSample primeFullCompactTransmissionSampleRaw<let Continuo
         return result;
     }
 
-    float3 materialWi = primeFullCompactTransmissionMaterialFrame(wi, state);
+    let materialWi : float3 = primeFullCompactTransmissionMaterialFrame(wi, state);
     result = primeFullCompactRefractiveSample(materialWi, randomValue, state, samplingFlags);
     return primeFullCompactFinishSolidSample(result, state, false);
 }
 
-public PrimeFullOpenPbrSample primeFullCompactTransmissionSampleRawSolidContinuous(
-    float3 wi, float3 randomValue, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionSampleRawSolidContinuous(
+    wi: float3, randomValue: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    float3 materialWi = primeFullCompactTransmissionMaterialFrame(wi, state);
-    PrimeFullOpenPbrSample result =
-        primeFullCompactRefractiveSampleContinuous(materialWi, randomValue, state, samplingFlags);
+    let materialWi : float3 = primeFullCompactTransmissionMaterialFrame(wi, state);
+    let result : PrimeFullOpenPbrSample = primeFullCompactRefractiveSampleContinuous(
+                     materialWi, randomValue, state, samplingFlags);
     return primeFullCompactFinishSolidSample(result, state, true);
 }
 
-public float primeFullCompactTransmissionPdfRaw<let Continuous : bool = false>(
-    float3 wi, float3 inputWo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionPdfRaw<let Continuous : bool = false>(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->float
 {
     if (state.geometryThinWalled != 0u)
     {
-        float3 wo = inputWo;
-        bool transmitted = false;
+        var wo : float3 = inputWo;
+        var transmitted = false;
         if (wo.z < 0.0)
         {
             wo.z = -wo.z;
             transmitted = true;
         }
-        float3 halfVector = normalize(wi + wo);
-        PrimeFullOpenPbrVecPair rt =
-            primeFullCompactTransmissionThinWallRt(dot(wi, halfVector), state);
-        float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-        float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+        let halfVector : float3 = normalize(wi + wo);
+        let rt : PrimeFullOpenPbrVecPair =
+                     primeFullCompactTransmissionThinWallRt(dot(wi, halfVector), state);
+        var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+        var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
         if (!primeFullOpenPbrIsReflective(samplingFlags))
         {
             reflectionProbability = 0.0;
@@ -587,13 +615,14 @@ public float primeFullCompactTransmissionPdfRaw<let Continuous : bool = false>(
         {
             transmissionProbability = 0.0;
         }
-        float probabilitySum = reflectionProbability + transmissionProbability;
+        let probabilitySum : float = reflectionProbability + transmissionProbability;
         if (probabilitySum == 0.0)
         {
             return 0.0;
         }
-        float microfacetPdf = primeFullOpenPbrReflectivePdfImpl<Continuous>(
-            wi, wo, state.transmissionMicrofacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_ALL);
+        let microfacetPdf
+            : float = primeFullOpenPbrReflectivePdfImpl<Continuous>(
+                  wi, wo, state.transmissionMicrofacet, samplingFlags, PRIME_FULL_OPENPBR_FLAG_ALL);
         return transmitted ? microfacetPdf * transmissionProbability / probabilitySum
                            : microfacetPdf * reflectionProbability / probabilitySum;
     }
@@ -602,8 +631,9 @@ public float primeFullCompactTransmissionPdfRaw<let Continuous : bool = false>(
                                          state, samplingFlags);
 }
 
-public float primeFullCompactTransmissionPdfRawSolidContinuous(
-    float3 wi, float3 inputWo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionPdfRawSolidContinuous(
+    wi: float3, inputWo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->float
 {
     return primeFullCompactRefractivePdfContinuous(
         primeFullCompactTransmissionMaterialFrame(wi, state),

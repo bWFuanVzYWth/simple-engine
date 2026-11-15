@@ -42,6 +42,15 @@ fn run(cases: &[Case]) -> Result<Vec<[[f32; 4]; 5]>> {
 }
 
 fn run_shader(cases: &[Case], spirv: &[u8], bind_energy: bool) -> Result<Vec<[[f32; 4]; 5]>> {
+    run_shader_entry(cases, spirv, bind_energy, "main")
+}
+
+fn run_shader_entry(
+    cases: &[Case],
+    spirv: &[u8],
+    bind_energy: bool,
+    entry: &str,
+) -> Result<Vec<[[f32; 4]; 5]>> {
     let mut gpu = Gpu::new(Capability::Compute, 0, false)?;
     let result = (|| -> Result<_> {
         let context = gpu.context();
@@ -134,12 +143,12 @@ fn run_shader(cases: &[Case], spirv: &[u8], bind_energy: bool) -> Result<Vec<[[f
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = context.shader(spirv, "main", [64, 1, 1])?;
+        let shader = context.shader(spirv, entry, [64, 1, 1])?;
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("OpenPBR fixture"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: Some("main"),
+            entry_point: Some(entry),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -342,6 +351,63 @@ const FLOWS: [&[u8]; 30] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-null-smooth.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-lambert.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/flow-binary-metal-sss.spv")),
+];
+
+const FLOW_GUIDES: [&[u8]; 30] = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-opaque-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-subsurface-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-conductor-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-solid-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-thin-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-delta-conductor-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-delta-solid-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-delta-thin-guide.spv")),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-opaque-continuous-guide.spv"
+    )),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-subsurface-continuous-guide.spv"
+    )),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-conductor-continuous-guide.spv"
+    )),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-solid-continuous-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-thin-continuous-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-opaque-smooth-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-mixed-continuous-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-mixed-smooth-guide.spv")),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-mixed-subsurface-continuous-guide.spv"
+    )),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-mixed-subsurface-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-subsurface-only-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-absorber-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-lambert-guide.spv")),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-subsurface-matched-guide.spv"
+    )),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-solid-matched-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-thin-matched-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-black-smooth-guide.spv")),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-solid-rough-matched-guide.spv"
+    )),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-metal-null-continuous-guide.spv"
+    )),
+    include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/flow-metal-null-smooth-guide.spv"
+    )),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-metal-lambert-guide.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/flow-binary-metal-sss-guide.spv")),
 ];
 
 fn flow_cases(profile: usize) -> Result<Vec<Case>> {
@@ -819,12 +885,12 @@ fn reflection_masking_preserves_the_grazing_limit() -> Result {
 #[test]
 #[ignore = "需要 Vulkan compute：RR方向能量组合与独立通用参考一致"]
 fn flow_guide_energy_preserves_supported_materials() -> Result {
-    for (profile, shader) in FLOWS.into_iter().enumerate() {
+    for (profile, shader) in FLOW_GUIDES.into_iter().enumerate() {
         let mut cases: Vec<_> = flow_cases(profile)?.into_iter().step_by(16).collect();
         for case in &mut cases {
             case.u[3] = 5.;
         }
-        let actual = run_shader(&cases, shader, true)?;
+        let actual = run_shader_entry(&cases, shader, true, "guide_main")?;
         let reference = run(&cases)?;
         for (index, (actual, reference)) in actual.iter().zip(&reference).enumerate() {
             for row in 0..2 {

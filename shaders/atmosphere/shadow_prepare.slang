@@ -1,12 +1,12 @@
 import atmosphere.terrain_frame;
 using namespace atmosphere;
 [[vk::binding(0, 0)]]
-StructuredBuffer<TerrainInput> inputs;
+var inputs : StructuredBuffer<TerrainInput>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<TerrainFrame> frames;
+var frames : RWStructuredBuffer<TerrainFrame>;
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void shadow_prepare()
+func shadow_prepare()->void
 {
     frames[0] = terrain_frame(inputs[0]);
 }

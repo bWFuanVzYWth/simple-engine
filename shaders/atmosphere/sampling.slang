@@ -4,30 +4,30 @@ import atmosphere.parameters;
 namespace atmosphere
 {
 /// 圆周率，与源 f32 常量一致。
-public static const float PI = 3.141592653589793;
+public static const let PI = 3.141592653589793;
 /// 原坐标拟合的六个开关位；资源所有者保持与物理节点一致。
-public uint mapping_flags(Params p)
+public func mapping_flags(p: Params)->uint
 {
     return p.mapping.x;
 }
 /// 海拔 h 的球形地平线方向余弦；h 非负，p.sun.w 是底部半径。
-public float horizon(Params p, float h)
+public func horizon(p: Params, h: float)->float
 {
     return -sqrt(max(h * (2.0 * p.sun.w + h), 0.0)) / (p.sun.w + h);
 }
 /// 判断径向方向余弦 mu 是否先命中地表，包含切向地面边界。
-public bool ground(Params p, float h, float mu)
+public func ground(p: Params, h: float, mu: float)->bool
 {
     return mu < 0.0 && mu <= horizon(p, h);
 }
 /// 从海拔 h 沿单位方向余弦 mu 前进 d km 后的海拔，采用避免大半径相消的形式。
-public float height_at(Params p, float h, float mu, float d)
+public func height_at(p: Params, h: float, mu: float, d: float)->float
 {
     let dh = d * (d + 2.0 * (p.sun.w + h) * mu);
     return max(0.0, h + dh / (sqrt(max((p.sun.w + h) * (p.sun.w + h) + dh, 0.0)) + p.sun.w + h));
 }
 /// 从大气内出发至地面（hit）或顶层球面的非负距离 km；hit 须等于 ground。
-public float boundary(Params p, float h, float mu, bool hit)
+public func boundary(p: Params, h: float, mu: float, hit: bool)->float
 {
     let b = (p.sun.w + h) * mu;
     if (hit)
@@ -44,7 +44,7 @@ public float boundary(Params p, float h, float mu, bool hit)
     return max(0.0, -b + root);
 }
 /// optical 高度插值坐标；节点由同一 mapping 标定构造。
-public float height_coord(Params p, float h)
+public func height_coord(p: Params, h: float)->float
 {
     if ((mapping_flags(p) & 16u) != 0u)
     {
@@ -66,13 +66,13 @@ public float height_coord(Params p, float h)
            0.65 * clamp(h / p.medium.x, 0.0, 1.0);
 }
 /// 全仰角区间的归一 atan 分布；w 为正弧度宽度。
-public float atan_cdf(Params p, float e, float c, float w)
+public func atan_cdf(p: Params, e: float, c: float, w: float)->float
 {
     let lo = atan((-PI * 0.5 - c) / w);
     return (atan((e - c) / w) - lo) / (atan((PI * 0.5 - c) / w) - lo);
 }
 /// 非拟合太阳坐标，与源 legacy mapping 分支一致。
-public float solar_coord(Params p, float h, float mu)
+public func solar_coord(p: Params, h: float, mu: float)->float
 {
     let e = asin(clamp(mu, -1.0, 1.0));
     let hor = asin(horizon(p, h));
@@ -86,8 +86,9 @@ public float solar_coord(Params p, float h, float mu)
                  0.0, 1.0);
 }
 /// 从大气内朝边界太阳的四波长 T；地表遮挡返回零，线性 clamp sampler 对应 optical LUT。
-public float4 sun_transmittance(Params p, Texture2D<float4> tau_read, SamplerState linear_sampler,
-                                float h, float mu)
+public func sun_transmittance(p: Params, tau_read: Texture2D<float4>, linear_sampler: SamplerState,
+                              h: float, mu: float)
+    ->float4
 {
     if (ground(p, h, mu))
     {
@@ -106,7 +107,7 @@ public float4 sun_transmittance(Params p, Texture2D<float4> tau_read, SamplerSta
                                      pixel / float2(float(p.dims.w), float(p.dims.z)), 0.0));
 }
 /// SkyView 三 chart 的仰角范围：低天空、上天空、地面；观察者可位于太空。
-public float2 elevation_bounds(Params p, uint chart)
+public func elevation_bounds(p: Params, chart: uint)->float2
 {
     let hor = asin(horizon(p, p.view.w));
     if (chart == 2u)
@@ -124,13 +125,14 @@ public float2 elevation_bounds(Params p, uint chart)
     }
     return float2(hor, 0.0);
 }
-float interval_cdf(float e, float c, float w, float2 bounds)
+func interval_cdf(e: float, c: float, w: float, bounds: float2)->float
 {
     let low = atan((bounds.x - c) / w);
     return (atan((e - c) / w) - low) / max(atan((bounds.y - c) / w) - low, 1e-10);
 }
 /// 使用当前观察者 12 个 chart 系数求仰角坐标；mapping 后接每行方向余弦。
-public float elevation_coord(Params p, StructuredBuffer<float4> sky_mapping, float e, uint chart)
+public func elevation_coord(p: Params, sky_mapping: StructuredBuffer<float4>, e: float, chart: uint)
+    ->float
 {
     if ((mapping_flags(p) & 32u) != 0u)
     {
@@ -170,8 +172,9 @@ public float elevation_coord(Params p, StructuredBuffer<float4> sky_mapping, flo
 }
 /// 单位局部方向 ray 的边界辐射亮度，线性 Rec.2020，未含太阳圆盘或应用强度。
 /// sky_read 为对应观察者的 log RGB SkyView；太空薄边缘采用源 chord 极限而非 log 混到真空。
-public float3 sky_radiance(Params p, StructuredBuffer<float4> sky_mapping,
-                           Texture2D<float4> sky_read, float3 ray)
+public func sky_radiance(p: Params, sky_mapping: StructuredBuffer<float4>,
+                         sky_read: Texture2D<float4>, ray: float3)
+    ->float3
 {
     if (p.view.w >= p.medium.x)
     {
@@ -219,7 +222,6 @@ public float3 sky_radiance(Params p, StructuredBuffer<float4> sky_mapping,
                  sky_read.Load(int3(int2(int(ix + 1u), int(iy + 1u)), 0)).xyz, x - float(ix));
     if (p.view.w >= p.medium.x && !hit && iy == lower_rows - 2u)
     {
-
         let previous = sky_mapping[12u + lower_rows - 2u].x;
         let previous2 = sky_mapping[12u + lower_rows - 3u].x;
         let radius = p.sun.w + p.view.w;
@@ -238,8 +240,9 @@ public float3 sky_radiance(Params p, StructuredBuffer<float4> sky_mapping,
     return max(exp(lerp(a, b, row - float(iy))) - float3(1e-30), float3(0.0));
 }
 /// 当前观察者朝单位方向的四波长 T；支持大气外入射，真空未入射为 1、地表遮挡为 0。
-public float4 view_transmittance(Params p, Texture2D<float4> tau_read, SamplerState linear_sampler,
-                                 float3 ray)
+public func view_transmittance(p: Params, tau_read: Texture2D<float4>, linear_sampler: SamplerState,
+                               ray: float3)
+    ->float4
 {
     var h = p.view.w;
     var mu = ray.y;
@@ -265,10 +268,10 @@ public float4 view_transmittance(Params p, Texture2D<float4> tau_read, SamplerSt
 
 /// 常系数线段的源积分权重 (1-exp(-sigma*dt))/sigma；sigma>=0，dt>=0，单位 km。
 /// 低光学厚度采用源三项展开，sigma=0 的极限为 dt；不执行完整介质积分或采样策略。
-public float4 segment_integral(float4 sigma, float dt)
+public func segment_integral(sigma: float4, dt: float)->float4
 {
-    float4 tau = sigma * dt;
-    float4 transmittance = exp(-tau);
+    let tau : float4 = sigma * dt;
+    let transmittance : float4 = exp(-tau);
     return select(tau < float4(0.001), dt * (1.0 - tau * 0.5 + tau * tau / 6.0),
                   (1.0 - transmittance) / max(sigma, float4(1e-30)));
 }
@@ -277,24 +280,26 @@ public float4 segment_integral(float4 sigma, float dt)
 public struct AerialSample
 {
     /// 线段介质散射辐射亮度；已含应用强度，不含理想行星表面的末端边界辐射。
-    public float3 radiance;
+    public var radiance : float3;
     /// 太阳谱投影、限于 [0,1] 的 RGB T。
-    public float3 transmittance;
+    public var transmittance : float3;
 };
 
 /// 采样 z² 距离体积；uv 为屏幕顶部 y=0，distance/max_distance 单位 km，最大距离为正。
 /// 超出体积距离沿用末层；首层之前线性接到 d=0 的 L=0/T=1，不把相机近处误当整段雾。
-public AerialSample aerial_sample(Texture3D<float4> light, Texture3D<float4> transmittance,
-                                  SamplerState sampler, float2 uv, float distance,
-                                  float max_distance)
+public func aerial_sample(light: Texture3D<float4>, transmittance: Texture3D<float4>,
+                          sampler: SamplerState, uv: float2, distance: float, max_distance: float)
+    ->AerialSample
 {
-    uint width, height, depth;
+    var width : uint;
+    var height : uint;
+    var depth : uint;
     light.GetDimensions(width, height, depth);
-    float first_z = 0.5 / float(depth);
-    float weight = saturate(distance / (max_distance * first_z * first_z));
-    float z = max(sqrt(saturate(distance / max_distance)), first_z);
-    float3 coordinate = float3(saturate(uv), z);
-    AerialSample result;
+    let first_z : float = 0.5 / float(depth);
+    let weight : float = saturate(distance / (max_distance * first_z * first_z));
+    let z : float = max(sqrt(saturate(distance / max_distance)), first_z);
+    let coordinate = float3(saturate(uv), z);
+    var result : AerialSample;
     result.radiance = max(light.SampleLevel(sampler, coordinate, 0).xyz, 0) * weight;
     result.transmittance =
         lerp(float3(1), saturate(transmittance.SampleLevel(sampler, coordinate, 0).xyz), weight);
@@ -302,20 +307,21 @@ public AerialSample aerial_sample(Texture3D<float4> light, Texture3D<float4> tra
 }
 /// 均匀太阳盘的法向辐照度除以投影立体角；半角在 (0, pi/2)。
 /// 选择太阳方向的 PDF 仍使用未投影立体角，不能复用本归一化。
-public float3 solar_radiance(Params p, Texture2D<float4> opticalDepth, SamplerState sampler,
-                             float3 direction, float3 scale)
+public func solar_radiance(p: Params, opticalDepth: Texture2D<float4>, sampler: SamplerState,
+                           direction: float3, scale: float3)
+    ->float3
 {
-    float4 spectrum = p.solar * view_transmittance(p, opticalDepth, sampler, direction);
-    float3 rgb = spectrum.x * p.rgb[0].xyz + spectrum.y * p.rgb[1].xyz + spectrum.z * p.rgb[2].xyz +
-                 spectrum.w * p.rgb[3].xyz;
-    float sine = sin(p.sun.z);
+    let spectrum : float4 = p.solar * view_transmittance(p, opticalDepth, sampler, direction);
+    let rgb : float3 = spectrum.x * p.rgb[0].xyz + spectrum.y * p.rgb[1].xyz +
+                       spectrum.z * p.rgb[2].xyz + spectrum.w * p.rgb[3].xyz;
+    let sine : float = sin(p.sun.z);
     return rgb * scale / (PI * sine * sine);
 }
 
 /// 在同一个线性 Rec.2020 空间合成 L + T * 背景；应用决定介质准入与非负裁剪。
-public float3 composite_aerial(AerialSample sample, float3 background)
+public func composite_aerial(sample_value: AerialSample, background: float3)->float3
 {
-    return sample.radiance + sample.transmittance * background;
+    return sample_value.radiance + sample_value.transmittance * background;
 }
 
 }

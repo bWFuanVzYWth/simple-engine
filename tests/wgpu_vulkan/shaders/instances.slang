@@ -2,27 +2,27 @@ module instances;
 
 struct Payload
 {
-    uint instance;
-    uint primitive;
-    float distance;
+    var instance : uint;
+    var primitive : uint;
+    var distance : float;
 };
 
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<uint> result; // InstanceID、PrimitiveIndex、距离位模式三个 planes。
+var result : RWStructuredBuffer<uint>; // InstanceID、PrimitiveIndex、距离位模式三个 planes。
 [[vk::binding(2, 0)]]
-StructuredBuffer<float4> rays; // origin/t_min、direction/t_max 两个 planes。
+var rays : StructuredBuffer<float4>; // origin/t_min、direction/t_max 两个 planes。
 
 [shader("raygeneration")]
-void instance_raygen()
+func instance_raygen()->void
 {
-    uint index = DispatchRaysIndex().x;
-    uint count = DispatchRaysDimensions().x;
-    float4 origin = rays[index];
-    float4 direction = rays[count + index];
-    RayDesc ray = { origin.xyz, origin.w, direction.xyz, direction.w };
-    Payload payload = { 0xffffffffu, 0xffffffffu, 0.0 };
+    let index : uint = DispatchRaysIndex().x;
+    let count : uint = DispatchRaysDimensions().x;
+    let origin : float4 = rays[index];
+    let direction : float4 = rays[count + index];
+    let ray : RayDesc = { origin.xyz, origin.w, direction.xyz, direction.w };
+    var payload : Payload = { 0xffffffffu, 0xffffffffu, 0.0 };
     TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 1, 0, ray, payload);
     result[index] = payload.instance;
     result[count + index] = payload.primitive;
@@ -30,17 +30,19 @@ void instance_raygen()
 }
 
 [shader("miss")]
-void instance_miss(inout Payload payload)
+func instance_miss(inout payload_value: Payload)->void
 {
-    payload.instance = 0xffffffffu;
-    payload.primitive = 0xffffffffu;
-    payload.distance = 0.0;
+    payload_value.instance = 0xffffffffu;
+    payload_value.primitive = 0xffffffffu;
+    payload_value.distance = 0.0;
 }
 
 [shader("closesthit")]
-void instance_closest(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func instance_closest(inout payload_value: Payload,
+                      attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.instance = InstanceID();
-    payload.primitive = PrimitiveIndex();
-    payload.distance = RayTCurrent();
+    payload_value.instance = InstanceID();
+    payload_value.primitive = PrimitiveIndex();
+    payload_value.distance = RayTCurrent();
 }

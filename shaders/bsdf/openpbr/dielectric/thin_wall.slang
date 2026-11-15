@@ -10,8 +10,9 @@ import "bsdf/openpbr/math/spectrum.slang";
 
 __exported import "bsdf/openpbr/math/delta.slang";
 
-public PrimeFullOpenPbrVecPair primeFullCompactTransmissionThinWallRt(
-    float cosineTheta, PrimeFullCompactTransmissionState state)
+public func primeFullCompactTransmissionThinWallRt(cosineTheta: float,
+                                                   state: PrimeFullCompactTransmissionState)
+    ->PrimeFullOpenPbrVecPair
 {
     return primeFullThinWallRt(cosineTheta, state.specularFresnel, state.transmissionTint,
                                state.transmissionVolume.extinction);

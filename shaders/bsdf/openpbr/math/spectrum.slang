@@ -3,95 +3,95 @@
 #language slang 2026
 module "bsdf/openpbr/math/spectrum.slang";
 
-public static const float PRIME_FULL_OPENPBR_PI = 3.14159265358979323846;
-public static const float PRIME_FULL_OPENPBR_INV_PI = 0.31830988618379067154;
-public static const float PRIME_FULL_OPENPBR_DENOM_TOLERANCE = 1.0e-10;
+public static const let PRIME_FULL_OPENPBR_PI = 3.14159265358979323846;
+public static const let PRIME_FULL_OPENPBR_INV_PI = 0.31830988618379067154;
+public static const let PRIME_FULL_OPENPBR_DENOM_TOLERANCE = 1.0e-10;
 
-public float primeFullOpenPbrSquare(float value)
+public func primeFullOpenPbrSquare(value: float)->float
 {
     return value * value;
 }
-public float2 primeFullOpenPbrSquare(float2 value)
+public func primeFullOpenPbrSquare(value: float2)->float2
 {
     return value * value;
 }
-public float3 primeFullOpenPbrSquare(float3 value)
+public func primeFullOpenPbrSquare(value: float3)->float3
 {
     return value * value;
 }
-public float primeFullOpenPbrPow4(float value)
+public func primeFullOpenPbrPow4(value: float)->float
 {
-    float x = value * value;
+    let x : float = value * value;
     return x * x;
 }
-public float primeFullOpenPbrPow5(float value)
+public func primeFullOpenPbrPow5(value: float)->float
 {
     return primeFullOpenPbrPow4(value) * value;
 }
-public float primeFullOpenPbrPow6(float value)
+public func primeFullOpenPbrPow6(value: float)->float
 {
-    float x = value * value * value;
+    let x : float = value * value * value;
     return x * x;
 }
-public float primeFullOpenPbrReduceSum(float2 value)
+public func primeFullOpenPbrReduceSum(value: float2)->float
 {
     return value.x + value.y;
 }
-public float primeFullOpenPbrReduceSum(float3 value)
+public func primeFullOpenPbrReduceSum(value: float3)->float
 {
     return value.x + value.y + value.z;
 }
-public float primeFullOpenPbrReduceMax(float2 value)
+public func primeFullOpenPbrReduceMax(value: float2)->float
 {
     return max(value.x, value.y);
 }
-public float primeFullOpenPbrReduceMax(float3 value)
+public func primeFullOpenPbrReduceMax(value: float3)->float
 {
     return max(value.x, max(value.y, value.z));
 }
-public float primeFullOpenPbrReduceMin(float3 value)
+public func primeFullOpenPbrReduceMin(value: float3)->float
 {
     return min(value.x, min(value.y, value.z));
 }
-public float primeFullOpenPbrSpectrumToWeight(float3 value)
+public func primeFullOpenPbrSpectrumToWeight(value: float3)->float
 {
     return primeFullOpenPbrReduceSum(value) / 3.0;
 }
 
-public float3 primeFullOpenPbrUniformSampleHemisphere(float2 sampleValue)
+public func primeFullOpenPbrUniformSampleHemisphere(sampleValue: float2)->float3
 {
-    float sine = sqrt(1.0 - sampleValue.x * sampleValue.x);
-    float phi = 2.0 * PRIME_FULL_OPENPBR_PI * sampleValue.y;
+    let sine : float = sqrt(1.0 - sampleValue.x * sampleValue.x);
+    let phi : float = 2.0 * PRIME_FULL_OPENPBR_PI * sampleValue.y;
     return float3(sine * cos(phi), sine * sin(phi), sampleValue.x);
 }
 
-public float3 primeFullOpenPbrCosineSampleHemisphere(float2 sampleValue)
+public func primeFullOpenPbrCosineSampleHemisphere(sampleValue: float2)->float3
 {
-    float radius = sqrt(sampleValue.x);
-    float phi = 2.0 * PRIME_FULL_OPENPBR_PI * sampleValue.y;
+    let radius : float = sqrt(sampleValue.x);
+    let phi : float = 2.0 * PRIME_FULL_OPENPBR_PI * sampleValue.y;
     return float3(radius * cos(phi), radius * sin(phi), sqrt(1.0 - sampleValue.x));
 }
 
-public float primeFullOpenPbrF0ToIor(float f0)
+public func primeFullOpenPbrF0ToIor(f0: float)->float
 {
-    float root = sqrt(clamp(f0, 0.0, 0.999));
+    let root : float = sqrt(clamp(f0, 0.0, 0.999));
     return (1.0 + root) / (1.0 - root);
 }
 
-public float3 primeFullOpenPbrF0ToIor(float3 f0)
+public func primeFullOpenPbrF0ToIor(f0: float3)->float3
 {
-    float3 root = sqrt(clamp(f0, float3(0.0), float3(0.999)));
+    let root : float3 = sqrt(clamp(f0, float3(0.0), float3(0.999)));
     return (float3(1.0) + root) / (float3(1.0) - root);
 }
 
-public float primeFullOpenPbrIorToF0(float ior)
+public func primeFullOpenPbrIorToF0(ior: float)->float
 {
     return primeFullOpenPbrSquare((ior - 1.0) / (ior + 1.0));
 }
 
-public float2 primeFullOpenPbrSpecularNdfRoughnesses(float roughness, float anisotropy)
+public func primeFullOpenPbrSpecularNdfRoughnesses(roughness: float, anisotropy: float)->float2
 {
-    float2 alpha;
+    var alpha : float2;
     if (anisotropy == 0.0)
         return float2(primeFullOpenPbrSquare(roughness));
     alpha.x = primeFullOpenPbrSquare(roughness) *
@@ -102,23 +102,23 @@ public float2 primeFullOpenPbrSpecularNdfRoughnesses(float roughness, float anis
     return max(alpha, float2(1.0e-4));
 }
 
-public float primeFullOpenPbrIorAdjustment(float ior, float coatIor, float coatWeight)
+public func primeFullOpenPbrIorAdjustment(ior: float, coatIor: float, coatWeight: float)->float
 {
     if (coatWeight == 0.0)
         return ior;
-    float boundary = coatIor > ior ? coatIor / ior : ior / coatIor;
+    let boundary : float = coatIor > ior ? coatIor / ior : ior / coatIor;
     return lerp(ior, boundary, coatWeight);
 }
 
-public float primeFullOpenPbrIorAdjustment(float ior, float specularWeight)
+public func primeFullOpenPbrIorAdjustment(ior: float, specularWeight: float)->float
 {
-    float e =
-        sign(ior - 1.0) * sqrt(clamp(specularWeight * primeFullOpenPbrIorToF0(ior), 0.0, 0.999));
+    let e : float = sign(ior - 1.0) *
+                    sqrt(clamp(specularWeight * primeFullOpenPbrIorToF0(ior), 0.0, 0.999));
     return (1.0 + e) / (1.0 - e);
 }
 
-public float primeFullOpenPbrThinDielectricRoughnessScaler2(float ior)
+public func primeFullOpenPbrThinDielectricRoughnessScaler2(ior: float)->float
 {
-    float eta = ior >= 1.0 ? ior : 1.0 / ior;
+    let eta : float = ior >= 1.0 ? ior : 1.0 / ior;
     return 3.7 * (eta - 1.0) * primeFullOpenPbrSquare(eta - 0.5) / (eta * eta * eta);
 }

@@ -1,52 +1,54 @@
 // 非 opaque 三角形的候选筛选、closest-hit 资源读取及 RT→compute 可见性。
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<uint> result;
+var result : RWStructuredBuffer<uint>;
 [[vk::binding(2, 0)]]
-StructuredBuffer<uint> source;
+var source : StructuredBuffer<uint>;
 
 struct Payload
 {
-    uint value;
+    var value : uint;
 };
 
 [shader("raygeneration")]
-void native_raygen()
+func native_raygen()->void
 {
-    RayDesc ray;
+    var ray : RayDesc;
     ray.Origin = float3(.25, .25, -1);
     ray.Direction = float3(0, 0, 1);
     ray.TMin = .001;
     ray.TMax = 4;
-    Payload payload;
+    var payload : Payload;
     payload.value = 0;
     TraceRay(scene, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, payload);
     result[0] = payload.value;
 }
 
 [shader("anyhit")]
-void native_any_hit(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func native_any_hit(inout payload_value: Payload, attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
     if (source[PrimitiveIndex()] == 0)
         IgnoreHit();
 }
 
 [shader("closesthit")]
-void native_closest(inout Payload payload, BuiltInTriangleIntersectionAttributes attributes)
+func native_closest(inout payload_value: Payload, attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.value = source[PrimitiveIndex()] + 3;
+    payload_value.value = source[PrimitiveIndex()] + 3;
 }
 
 [shader("miss")]
-void native_miss(inout Payload payload)
+func native_miss(inout payload_value: Payload)->void
 {
-    payload.value = 17;
+    payload_value.value = 17;
 }
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void native_post(uint3 id: SV_DispatchThreadID)
+func native_post(uint3 id: SV_DispatchThreadID)->void
 {
     result[id.x] = result[id.x] * 2 + 1;
 }

@@ -7,7 +7,7 @@ use vulkan::{
 
 /// 从 `display/exposure_compute.slang` 编译的受控程序，资源布局见该模块。
 pub struct Programs<'a> {
-    /// `histogram_main`；buffer 输入或 `EXPOSURE_TEXTURE=1` 的 texture 输入变体。
+    /// buffer 输入使用 `histogram_main`，texture 输入使用 `histogram_texture_main`。
     pub histogram: RayShader<'a>,
     /// `update_main`；单线程裁尾统计与时间适应。
     pub update: RayShader<'a>,

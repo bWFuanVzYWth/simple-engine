@@ -17,7 +17,7 @@ impl Fixture {
             ));
         fs::create_dir_all(&root).unwrap();
         let source = root.join("main.slang");
-        fs::write(&source, "RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1, 1, 1)] void main() { output[0] = VALUE; }").unwrap();
+        fs::write(&source, "var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = VALUE; }").unwrap();
         Self { root, source }
     }
 
@@ -81,7 +81,7 @@ fn changing_source_creates_a_new_artifact_identity() {
     let fixture = Fixture::new();
     let compiler = fixture.compiler();
     let first = fixture.compile(&compiler);
-    fs::write(&fixture.source, "RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1, 1, 1)] void main() { output[0] = VALUE + 1; }").unwrap();
+    fs::write(&fixture.source, "var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = VALUE + 1; }").unwrap();
     let second = fixture.compile(&compiler);
     assert!(!second.cache_hit());
     assert_ne!(first.fingerprint(), second.fingerprint());
@@ -108,10 +108,10 @@ fn absolute_include_roots_resolve_imported_modules() {
     fs::create_dir_all(&include).unwrap();
     fs::write(
         include.join("constant.slang"),
-        "module constant; public uint value() { return 17; }",
+        "module constant; public func value() -> uint { return 17; }",
     )
     .unwrap();
-    fs::write(&fixture.source, "import constant; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = value(); }").unwrap();
+    fs::write(&fixture.source, "import constant; var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = value(); }").unwrap();
     let compiler =
         RuntimeCompiler::new(fixture.root.join("cache"), &[&include], &[&fixture.source]).unwrap();
     let result = fixture.compile(&compiler);
@@ -122,7 +122,7 @@ fn absolute_include_roots_resolve_imported_modules() {
 #[ignore = "需要已安装的 Slang 编译器"]
 fn invalid_spirv_is_rejected_before_cache_publication() {
     let fixture = Fixture::new();
-    fs::write(&fixture.source, "RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { spirv_asm { OpExecutionMode $main OriginUpperLeft; }; output[0] = 1; }").unwrap();
+    fs::write(&fixture.source, "var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { spirv_asm { OpExecutionMode $main OriginUpperLeft; }; output[0] = 1; }").unwrap();
     let compiler = fixture.compiler();
     let result = compiler.compile(&Recipe {
         source: fixture.source.to_str().unwrap(),
@@ -152,10 +152,10 @@ fn runtime_cache_tracks_imports_instead_of_unrelated_contents() {
     fs::create_dir(&include).unwrap();
     let used = include.join("constant.slang");
     let unused = include.join("unused.slang");
-    let original = "module constant; public uint value() { return 17; }";
+    let original = "module constant; public func value() -> uint { return 17; }";
     fs::write(&used, original).unwrap();
     fs::write(&unused, "module unused;").unwrap();
-    fs::write(&fixture.source, "import constant; RWStructuredBuffer<uint> output; [shader(\"compute\")] [numthreads(1,1,1)] void main() { output[0] = value(); }").unwrap();
+    fs::write(&fixture.source, "import constant; var output: RWStructuredBuffer<uint>; [shader(\"compute\")] [numthreads(1, 1, 1)] func main() -> void { output[0] = value(); }").unwrap();
     let compiler =
         RuntimeCompiler::new(fixture.root.join("cache"), &[&include], &[&fixture.source]).unwrap();
     let first = fixture.compile(&compiler);
@@ -163,7 +163,11 @@ fn runtime_cache_tracks_imports_instead_of_unrelated_contents() {
     let unchanged = fixture.compile(&compiler);
     assert!(unchanged.cache_hit());
     assert_eq!(unchanged.fingerprint(), first.fingerprint());
-    fs::write(&used, "module constant; public uint value() { return 23; }").unwrap();
+    fs::write(
+        &used,
+        "module constant; public func value() -> uint { return 23; }",
+    )
+    .unwrap();
     let changed = fixture.compile(&compiler);
     assert!(!changed.cache_hit());
     assert_ne!(changed.bytes(), first.bytes());

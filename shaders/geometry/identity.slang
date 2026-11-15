@@ -3,22 +3,22 @@
 module identity;
 namespace geometry
 {
-public uint identity_index(StructuredBuffer<uint4> words, uint base, uint token)
+public func identity_index(words: StructuredBuffer<uint4>, base: uint, token: uint)->uint
 {
     if (token == 0u)
         return 0xffffffffu;
-    uint4 header = words[base];
-    uint hash = token;
+    let header : uint4 = words[base];
+    var hash : uint = token;
     hash ^= hash >> 16u;
     hash *= 0x7feb352du;
     hash ^= hash >> 15u;
     hash *= 0x846ca68bu;
     hash ^= hash >> 16u;
-    uint slot = hash & header.y;
-    for (uint attempt = 0; attempt <= header.y; ++attempt)
+    var slot : uint = hash & header.y;
+    for (var attempt: uint = 0; attempt <= header.y; ++attempt)
     {
-        uint4 packed = words[base + header.z + slot / 2u];
-        uint2 entry = (slot & 1u) == 0u ? packed.xy : packed.zw;
+        let packed : uint4 = words[base + header.z + slot / 2u];
+        let entry : uint2 = (slot & 1u) == 0u ? packed.xy : packed.zw;
         if (entry.x == token)
             return entry.y - 1u;
         if (entry.x == 0u)

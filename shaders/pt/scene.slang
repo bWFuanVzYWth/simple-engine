@@ -6,56 +6,56 @@ import bsdf.openpbr.api;
 
 namespace pt
 {
-public static const uint PATH_ACTIVE = 0u;
-public static const uint PATH_DONE = 1u;
-public static const uint PATH_INVALID = 2u;
-public static const uint PATH_DIELECTRIC_LIMIT = 3u;
-public static const float FAR = 1.0e8;
+public static const let PATH_ACTIVE = 0u;
+public static const let PATH_DONE = 1u;
+public static const let PATH_INVALID = 2u;
+public static const let PATH_DIELECTRIC_LIMIT = 3u;
+public static const let FAR = 1.0e8;
 
 /// 紧凑命中缓存；identity、texel 的编码仅由场景解释，不保存完整 OpenPBR 材料。
 public struct Hit
 {
-    public geometry::SurfacePoint surface;
-    public uint4 identity;
+    public var surface : geometry::SurfacePoint;
+    public var identity : uint4;
     /// 场景的紧凑程序分类，由 prefix／shade 解释，不等同于 OpenPBR Capability。
-    public uint capability;
-    public float distance;
-    public float area;
-    public bool front;
-    public float4 texel;
+    public var capability : uint;
+    public var distance : float;
+    public var area : float;
+    public var front : bool;
+    public var texel : float4;
 };
 
 /// 路径唯一可变状态；depth 为已消费顶点数，previous_pdf=0 表示离散前驱。
 /// 非 ACTIVE 输出的 origin、previous、previous_pdf 规范为零，不再携带下一段或 MIS 身份。
 public struct PathState
 {
-    public float3 origin;
-    public float3 direction;
-    public float3 throughput;
-    public float3 radiance;
-    public float4 medium;
-    public float3 previous;
-    public float previous_pdf;
-    public float eta_scale;
-    public uint depth;
-    public uint dielectric_events;
-    public uint status;
+    public var origin : float3;
+    public var direction : float3;
+    public var throughput : float3;
+    public var radiance : float3;
+    public var medium : float4;
+    public var previous : float3;
+    public var previous_pdf : float;
+    public var eta_scale : float;
+    public var depth : uint;
+    public var dielectric_events : uint;
+    public var status : uint;
 };
 
 /// 当前顶点的局部翻译结果；transmitted 是边界另一侧实际 IOR／RGB extinction。
 /// emission 已处理发光侧，boundary_filter 仅在 delta solid 穿越界面时相乘。
 public struct SurfaceMaterial
 {
-    public openpbr::Material pbr;
-    public float4 transmitted;
-    public float3 emission;
-    public float3 boundary_filter;
+    public var pbr : openpbr::Material;
+    public var transmitted : float4;
+    public var emission : float3;
+    public var boundary_filter : float3;
     /// 单位着色法线；零向量沿用Hit的几何法线。不能用于几何偏移或介质跨界判定。
-    public float3 normal;
+    public var normal : float3;
 };
 
 /// 只选择BSDF/guide的着色法线；几何SurfacePoint保持原始绕序与误差界。
-public float3 shading_normal(Hit hit, SurfaceMaterial material)
+public func shading_normal(hit: Hit, material: SurfaceMaterial)->float3
 {
     return any(material.normal != 0) ? material.normal : hit.surface.normal;
 }
@@ -67,74 +67,75 @@ public float3 shading_normal(Hit hit, SurfaceMaterial material)
 /// 两者不改变 pdf 或覆盖规则；昂贵求值留给通过可见性后的 light_emission。
 public struct LightSample
 {
-    public float3 direction;
-    public float3 emission;
-    public uint emission_reference;
-    public float pdf;
-    public float distance;
-    public geometry::Ray visibility;
+    public var direction : float3;
+    public var emission : float3;
+    public var emission_reference : uint;
+    public var pdf : float;
+    public var distance : float;
+    public var visibility : geometry::Ray;
 };
 
 /// 非采样天空与独立太阳策略分项；sun_pdf 为当前方向的竞争密度，零表示无竞争。
 public struct Environment
 {
-    public float3 sky;
-    public float3 sun;
-    public float sun_pdf;
+    public var sky : float3;
+    public var sun : float3;
+    public var sun_pdf : float;
 };
 
 /// 不含场景策略的积分设置；budget为1..64次表面散射，末顶点仍计算发光与NEE。
 /// resolution为采样器的log2分辨率。
 public struct Settings
 {
-    public uint seed;
-    public uint budget;
-    public uint resolution;
-    public uint dielectric_limit;
+    public var seed : uint;
+    public var budget : uint;
+    public var resolution : uint;
+    public var dielectric_limit : uint;
     /// 对eta补偿后的吞吐量使用平方根轮盘；仅改变存活概率，存活路径仍除以该概率。
-    public bool square_root_roulette;
+    public var square_root_roulette : bool;
 };
 
 /// callable 交接的紧凑命中、路径和绝对样本身份；不允许嵌套 callable 或 TraceRay。
 public struct TransportCall
 {
-    public Hit hit;
-    public PathState path;
-    public uint2 pixel;
-    public uint sample;
+    public var hit : Hit;
+    public var path : PathState;
+    public var pixel : uint2;
+    public var sample : uint;
 };
 
 /// resolve 的 Capability 与入口匹配；continuous 窄入口的额外条件由场景发布时证明。
 /// occluded 须与主查询使用相同覆盖规则；RayQuery 场景自行确认 alpha 候选。
 public interface IScene
 {
-    SurfaceMaterial resolve(Hit hit, uint capability, float4 incident);
-    openpbr::Energy energy();
-    LightSample sample_sun(geometry::SurfacePoint point, float2 sample);
-    LightSample sample_light(geometry::SurfacePoint point, float3 sample);
-    float3 light_emission(geometry::SurfacePoint point, LightSample sample, bool solar);
-    float emission_pdf(Hit hit, float3 previous);
-    bool occluded(geometry::Ray ray);
-    Environment environment(float3 direction, float3 previous, uint depth);
+    func resolve(hit: Hit, capability: uint, incident: float4)->SurfaceMaterial;
+    func energy()->openpbr::Energy;
+    func sample_sun(point_value: geometry::SurfacePoint, sample_value: float2)->LightSample;
+    func sample_light(point_value: geometry::SurfacePoint, sample_value: float3)->LightSample;
+    func light_emission(point_value: geometry::SurfacePoint, sample_value: LightSample, solar: bool)
+        ->float3;
+    func emission_pdf(hit: Hit, previous: float3)->float;
+    func occluded(ray: geometry::Ray)->bool;
+    func environment(direction: float3, previous: float3, depth: uint)->Environment;
 };
 
 /// 组合 callable 的材料翻译；Flow 为编译期能力掩码，与旧 CAP 参数不混用。
 /// 适配器只读取该能力需要的参数和纹理；资源世代保证实际材料落在已证明支持域。
 public interface IFlowScene : IScene
 {
-    SurfaceMaterial resolve_flow(Hit hit, uint flow, float4 incident);
+    func resolve_flow(hit: Hit, flow: uint, incident: float4)->SurfaceMaterial;
 };
 
 /// 非发光delta solid的唯一界面数据；不存在颜色、粗糙度或连续lobe状态。
 public struct DeltaInterface
 {
-    public float3 normal;
-    public float4 transmitted;
-    public float3 filter;
+    public var normal : float3;
+    public var transmitted : float4;
+    public var filter : float3;
 };
 public interface IDeltaPrefixScene
 {
-    DeltaInterface delta_interface(Hit hit, float4 incident);
+    func delta_interface(hit: Hit, incident: float4)->DeltaInterface;
 };
 
 /// 主查询仅供 raygen 使用；shade 只选择一次叶子 callable，resolve_hit 只调整实际能力。
@@ -142,10 +143,10 @@ public interface IDeltaPrefixScene
 public interface ITraceScene : IScene,
                                IDeltaPrefixScene
 {
-    bool intersect(float3 origin, float3 direction, out Hit hit);
-    void resolve_hit(inout Hit hit, float4 incident);
-    bool prefix(Hit hit);
-    void shade(inout TransportCall data);
+    func intersect(origin: float3, direction: float3, out hit: Hit)->bool;
+    func resolve_hit(inout hit: Hit, incident: float4)->void;
+    func prefix(hit: Hit)->bool;
+    func shade(inout data: TransportCall)->void;
 };
 
 /// K1 首个实际命中的只读观察者；在 delta 前缀消费之前回调，环境只在主射线未命中回调。
@@ -154,26 +155,26 @@ public interface ITraceScene : IScene,
 /// 不声称提供光学链重建或镜面命中距离；这些需要独立的、明确的追踪策略。
 public interface IPrefixGuides
 {
-    void surface(TransportCall data);
-    void environment(TransportCall data);
+    func surface(data: TransportCall)->void;
+    func environment(data: TransportCall)->void;
 };
 
 /// HitObject路径的首命中观察者；复用实际命中，不为材质解码重查同一主射线。
 public interface IHitGuides : IPrefixGuides
 {
-    void surface_hit(HitObject object, TransportCall data);
+    func surface_hit(object: HitObject, data: TransportCall)->void;
 };
 
 /// 默认不生成辅助量；编译期专门化后不保留额外资源、材质翻译或存储。
 public struct NoPrefixGuides : IHitGuides
 {
-    public void surface(TransportCall data)
+    public func surface(data: TransportCall)->void
     {
     }
-    public void environment(TransportCall data)
+    public func environment(data: TransportCall)->void
     {
     }
-    public void surface_hit(HitObject object, TransportCall data)
+    public func surface_hit(object: HitObject, data: TransportCall)->void
     {
     }
 };

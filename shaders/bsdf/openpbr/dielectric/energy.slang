@@ -10,9 +10,10 @@ import "bsdf/openpbr/contract/flags.slang";
 import "bsdf/openpbr/contract/material.slang";
 import "bsdf/openpbr/contract/sample.slang";
 
-public float3 primeFullCompactTransmissionEnergy<TransmissionGgxEnergy>(
-    TransmissionGgxEnergy transmissionGgxEnergy, float3 wi, PrimeFullCompactTransmissionState state,
-    uint samplingFlags)
+public func primeFullCompactTransmissionEnergy<TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, wi: float3,
+    state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->float3
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     if (!primeFullOpenPbrMicrofacetEffectivelySmooth(state.specularMicrofacet) &&
@@ -27,13 +28,13 @@ public float3 primeFullCompactTransmissionEnergy<TransmissionGgxEnergy>(
     {
         return float3(0.0);
     }
-    float helperR = state.geometryThinWalled != 0u
-                        ? primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                              transmissionGgxEnergy, state.specularMicrofacet, abs(wi.z),
-                              state.specularFresnel.ior)
-                              .z
-                        : state.transmissionMultipleScattering.z;
-    float reflected = primeFullOpenPbrIsReflective(samplingFlags) ? helperR : 0.0;
-    float transmitted = primeFullOpenPbrIsTransmissive(samplingFlags) ? 1.0 - helperR : 0.0;
+    let helperR : float = state.geometryThinWalled != 0u
+                              ? primeFullOpenPbrMicrofacetDielectricMsCompensation(
+                                    transmissionGgxEnergy, state.specularMicrofacet, abs(wi.z),
+                                    state.specularFresnel.ior)
+                                    .z
+                              : state.transmissionMultipleScattering.z;
+    let reflected : float = primeFullOpenPbrIsReflective(samplingFlags) ? helperR : 0.0;
+    let transmitted : float = primeFullOpenPbrIsTransmissive(samplingFlags) ? 1.0 - helperR : 0.0;
     return reflected * state.specularFresnel.color + transmitted * state.transmissionTint;
 }

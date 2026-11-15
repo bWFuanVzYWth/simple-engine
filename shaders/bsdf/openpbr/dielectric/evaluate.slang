@@ -7,16 +7,21 @@ import "bsdf/openpbr/dielectric/contract.slang";
 import "bsdf/openpbr/dielectric/refract.slang";
 import "bsdf/openpbr/dielectric/state.slang";
 
-public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvaluate(
-    float3 wi, float3 wo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionEvaluate(wi: float3, wo: float3,
+                                                 state: PrimeFullCompactTransmissionState,
+                                                 samplingFlags: uint)
+    ->PrimeFullCompactTransmissionEvaluation
 {
-    PrimeFullCompactTransmissionState closure = primeFullCompactTransmissionClosureState(state);
+    let closure : PrimeFullCompactTransmissionState =
+                      primeFullCompactTransmissionClosureState(state);
     return primeFullCompactTransmissionEvaluateRaw(wi, wo, closure, samplingFlags);
 }
 
-public PrimeFullCompactTransmissionEvaluation primeFullCompactTransmissionEvaluateSolidContinuous(
-    float3 wi, float3 wo, PrimeFullCompactTransmissionState state, uint samplingFlags)
+public func primeFullCompactTransmissionEvaluateSolidContinuous(
+    wi: float3, wo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
+    ->PrimeFullCompactTransmissionEvaluation
 {
-    PrimeFullCompactTransmissionState closure = primeFullCompactTransmissionClosureState(state);
+    let closure : PrimeFullCompactTransmissionState =
+                      primeFullCompactTransmissionClosureState(state);
     return primeFullCompactTransmissionEvaluateRawSolidContinuous(wi, wo, closure, samplingFlags);
 }

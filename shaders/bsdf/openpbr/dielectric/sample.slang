@@ -12,11 +12,12 @@ import "bsdf/openpbr/contract/flags.slang";
 import "bsdf/openpbr/contract/volume.slang";
 import "bsdf/openpbr/contract/sample.slang";
 
-public PrimeFullOpenPbrSampleResult primeFullCompactTransmissionSample(
-    float3 wi, float3 randomValue, PrimeFullCompactTransmissionState state, uint samplingFlags,
-    PrimeFullOpenPbrVolume medium)
+public func primeFullCompactTransmissionSample(wi: float3, randomValue: float3,
+                                               state: PrimeFullCompactTransmissionState,
+                                               samplingFlags: uint, medium: PrimeFullOpenPbrVolume)
+    ->PrimeFullOpenPbrSampleResult
 {
-    PrimeFullOpenPbrSampleResult result;
+    var result : PrimeFullOpenPbrSampleResult;
     result.medium = medium;
     result.rayT = state.rayT;
     result.bsdfSample = primeFullCompactTransmissionSampleRaw(

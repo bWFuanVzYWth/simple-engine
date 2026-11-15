@@ -7,18 +7,18 @@ import "bsdf/openpbr/contract/flags.slang";
 
 public struct PrimeFullOpenPbrVolume
 {
-    public float3 extinction;
-    public float3 albedo;
-    public float anisotropy;
-    public float ior;
-    public uint mediumId;
-    public uint iorEncoding;
+    public var extinction : float3;
+    public var albedo : float3;
+    public var anisotropy : float;
+    public var ior : float;
+    public var mediumId : uint;
+    public var iorEncoding : uint;
 };
 
 // A ray carries exactly one resolved medium. Zero is the explicit vacuum endpoint.
-public PrimeFullOpenPbrVolume primeFullOpenPbrVacuumVolume()
+public func primeFullOpenPbrVacuumVolume()->PrimeFullOpenPbrVolume
 {
-    PrimeFullOpenPbrVolume medium = {};
+    var medium : PrimeFullOpenPbrVolume = {};
     medium.ior = 1.0;
     return medium;
 }

@@ -15,7 +15,7 @@ Intel 的 fx/LightScattering.fx 和 fx/RefineSampleLocations.fx 声明上述版�
 simple_engine 适配了极线与剖面算法，并参考 Intel 的深度重建，在硬件光追首命中处
 裁剪积分、按首命中深度重建近场辐亮度，按已提交帧渐进刷新。
 相关实现位于 shaders/atmosphere/epipolar.slang、shadow_profile.inc.slang、
-shadow_resolve.slang、terrain_integrate.inc.slang 和 terrain_composite.slang。
+shadow_resolve.slang、terrain_integrate.slang 和 terrain_composite.slang。
 
 上游提交 9ecf3c3 将许可更新为 Apache-2.0。readme.txt 末尾仍有早期的 BSD 说明，
 并单独列出 Media Elements 的使用限制。

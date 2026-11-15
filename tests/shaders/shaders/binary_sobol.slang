@@ -5,20 +5,22 @@ module binary_sobol_test;
 import pt.binary_sobol;
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<uint4> inputs;
+var inputs : StructuredBuffer<uint4>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<uint4> outputs;
+var outputs : RWStructuredBuffer<uint4>;
 
 // 每 case 两行：(pixel.x/y, sample, R)、(seed, pair_domain, scalar_domain, 0)。
 // 输出的 w 为执行标识，前三项仅存被检验的整数或浮点位模式。
-void binary_samples<let Mode : uint>(uint i)
+func binary_samples<let Mode : uint>(i: uint)->void
 {
-    uint rows, stride;
+    var rows : uint;
+    var stride : uint;
     inputs.GetDimensions(rows, stride);
     if (i >= rows / 2)
         return;
-    uint4 a = inputs[2 * i], b = inputs[2 * i + 1];
-    pt::BinarySobolS8 sampler = pt::binary_sobol_s8(a.xy, a.z, a.w, b.x);
+    let a : uint4 = inputs[2 * i];
+    let b : uint4 = inputs[2 * i + 1];
+    let sampler : pt::BinarySobolS8 = pt::binary_sobol_s8(a.xy, a.z, a.w, b.x);
     if (Mode == 0)
         outputs[i] = uint4(sampler.bits_2d(b.y), sampler.bits_1d(b.z), i + 1);
     else if (Mode == 1)
@@ -28,19 +30,19 @@ void binary_samples<let Mode : uint>(uint i)
 }
 
 [numthreads(64, 1, 1)]
-void binary_sobol_bits_main(uint3 id: SV_DispatchThreadID)
+func binary_sobol_bits_main(uint3 id: SV_DispatchThreadID)->void
 {
     binary_samples<0>(id.x);
 }
 
 [numthreads(64, 1, 1)]
-void binary_sobol_3d_main(uint3 id: SV_DispatchThreadID)
+func binary_sobol_3d_main(uint3 id: SV_DispatchThreadID)->void
 {
     binary_samples<1>(id.x);
 }
 
 [numthreads(64, 1, 1)]
-void binary_sobol_float_main(uint3 id: SV_DispatchThreadID)
+func binary_sobol_float_main(uint3 id: SV_DispatchThreadID)->void
 {
     binary_samples<2>(id.x);
 }

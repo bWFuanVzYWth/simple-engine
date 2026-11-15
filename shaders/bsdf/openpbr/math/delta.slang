@@ -9,45 +9,49 @@ import "bsdf/openpbr/math/fresnel.slang";
 import "bsdf/openpbr/math/spectrum.slang";
 import bsdf.openpbr.primary_policy;
 
-public float3 primeFullCompactGuardedThinWallSeriesReciprocal(float3 roundTrip)
+public func primeFullCompactGuardedThinWallSeriesReciprocal(roundTrip: float3)->float3
 {
     return float3(1.0) / max(float3(PRIME_FULL_OPENPBR_DENOM_TOLERANCE),
                              float3(1.0) - primeFullOpenPbrSquare(roundTrip));
 }
 
-public PrimeFullOpenPbrVecPair primeFullThinWallRt(float cosineTheta,
-                                                   PrimeFullOpenPbrSpecularFresnel specularFresnel,
-                                                   float3 transmissionTint, float3 extinction)
+public func primeFullThinWallRt(cosineTheta: float,
+                                specularFresnel: PrimeFullOpenPbrSpecularFresnel,
+                                transmissionTint: float3, extinction: float3)
+    ->PrimeFullOpenPbrVecPair
 {
-    PrimeFullOpenPbrVecPair fresnel =
-        primeFullOpenPbrSpecularFresnelRt(specularFresnel, cosineTheta);
-    float t0 = specularFresnel.ior == 1.0 ? cosineTheta * cosineTheta
-                                          : 1.0 - (1.0 - cosineTheta * cosineTheta) /
-                                                      primeFullOpenPbrSquare(specularFresnel.ior);
+    let fresnel : PrimeFullOpenPbrVecPair =
+                      primeFullOpenPbrSpecularFresnelRt(specularFresnel, cosineTheta);
+    let t0 : float = specularFresnel.ior == 1.0
+                         ? cosineTheta * cosineTheta
+                         : 1.0 - (1.0 - cosineTheta * cosineTheta) /
+                                     primeFullOpenPbrSquare(specularFresnel.ior);
     if (t0 <= 0.0)
     {
         return fresnel;
     }
-    float cosineThetaI = sqrt(t0);
-    float3 absorption = transmissionTint * exp(-extinction / cosineThetaI);
-    float3 inverseSeries =
-        primeFullCompactGuardedThinWallSeriesReciprocal(fresnel.first * absorption);
-    PrimeFullOpenPbrVecPair result;
+    let cosineThetaI : float = sqrt(t0);
+    let absorption : float3 = transmissionTint * exp(-extinction / cosineThetaI);
+    let inverseSeries
+        : float3 = primeFullCompactGuardedThinWallSeriesReciprocal(fresnel.first * absorption);
+    var result : PrimeFullOpenPbrVecPair;
     result.second = primeFullOpenPbrSquare(fresnel.second) * absorption * inverseSeries;
     result.first = fresnel.first * (float3(1.0) + result.second * absorption);
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool = false>(
-    float3 wi, float randomEvent, PrimeFullOpenPbrSpecularFresnel specularFresnel,
-    uint samplingFlags)
+public func primeFullRefractiveDeltaSample<let Balanced : bool = false>(
+    wi: float3, randomEvent: float, specularFresnel: PrimeFullOpenPbrSpecularFresnel,
+    samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    float microIncident = wi.z;
-    PrimeFullOpenPbrVecPair rt = primeFullOpenPbrSpecularFresnelRt(specularFresnel, microIncident);
-    float3 reflection = rt.first;
-    float3 transmission = rt.second;
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(reflection);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(transmission);
+    let microIncident : float = wi.z;
+    let rt : PrimeFullOpenPbrVecPair =
+                 primeFullOpenPbrSpecularFresnelRt(specularFresnel, microIncident);
+    var reflection : float3 = rt.first;
+    let transmission : float3 = rt.second;
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(reflection);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(transmission);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
     {
         reflectionProbability = 0.0;
@@ -56,8 +60,9 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool
     {
         transmissionProbability = 0.0;
     }
-    PrimeFullOpenPbrRefractResult refracted =
-        primeFullOpenPbrSpecularFresnelRefract(specularFresnel, -wi, float3(0.0, 0.0, 1.0));
+    let refracted
+        : PrimeFullOpenPbrRefractResult =
+              primeFullOpenPbrSpecularFresnelRefract(specularFresnel, -wi, float3(0.0, 0.0, 1.0));
     if (refracted.valid == 0u)
     {
         transmissionProbability = 0.0;
@@ -65,21 +70,21 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool
     }
     if (Balanced)
     {
-        float reflectionWeight =
-            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
-        bool available = reflectionProbability + transmissionProbability > 0;
+        let reflectionWeight : float = openpbr_primary::reflection_probability(
+                                   reflectionProbability, transmissionProbability);
+        let available : bool = reflectionProbability + transmissionProbability > 0;
         reflectionProbability = available ? reflectionWeight : 0;
         transmissionProbability = available ? 1 - reflectionWeight : 0;
     }
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
     {
         return primeFullOpenPbrZeroSample();
     }
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (randomEvent < transmissionProbability / probabilitySum)
     {
-        float3 wo = refracted.wo;
+        var wo : float3 = refracted.wo;
         if (wi.z * wo.z >= 0.0)
         {
             return primeFullOpenPbrZeroSample();
@@ -92,7 +97,7 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool
     }
     else
     {
-        float3 wo = reflect(-wi, float3(0.0, 0.0, 1.0));
+        var wo : float3 = reflect(-wi, float3(0.0, 0.0, 1.0));
         if (wi.z * wo.z < 0.0)
         {
             return primeFullOpenPbrZeroSample();
@@ -105,19 +110,20 @@ public PrimeFullOpenPbrSample primeFullRefractiveDeltaSample<let Balanced : bool
     return result;
 }
 
-public PrimeFullOpenPbrSample primeFullThinWallDeltaSample<let Balanced : bool = false>(
-    float3 wi, float randomEvent, PrimeFullOpenPbrSpecularFresnel specularFresnel,
-    float3 transmissionTint, float3 extinction, uint samplingFlags)
+public func primeFullThinWallDeltaSample<let Balanced : bool = false>(
+    wi: float3, randomEvent: float, specularFresnel: PrimeFullOpenPbrSpecularFresnel,
+    transmissionTint: float3, extinction: float3, samplingFlags: uint)
+    ->PrimeFullOpenPbrSample
 {
-    PrimeFullOpenPbrSample result = primeFullOpenPbrZeroSample();
+    var result : PrimeFullOpenPbrSample = primeFullOpenPbrZeroSample();
     if (wi.z <= 0.0 || !primeFullOpenPbrIsDelta(samplingFlags))
     {
         return result;
     }
-    PrimeFullOpenPbrVecPair rt =
-        primeFullThinWallRt(wi.z, specularFresnel, transmissionTint, extinction);
-    float reflectionProbability = primeFullOpenPbrSpectrumToWeight(rt.first);
-    float transmissionProbability = primeFullOpenPbrSpectrumToWeight(rt.second);
+    let rt : PrimeFullOpenPbrVecPair =
+                 primeFullThinWallRt(wi.z, specularFresnel, transmissionTint, extinction);
+    var reflectionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.first);
+    var transmissionProbability : float = primeFullOpenPbrSpectrumToWeight(rt.second);
     if (!primeFullOpenPbrIsReflective(samplingFlags))
     {
         reflectionProbability = 0.0;
@@ -128,13 +134,13 @@ public PrimeFullOpenPbrSample primeFullThinWallDeltaSample<let Balanced : bool =
     }
     if (Balanced)
     {
-        float reflectionWeight =
-            openpbr_primary::reflection_probability(reflectionProbability, transmissionProbability);
-        bool available = reflectionProbability + transmissionProbability > 0;
+        let reflectionWeight : float = openpbr_primary::reflection_probability(
+                                   reflectionProbability, transmissionProbability);
+        let available : bool = reflectionProbability + transmissionProbability > 0;
         reflectionProbability = available ? reflectionWeight : 0;
         transmissionProbability = available ? 1 - reflectionWeight : 0;
     }
-    float probabilitySum = reflectionProbability + transmissionProbability;
+    let probabilitySum : float = reflectionProbability + transmissionProbability;
     if (probabilitySum == 0.0)
     {
         return result;

@@ -1,61 +1,63 @@
 // 独立 callable payload、动态 SBT 索引及绑定资源回归；不执行递归或嵌套 CallShader。
 [[vk::binding(0, 0)]]
-RaytracingAccelerationStructure scene;
+var scene : RaytracingAccelerationStructure;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<float4> result;
+var result : RWStructuredBuffer<float4>;
 [[vk::binding(2, 0)]]
-StructuredBuffer<float4> source;
+var source : StructuredBuffer<float4>;
 [[vk::binding(3, 0)]]
-Texture2D<float4> tint;
+var tint : Texture2D<float4>;
 [[vk::binding(4, 0)]]
-SamplerState linear_clamp;
+var linear_clamp : SamplerState;
 
 struct CallablePayload
 {
-    float4 value;
-    uint lane;
+    var value : float4;
+    var lane : uint;
 };
 struct RayPayload
 {
-    uint unused;
+    var unused : uint;
 };
 
 [shader("raygeneration")]
-void callable_raygen()
+func callable_raygen()->void
 {
-    uint lane = DispatchRaysIndex().x;
-    CallablePayload payload;
+    var lane : uint = DispatchRaysIndex().x;
+    var payload : CallablePayload;
     payload.value = float4(float(lane), 1, 2, 1);
     payload.lane = lane;
-    uint first = lane & 1;
+    let first : uint = lane & 1;
     CallShader(first, payload);
     CallShader(first ^ 1, payload);
     result[lane] = payload.value;
 }
 
 [shader("callable")]
-void callable_add(inout CallablePayload payload)
+func callable_add(inout payload_value: CallablePayload)->void
 {
-    payload.value.xyz +=
-        source[payload.lane].xyz + tint.SampleLevel(linear_clamp, float2(.5), 0).xyz;
-    payload.value.w += 1;
+    payload_value.value.xyz +=
+        source[payload_value.lane].xyz + tint.SampleLevel(linear_clamp, float2(.5), 0).xyz;
+    payload_value.value.w += 1;
 }
 
 [shader("callable")]
-void callable_scale(inout CallablePayload payload)
+func callable_scale(inout payload_value: CallablePayload)->void
 {
-    payload.value.xyz *= 2;
-    payload.value.w += 2;
+    payload_value.value.xyz *= 2;
+    payload_value.value.w += 2;
 }
 
 [shader("miss")]
-void callable_miss(inout RayPayload payload)
+func callable_miss(inout payload_value: RayPayload)->void
 {
-    payload.unused = 0;
+    payload_value.unused = 0;
 }
 
 [shader("closesthit")]
-void callable_closest(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attributes)
+func callable_closest(inout payload_value: RayPayload,
+                      attributes: BuiltInTriangleIntersectionAttributes)
+    ->void
 {
-    payload.unused = 0;
+    payload_value.unused = 0;
 }

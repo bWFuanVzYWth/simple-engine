@@ -7,17 +7,17 @@ import "bsdf/openpbr/service/contract/sample.slang";
 import "bsdf/openpbr/service/contract/albedo.slang";
 import "bsdf/openpbr/service/contract/components.slang";
 
-public BsdfEvaluation primeInvalidBsdfEvaluation()
+public func primeInvalidBsdfEvaluation()->BsdfEvaluation
 {
-    BsdfEvaluation result;
+    var result : BsdfEvaluation;
     result.response = float3(0.0);
     result.pdf = 0.0;
     return result;
 }
 
-public BsdfSample primeInvalidBsdfSample()
+public func primeInvalidBsdfSample()->BsdfSample
 {
-    BsdfSample result;
+    var result : BsdfSample;
     result.direction = float3(0.0);
     result.response = float3(0.0);
     result.pdf = 0.0;
@@ -26,26 +26,26 @@ public BsdfSample primeInvalidBsdfSample()
     return result;
 }
 
-public bool primeBsdfFinite(float value)
+public func primeBsdfFinite(value: float)->bool
 {
     return !isnan(value) && !isinf(value);
 }
 
-public bool primeBsdfFinite(float3 value)
+public func primeBsdfFinite(value: float3)->bool
 {
     return !any(isnan(value)) && !any(isinf(value));
 }
 
-public bool primeBsdfDirection(float3 value)
+public func primeBsdfDirection(value: float3)->bool
 {
     if (!primeBsdfFinite(value))
         return false;
-    float lengthSquared = dot(value, value);
+    let lengthSquared : float = dot(value, value);
     return primeBsdfFinite(lengthSquared) && lengthSquared > 1.0e-12 &&
            abs(lengthSquared - 1.0) <= 1.0e-3;
 }
 
-public BsdfEvaluation primeSanitizeBsdfEvaluation(BsdfEvaluation evaluation)
+public func primeSanitizeBsdfEvaluation(evaluation: BsdfEvaluation)->BsdfEvaluation
 {
     if (!primeBsdfFinite(evaluation.response) || !primeBsdfFinite(evaluation.pdf) ||
         any(evaluation.response < float3(0.0)) || evaluation.pdf < 0.0)
@@ -55,7 +55,7 @@ public BsdfEvaluation primeSanitizeBsdfEvaluation(BsdfEvaluation evaluation)
     return evaluation;
 }
 
-public BsdfSample primeSanitizeBsdfSample<let UnitEta : bool = false>(BsdfSample sampleValue)
+public func primeSanitizeBsdfSample<let UnitEta : bool = false>(sampleValue: BsdfSample)->BsdfSample
 {
     if (sampleValue.eventFlags == 0)
     {
@@ -66,8 +66,8 @@ public BsdfSample primeSanitizeBsdfSample<let UnitEta : bool = false>(BsdfSample
 
 /// 调用方已证明 eventFlags 非零；UnitEta=true 另外保证 relativeEta=1。
 /// 仍检查方向、响应与 PDF；未证明的 eta 保持原数值检查。
-public BsdfSample primeSanitizeBsdfSampleWithEvents<let UnitEta : bool = false>(
-    BsdfSample sampleValue)
+public func primeSanitizeBsdfSampleWithEvents<let UnitEta : bool = false>(sampleValue: BsdfSample)
+    ->BsdfSample
 {
     if (!primeBsdfDirection(sampleValue.direction) || !primeBsdfFinite(sampleValue.response) ||
         !primeBsdfFinite(sampleValue.pdf) ||
@@ -80,15 +80,16 @@ public BsdfSample primeSanitizeBsdfSampleWithEvents<let UnitEta : bool = false>(
     return sampleValue;
 }
 
-public float3 primeSanitizeDenoiseAlbedo(float3 albedo)
+public func primeSanitizeDenoiseAlbedo(albedo: float3)->float3
 {
     return float3(primeBsdfFinite(albedo.x) ? clamp(albedo.x, 0.0, 1.0) : 0.0,
                   primeBsdfFinite(albedo.y) ? clamp(albedo.y, 0.0, 1.0) : 0.0,
                   primeBsdfFinite(albedo.z) ? clamp(albedo.z, 0.0, 1.0) : 0.0);
 }
 
-public PrimeBsdfComponents primeSanitizeBsdfComponents(PrimeBsdfComponents components)
+public func primeSanitizeBsdfComponents(components: PrimeBsdfComponents)->PrimeBsdfComponents
 {
+    var components = components;
     if (!primeBsdfFinite(components.diffuseResponse) ||
         !primeBsdfFinite(components.specularResponse) || !primeBsdfFinite(components.pdf) ||
         any(components.diffuseResponse < float3(0.0)) ||

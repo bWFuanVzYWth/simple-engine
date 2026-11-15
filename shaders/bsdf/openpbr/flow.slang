@@ -13,21 +13,7 @@ import bsdf.openpbr.transmission_composition;
 import "bsdf/openpbr/math/frame.slang";
 import "bsdf/openpbr/math/microfacet_energy.slang";
 import "bsdf/openpbr/contract/material.slang";
-#if defined(OPENPBR_FLOW)
-#define SELECTED_FLOW OPENPBR_FLOW
-#else
-#define SELECTED_FLOW GAME_FLOW
-#endif
-#if SELECTED_FLOW & 48
-#define COMPOSED_TRANSMISSION 1
-#else
-#define COMPOSED_OPAQUE 1
-#endif
-#ifdef OPENPBR_RECIPE_VARIANT
-#define SELECTED_VARIANT OPENPBR_VARIANT
-#else
-#define SELECTED_VARIANT 0
-#endif
+import bsdf.openpbr.selection;
 
 namespace openpbr
 {
@@ -35,65 +21,65 @@ namespace openpbr
 public interface IFlowEvaluationConsumer
 {
     [mutating]
-    void consume(uint direction, Evaluation evaluated);
+    func consume(direction: uint, evaluated: Evaluation)->void;
 };
-#ifdef SELECTED_FLOW
-static const bool OpaqueContinuous = (SELECTED_FLOW & 64) == 0;
-#else
-static const bool OpaqueContinuous = false;
-#endif
+static const let OpaqueContinuous : bool = (openpbr_composition::SelectedFlow & 64) == 0;
 
 /// 每次只持有一个实际闭包；二值金属在建立状态之前分流。
-internal Evaluation evaluate_closure<C : openpbr_composition::IClosure, Provider>(
-    Provider energy, Material material, float3 normal, float3 view, float3 direction,
-    float4 incident)
+internal func evaluate_closure<C : openpbr_composition::IClosure, Provider>(
+    energy: Provider, material: Material, normal: float3, view: float3, direction: float3,
+    incident: float4)
+    ->Evaluation
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullOpenPbrOnb frame =
-        specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
-    float3 wi = primeFullOpenPbrOnbToLocal(frame, view);
-    C.State state = C.prepare(energy, material, wi, incident.x);
-    openpbr_composition::Value v =
-        C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, direction), state);
+    let frame : PrimeFullOpenPbrOnb =
+                    specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, view);
+    let state : C.State = C.prepare(energy, material, wi, incident.x);
+    let v : openpbr_composition::Value =
+                C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, direction), state);
     return specialized_evaluation(v.throughput, v.pdf);
 }
-internal Sample sample_closure<C : openpbr_composition::IClosure, Provider>(
-    Provider energy, Material material, float3 normal, float3 view, float3 u, float4 incident)
+internal func sample_closure<C : openpbr_composition::IClosure, Provider>(
+    energy: Provider, material: Material, normal: float3, view: float3, u: float3, incident: float4)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullOpenPbrOnb frame =
-        specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
-    float3 wi = primeFullOpenPbrOnbToLocal(frame, view);
-    C.State state = C.prepare(energy, material, wi, incident.x);
+    let frame : PrimeFullOpenPbrOnb =
+                    specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, view);
+    let state : C.State = C.prepare(energy, material, wi, incident.x);
     return specialized_result<CAP_OPAQUE_DIELECTRIC, OpaqueContinuous>(
         openpbr_composition::sample_closure<C>(wi, u, state), frame, view, incident, incident);
 }
-internal Sample
+internal func
 consume_closure<C : openpbr_composition::IClosure, Provider, Consumer, let Directions : uint>(
-    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, inout Consumer consumer)
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    inout consumer: Consumer)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
     where Consumer : IFlowEvaluationConsumer
 {
-    Sample result = {};
+    var result : Sample = {};
     result.relative_eta = 1;
     result.medium = incident;
     if ((Directions & evaluation_mask) == 0 && !continuation)
         return result;
-    PrimeFullOpenPbrOnb frame =
-        specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
-    float3 wi = primeFullOpenPbrOnbToLocal(frame, view);
-    C.State state = C.prepare(energy, material, wi, incident.x);
+    let frame : PrimeFullOpenPbrOnb =
+                    specialized_frame<CAP_OPAQUE_DIELECTRIC>(normal, view, incident, incident);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, view);
+    let state : C.State = C.prepare(energy, material, wi, incident.x);
     if ((Directions & evaluation_mask & 1u) != 0)
     {
-        openpbr_composition::Value v =
-            C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, first), state);
+        let v : openpbr_composition::Value =
+                    C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, first), state);
         consumer.consume(0, specialized_evaluation(v.throughput, v.pdf));
     }
     if ((Directions & evaluation_mask & 2u) != 0)
     {
-        openpbr_composition::Value v =
-            C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, second), state);
+        let v : openpbr_composition::Value =
+                    C.evaluate(wi, primeFullOpenPbrOnbToLocal(frame, second), state);
         consumer.consume(1, specialized_evaluation(v.throughput, v.pdf));
     }
     if (continuation)
@@ -102,62 +88,67 @@ consume_closure<C : openpbr_composition::IClosure, Provider, Consumer, let Direc
     return result;
 }
 
-#ifdef COMPOSED_TRANSMISSION
-static const uint TransmissionCapability =
-    (SELECTED_FLOW & 32) != 0 ? CAP_THIN_DIELECTRIC : CAP_SOLID_DIELECTRIC;
-static const bool TransmissionContinuous = (SELECTED_FLOW & 320) == 0;
-internal float interface_ior(float4 incident, float4 transmitted)
+static const let TransmissionCapability : uint = (openpbr_composition::SelectedFlow & 32) != 0
+                                                     ? CAP_THIN_DIELECTRIC
+                                                     : CAP_SOLID_DIELECTRIC;
+static const let TransmissionContinuous : bool = (openpbr_composition::SelectedFlow & 320) == 0;
+internal func interface_ior(incident: float4, transmitted: float4)->float
 {
-#if SELECTED_FLOW & 32
-    return transmitted.x / incident.x;
-#else
-    return incident.x > transmitted.x ? incident.x / transmitted.x : transmitted.x / incident.x;
-#endif
+    if ((openpbr_composition::SelectedFlow & 32) != 0)
+    {
+        return transmitted.x / incident.x;
+    }
+    else
+    {
+        return incident.x > transmitted.x ? incident.x / transmitted.x : transmitted.x / incident.x;
+    }
 }
-internal Evaluation evaluate_transmission<Provider>(Provider energy, Material material,
-                                                    float3 normal, float3 view, float3 direction,
-                                                    float4 incident, float4 transmitted)
+internal func evaluate_transmission<Provider>(energy: Provider, material: Material, normal: float3,
+                                              view: float3, direction: float3, incident: float4,
+                                              transmitted: float4)
+    ->Evaluation
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    PrimeFullOpenPbrOnb frame =
-        specialized_frame<TransmissionCapability>(normal, view, incident, transmitted);
-    float3 wi = primeFullOpenPbrOnbToLocal(frame, view);
-    openpbr_composition::Transmission.State state = openpbr_composition::Transmission.prepare(
+    let frame : PrimeFullOpenPbrOnb =
+                    specialized_frame<TransmissionCapability>(normal, view, incident, transmitted);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, view);
+    let state : openpbr_composition::Transmission.State = openpbr_composition::Transmission.prepare(
         energy, material.base_roughness.w, interface_ior(incident, transmitted),
         transmitted.yzw * material.surface.w, wi);
-    openpbr_composition::Value v = openpbr_composition::Transmission.evaluate(
-        wi, primeFullOpenPbrOnbToLocal(frame, direction), state);
+    let v : openpbr_composition::Value = openpbr_composition::Transmission.evaluate(
+                wi, primeFullOpenPbrOnbToLocal(frame, direction), state);
     return specialized_evaluation(v.throughput, v.pdf);
 }
-internal Sample
+internal func
 consume_transmission<Provider, Consumer, let Directions : uint, let Primary : bool = false>(
-    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
-    inout Consumer consumer)
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4, inout consumer: Consumer)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
     where Consumer : IFlowEvaluationConsumer
 {
-    Sample result = {};
+    var result : Sample = {};
     result.relative_eta = 1;
     result.medium = incident;
     if ((Directions & evaluation_mask) == 0 && !continuation)
         return result;
-    PrimeFullOpenPbrOnb frame =
-        specialized_frame<TransmissionCapability>(normal, view, incident, transmitted);
-    float3 wi = primeFullOpenPbrOnbToLocal(frame, view);
-    openpbr_composition::Transmission.State state = openpbr_composition::Transmission.prepare(
+    let frame : PrimeFullOpenPbrOnb =
+                    specialized_frame<TransmissionCapability>(normal, view, incident, transmitted);
+    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, view);
+    let state : openpbr_composition::Transmission.State = openpbr_composition::Transmission.prepare(
         energy, material.base_roughness.w, interface_ior(incident, transmitted),
         transmitted.yzw * material.surface.w, wi);
     if ((Directions & evaluation_mask & 1u) != 0)
     {
-        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate<Primary>(
-            wi, primeFullOpenPbrOnbToLocal(frame, first), state);
+        let v : openpbr_composition::Value = openpbr_composition::Transmission.evaluate<Primary>(
+                    wi, primeFullOpenPbrOnbToLocal(frame, first), state);
         consumer.consume(0, specialized_evaluation(v.throughput, v.pdf));
     }
     if ((Directions & evaluation_mask & 2u) != 0)
     {
-        openpbr_composition::Value v = openpbr_composition::Transmission.evaluate<Primary>(
-            wi, primeFullOpenPbrOnbToLocal(frame, second), state);
+        let v : openpbr_composition::Value = openpbr_composition::Transmission.evaluate<Primary>(
+                    wi, primeFullOpenPbrOnbToLocal(frame, second), state);
         consumer.consume(1, specialized_evaluation(v.throughput, v.pdf));
     }
     if (continuation)
@@ -166,125 +157,163 @@ consume_transmission<Provider, Consumer, let Directions : uint, let Primary : bo
             transmitted);
     return result;
 }
-#endif
 
-public Evaluation evaluate_flow<let Flow : uint, Provider>(Provider energy, Material material,
-                                                           float3 normal, float3 view,
-                                                           float3 direction, float4 incident,
-                                                           float4 transmitted)
+public func evaluate_flow<let Flow : uint, Provider>(energy: Provider, material: Material,
+                                                     normal: float3, view: float3,
+                                                     direction: float3, incident: float4,
+                                                     transmitted: float4)
+    ->Evaluation
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
     if (!flow_continuous<Flow>())
         return { float3(0), 0 };
-    static_assert(Flow == SELECTED_FLOW, "material recipe must match its SBT entry");
-#ifdef COMPOSED_OPAQUE
-#if (SELECTED_VARIANT & 2048) && (SELECTED_FLOW & 11)
-    if (material.surface.y == 1)
-        return evaluate_closure<openpbr_composition::Metal>(energy, material, normal, view,
-                                                            direction, incident);
-    return evaluate_closure<openpbr_composition::Dielectric>(energy, material, normal, view,
-                                                             direction, incident);
-#else
-    return evaluate_closure<openpbr_composition::Opaque>(energy, material, normal, view, direction,
-                                                         incident);
-#endif
-#elif defined(COMPOSED_TRANSMISSION)
-    return evaluate_transmission(energy, material, normal, view, direction, incident, transmitted);
-#endif
+    static_assert(Flow == openpbr_composition::SelectedFlow,
+                  "material recipe must match its SBT entry");
+    if ((openpbr_composition::SelectedFlow & 48) == 0)
+    {
+        if ((openpbr_composition::SelectedVariant & 2048) != 0 &&
+            (openpbr_composition::SelectedFlow & 11) != 0)
+        {
+            if (material.surface.y == 1)
+                return evaluate_closure<openpbr_composition::Metal>(energy, material, normal, view,
+                                                                    direction, incident);
+            return evaluate_closure<openpbr_composition::Dielectric>(energy, material, normal, view,
+                                                                     direction, incident);
+        }
+        else
+        {
+            return evaluate_closure<openpbr_composition::Opaque>(energy, material, normal, view,
+                                                                 direction, incident);
+        }
+    }
+    else
+    {
+        return evaluate_transmission(energy, material, normal, view, direction, incident,
+                                     transmitted);
+    }
 }
-public Sample sample_flow<let Flow : uint, Provider>(Provider energy, Material material,
-                                                     float3 normal, float3 view, float3 u,
-                                                     float4 incident, float4 transmitted)
+public func sample_flow<let Flow : uint, Provider>(energy: Provider, material: Material,
+                                                   normal: float3, view: float3, u: float3,
+                                                   incident: float4, transmitted: float4)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    static_assert(Flow == SELECTED_FLOW, "material recipe must match its SBT entry");
-#ifdef COMPOSED_OPAQUE
-#if (SELECTED_VARIANT & 2048) && (SELECTED_FLOW & 11)
-    if (material.surface.y == 1)
-        return sample_closure<openpbr_composition::Metal>(energy, material, normal, view, u,
-                                                          incident);
-    return sample_closure<openpbr_composition::Dielectric>(energy, material, normal, view, u,
-                                                           incident);
-#else
-    return sample_closure<openpbr_composition::Opaque>(energy, material, normal, view, u, incident);
-#endif
-#elif defined(COMPOSED_TRANSMISSION)
-    BatchConsumer consumer = {};
-    return consume_transmission<Provider, BatchConsumer, 0>(energy, material, normal, view,
-                                                            float3(0), float3(0), 0, u, true,
-                                                            incident, transmitted, consumer);
-#endif
+    static_assert(Flow == openpbr_composition::SelectedFlow,
+                  "material recipe must match its SBT entry");
+    if ((openpbr_composition::SelectedFlow & 48) == 0)
+    {
+        if ((openpbr_composition::SelectedVariant & 2048) != 0 &&
+            (openpbr_composition::SelectedFlow & 11) != 0)
+        {
+            if (material.surface.y == 1)
+                return sample_closure<openpbr_composition::Metal>(energy, material, normal, view, u,
+                                                                  incident);
+            return sample_closure<openpbr_composition::Dielectric>(energy, material, normal, view,
+                                                                   u, incident);
+        }
+        else
+        {
+            return sample_closure<openpbr_composition::Opaque>(energy, material, normal, view, u,
+                                                               incident);
+        }
+    }
+    else
+    {
+        var consumer : BatchConsumer = {};
+        return consume_transmission<Provider, BatchConsumer, 0>(energy, material, normal, view,
+                                                                float3(0), float3(0), 0, u, true,
+                                                                incident, transmitted, consumer);
+    }
 }
-public Sample shade_flow_consume<let Flow : uint, Provider, Consumer, let Directions : uint = 3>(
-    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
-    inout Consumer consumer)
+public func shade_flow_consume<let Flow : uint, Provider, Consumer, let Directions : uint = 3>(
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4, inout consumer: Consumer)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
     where Consumer : IFlowEvaluationConsumer
 {
-    static_assert(Flow == SELECTED_FLOW, "material recipe must match its SBT entry");
-#ifdef COMPOSED_OPAQUE
-#if (SELECTED_VARIANT & 2048) && (SELECTED_FLOW & 11)
-    if (material.surface.y == 1)
-        return consume_closure<openpbr_composition::Metal, Provider, Consumer, Directions>(
-            energy, material, normal, view, first, second, evaluation_mask, u, continuation,
-            incident, consumer);
-    return consume_closure<openpbr_composition::Dielectric, Provider, Consumer, Directions>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        consumer);
-#else
-    return consume_closure<openpbr_composition::Opaque, Provider, Consumer, Directions>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        consumer);
-#endif
-#elif defined(COMPOSED_TRANSMISSION)
-    return consume_transmission<Provider, Consumer, Directions>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        transmitted, consumer);
-#endif
-}
-/// 首表面独立提案；光源MIS使用同一混合密度，2 spp 对提案选择分层后取平均。
-public Batch shade_primary_flow<let Flow : uint, Provider, let Directions : uint = 3>(
-    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted,
-    uint samples, uint lane)
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
-{
-    static_assert(Flow == SELECTED_FLOW, "primary recipe must match its callable entry");
-    u.z = openpbr_primary::selection(u.z, samples, lane);
-    BatchConsumer consumer = {};
-    Sample scattered;
-#ifdef COMPOSED_OPAQUE
-#if (SELECTED_VARIANT & 2048) && (SELECTED_FLOW & 11)
-    if (material.surface.y == 1)
-        scattered =
-            consume_closure<openpbr_composition::Metal, Provider, BatchConsumer, Directions>(
+    static_assert(Flow == openpbr_composition::SelectedFlow,
+                  "material recipe must match its SBT entry");
+    if ((openpbr_composition::SelectedFlow & 48) == 0)
+    {
+        if ((openpbr_composition::SelectedVariant & 2048) != 0 &&
+            (openpbr_composition::SelectedFlow & 11) != 0)
+        {
+            if (material.surface.y == 1)
+                return consume_closure<openpbr_composition::Metal, Provider, Consumer, Directions>(
+                    energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+                    incident, consumer);
+            return consume_closure<openpbr_composition::Dielectric, Provider, Consumer, Directions>(
                 energy, material, normal, view, first, second, evaluation_mask, u, continuation,
                 incident, consumer);
+        }
+        else
+        {
+            return consume_closure<openpbr_composition::Opaque, Provider, Consumer, Directions>(
+                energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+                incident, consumer);
+        }
+    }
     else
-        scattered =
-            consume_closure<openpbr_composition::PrimaryDielectric, Provider, BatchConsumer,
-                            Directions>(energy, material, normal, view, first, second,
-                                        evaluation_mask, u, continuation, incident, consumer);
-#else
-    scattered =
-        consume_closure<openpbr_composition::PrimaryOpaque, Provider, BatchConsumer, Directions>(
+    {
+        return consume_transmission<Provider, Consumer, Directions>(
             energy, material, normal, view, first, second, evaluation_mask, u, continuation,
-            incident, consumer);
-#endif
-#else
-    scattered = consume_transmission<Provider, BatchConsumer, Directions, true>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        transmitted, consumer);
-#endif
+            incident, transmitted, consumer);
+    }
+}
+/// 首表面独立提案；光源MIS使用同一混合密度，2 spp 对提案选择分层后取平均。
+public func shade_primary_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4, samples: uint, lane: uint)
+    ->Batch
+    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+{
+    var u = u;
+    static_assert(Flow == openpbr_composition::SelectedFlow,
+                  "primary recipe must match its callable entry");
+    u.z = openpbr_primary::selection(u.z, samples, lane);
+    var consumer : BatchConsumer = {};
+    var scattered : Sample;
+    if ((openpbr_composition::SelectedFlow & 48) == 0)
+    {
+        if ((openpbr_composition::SelectedVariant & 2048) != 0 &&
+            (openpbr_composition::SelectedFlow & 11) != 0)
+        {
+            if (material.surface.y == 1)
+                scattered = consume_closure<openpbr_composition::Metal, Provider, BatchConsumer,
+                                            Directions>(energy, material, normal, view, first,
+                                                        second, evaluation_mask, u, continuation,
+                                                        incident, consumer);
+            else
+                scattered = consume_closure<openpbr_composition::PrimaryDielectric, Provider,
+                                            BatchConsumer, Directions>(
+                    energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+                    incident, consumer);
+        }
+        else
+        {
+            scattered =
+                consume_closure<openpbr_composition::PrimaryOpaque, Provider, BatchConsumer,
+                                Directions>(energy, material, normal, view, first, second,
+                                            evaluation_mask, u, continuation, incident, consumer);
+        }
+    }
+    else
+    {
+        scattered = consume_transmission<Provider, BatchConsumer, Directions, true>(
+            energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+            incident, transmitted, consumer);
+    }
     return { consumer.first, consumer.second, scattered };
 }
 struct BatchConsumer : IFlowEvaluationConsumer
 {
-    Evaluation first;
-    Evaluation second;
+    var first : Evaluation;
+    var second : Evaluation;
     [mutating]
-    void consume(uint direction, Evaluation value)
+    func consume(direction: uint, value: Evaluation)->void
     {
         if (direction == 0)
             first = value;
@@ -292,15 +321,17 @@ struct BatchConsumer : IFlowEvaluationConsumer
             second = value;
     }
 };
-public Batch shade_flow<let Flow : uint, Provider, let Directions : uint = 3>(
-    Provider energy, Material material, float3 normal, float3 view, float3 first, float3 second,
-    uint evaluation_mask, float3 u, bool continuation, float4 incident, float4 transmitted)
+public func shade_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4)
+    ->Batch
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
-    BatchConsumer consumer = {};
-    Sample sample = shade_flow_consume<Flow, Provider, BatchConsumer, Directions>(
-        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
-        transmitted, consumer);
+    var consumer : BatchConsumer = {};
+    let sample : Sample = shade_flow_consume<Flow, Provider, BatchConsumer, Directions>(
+                     energy, material, normal, view, first, second, evaluation_mask, u,
+                     continuation, incident, transmitted, consumer);
     return { consumer.first, consumer.second, sample };
 }
 }

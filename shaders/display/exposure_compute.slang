@@ -7,58 +7,70 @@ import display.exposure;
 
 struct ExposureParameters
 {
-    uint2 extent;
-    uint linear709;
-    uint reset;
-    float delta_seconds;
-    float compensation;
-    uint instant;
-    uint padding;
+    var extent : uint2;
+    var linear709 : uint;
+    var reset : uint;
+    var delta_seconds : float;
+    var compensation : float;
+    var instant : uint;
+    var padding : uint;
 };
 
 [[vk::binding(0, 0)]]
-StructuredBuffer<ExposureParameters> parameters;
-#if EXPOSURE_TEXTURE
-[[vk::binding(1, 0)]]
-Texture2D<float4> linear_input;
-#else
-[[vk::binding(1, 0)]]
-StructuredBuffer<float4> linear_input;
-#endif
+var parameters : StructuredBuffer<ExposureParameters>;
 [[vk::binding(2, 0)]]
-RWStructuredBuffer<uint> histogram;
+var histogram : RWStructuredBuffer<uint>;
 [[vk::binding(3, 0)]]
-RWStructuredBuffer<display::ExposureState> exposure_state;
+var exposure_state : RWStructuredBuffer<display::ExposureState>;
 
-groupshared uint bins[256];
-groupshared uint valid_count;
+groupshared var bins : uint[256];
+groupshared var valid_count : uint;
 
-[shader("compute")]
-[numthreads(16, 16, 1)]
-void histogram_main(uint3 group: SV_GroupID, uint3 lane: SV_GroupThreadID,
-                    uint index: SV_GroupIndex)
+interface IExposureInput
 {
-    ExposureParameters p = parameters[0];
+    func load(pixel: uint2, extent: uint2)->float4;
+};
+
+struct BufferInput : IExposureInput
+{
+    var values : StructuredBuffer<float4>;
+
+    func load(pixel: uint2, extent: uint2)->float4
+    {
+        return values[pixel.y * extent.x + pixel.x];
+    }
+};
+
+struct TextureInput : IExposureInput
+{
+    var values : Texture2D<float4>;
+
+    func load(pixel: uint2, extent: uint2)->float4
+    {
+        return values.Load(int3(pixel, 0));
+    }
+};
+
+func histogram_group<Input : IExposureInput>(input: Input, group: uint3, lane: uint3, index: uint)
+    ->void
+{
+    var p : ExposureParameters = parameters[0];
     bins[index] = 0;
     if (index == 0)
         valid_count = 0;
     GroupMemoryBarrierWithGroupSync();
-    uint2 origin = group.xy * 64 + lane.xy * 4;
-    uint count = 0;
-    for (uint y = 0; y < 4; ++y)
-        for (uint x = 0; x < 4; ++x)
+    let origin : uint2 = group.xy * 64 + lane.xy * 4;
+    var count : uint = 0;
+    for (var y: uint = 0; y < 4; ++y)
+        for (var x: uint = 0; x < 4; ++x)
         {
-            uint2 pixel = origin + uint2(x, y);
+            var pixel : uint2 = origin + uint2(x, y);
             if (any(pixel >= p.extent))
                 continue;
-#if EXPOSURE_TEXTURE
-            float4 value = linear_input.Load(int3(pixel, 0));
-#else
-            float4 value = linear_input[pixel.y * p.extent.x + pixel.x];
-#endif
+            let value : float4 = input.load(pixel, p.extent);
             if (value.w < 0)
                 continue;
-            int bin = display::exposure_bin(value.xyz, p.linear709 != 0);
+            let bin : int = display::exposure_bin(value.xyz, p.linear709 != 0);
             if (bin < 0)
                 continue;
             InterlockedAdd(bins[bin], 1u);
@@ -73,14 +85,35 @@ void histogram_main(uint3 group: SV_GroupID, uint3 lane: SV_GroupThreadID,
         InterlockedAdd(histogram[256], valid_count);
 }
 
+/// buffer 输入与 texture 输入使用同一测光内核；两种入口的输入均为 set0 binding1。
+[shader("compute")]
+[numthreads(16, 16, 1)]
+func histogram_main([[vk::binding(1, 0)]] uniform linear_input: StructuredBuffer<float4>,
+                    uint3 group: SV_GroupID, uint3 lane: SV_GroupThreadID,
+                    uint index: SV_GroupIndex)
+    ->void
+{
+    histogram_group(BufferInput(linear_input), group, lane, index);
+}
+
+[shader("compute")]
+[numthreads(16, 16, 1)]
+func histogram_texture_main([[vk::binding(1, 0)]] uniform linear_input: Texture2D<float4>,
+                            uint3 group: SV_GroupID, uint3 lane: SV_GroupThreadID,
+                            uint index: SV_GroupIndex)
+    ->void
+{
+    histogram_group(TextureInput(linear_input), group, lane, index);
+}
+
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void update_main()
+func update_main()->void
 {
-    ExposureParameters p = parameters[0];
-    display::ExposureState state = exposure_state[0];
-    uint valid = histogram[256];
-    bool instant = p.reset != 0 || p.instant != 0 || state.initialized == 0;
+    let p : ExposureParameters = parameters[0];
+    var state : display::ExposureState = exposure_state[0];
+    let valid : uint = histogram[256];
+    let instant : bool = p.reset != 0 || p.instant != 0 || state.initialized == 0;
     if (valid == 0)
     {
         if (instant)
@@ -91,16 +124,21 @@ void update_main()
         }
         return;
     }
-    uint begin = valid / 200, end = valid - begin;
-    uint cursor = 0, retained = 0;
-    float weighted = 0, minimum = 0, maximum = 0;
-    for (uint bin = 0; bin < 256; ++bin)
+    let begin : uint = valid / 200;
+    let end : uint = valid - begin;
+    var cursor : uint = 0;
+    var retained : uint = 0;
+    var weighted : float = 0;
+    var minimum : float = 0;
+    var maximum : float = 0;
+    for (var bin: uint = 0; bin < 256; ++bin)
     {
-        uint next = cursor + histogram[bin];
-        uint low = max(cursor, begin), high = min(next, end);
+        let next : uint = cursor + histogram[bin];
+        let low : uint = max(cursor, begin);
+        let high : uint = min(next, end);
         if (high > low)
         {
-            float logarithm = display::exposure_bin_log(bin);
+            let logarithm : float = display::exposure_bin_log(bin);
             if (retained == 0)
                 minimum = logarithm;
             maximum = logarithm;

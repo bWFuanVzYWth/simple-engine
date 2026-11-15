@@ -9,8 +9,9 @@ import "bsdf/openpbr/contract/sample.slang";
 import "bsdf/openpbr/contract/volume.slang";
 import "bsdf/openpbr/dielectric/contract.slang";
 
-public void primeFullCompactApplyTransmissionVolumeTransition(
-    PrimeFullCompactTransmissionState state, inout PrimeFullOpenPbrSampleResult result)
+public func primeFullCompactApplyTransmissionVolumeTransition(
+    state: PrimeFullCompactTransmissionState, inout result: PrimeFullOpenPbrSampleResult)
+    ->void
 {
     if (state.geometryThinWalled != 0u ||
         !primeFullOpenPbrIsTransmissive(result.bsdfSample.throughput.flags))

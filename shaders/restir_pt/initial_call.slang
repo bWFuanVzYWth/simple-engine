@@ -7,14 +7,14 @@ namespace restir_pt
 /// 输出为唯一胜出的直接光候选、命中发光和累计权重，共25个word。
 public struct InitialPacket
 {
-    public InitialDirect direct;
-    public float3 emission;
-    public float emissionPdf;
-    public float weight;
+    public var direct : InitialDirect;
+    public var emission : float3;
+    public var emissionPdf : float;
+    public var weight : float;
 
-    public static InitialPacket inputHit(float4 medium, InitialRequest request)
+    public static func inputHit(medium: float4, request: InitialRequest)->InitialPacket
     {
-        InitialPacket p = {};
+        var p : InitialPacket = {};
         p.direct.direction = request.previousPosition;
         p.direct.radiance = request.throughput;
         p.direct.reflected = medium.xyz;
@@ -26,9 +26,9 @@ public struct InitialPacket
         return p;
     }
 
-    public static InitialPacket input(Surface s, InitialRequest request, uint4 attributes)
+    public static func input(s: Surface, request: InitialRequest, attributes: uint4)->InitialPacket
     {
-        InitialPacket p = inputHit(s.incident, request);
+        var p : InitialPacket = inputHit(s.incident, request);
         p.direct.attenuatedRadiance = s.point.position;
         p.direct.hit.data = attributes;
         p.emission = s.wo;
@@ -37,15 +37,15 @@ public struct InitialPacket
         return p;
     }
 
-    public InitialRequest request()
+    public func request()->InitialRequest
     {
         return { direct.lightType, uint(weight) & 63u, direct.direction,
                  direct.radiance,  direct.pdf,         direct.bsdfPdf };
     }
 
-    public Surface surface(float3 normal, uint2 token)
+    public func surface(normal: float3, token: uint2)->Surface
     {
-        Surface s = {};
+        var s : Surface = {};
         s.incident = float4(direct.reflected, direct.geometryFactor);
         s.point = { direct.attenuatedRadiance, normal, emissionPdf };
         s.wo = emission;
@@ -56,7 +56,7 @@ public struct InitialPacket
     }
 
     [mutating]
-    public void store(InitialVertex v)
+    public func store(v: InitialVertex)->void
     {
         direct = v.direct;
         emission = v.emission;
@@ -64,9 +64,9 @@ public struct InitialPacket
         weight = v.weight;
     }
 
-    public InitialVertex result()
+    public func result()->InitialVertex
     {
-        InitialVertex v = {};
+        var v : InitialVertex = {};
         v.direct = direct;
         v.emission = emission;
         v.emissionPdf = emissionPdf;
@@ -77,33 +77,33 @@ public struct InitialPacket
 
 public struct InitialSampleCall
 {
-    public InitialPacket vertex;
-    public float3 direction;
-    public float3 response;
-    public float4 medium;
-    public float pdf;
-    public uint flags;
+    public var vertex : InitialPacket;
+    public var direction : float3;
+    public var response : float3;
+    public var medium : float4;
+    public var pdf : float;
+    public var flags : uint;
 
-    public static InitialSampleCall input(Surface s, InitialRequest r, uint4 attributes)
+    public static func input(s: Surface, r: InitialRequest, attributes: uint4)->InitialSampleCall
     {
-        InitialSampleCall c = {};
+        var c : InitialSampleCall = {};
         c.vertex = InitialPacket::input(s, r, attributes);
         c.direction = s.point.normal;
         c.response.xy = asfloat(s.hit.data.xy);
         return c;
     }
 
-    public Surface surface()
+    public func surface()->Surface
     {
         return vertex.surface(direction, asuint(response.xy));
     }
-    public InitialRequest request()
+    public func request()->InitialRequest
     {
         return vertex.request();
     }
 
     [mutating]
-    public void store(InitialVertex v)
+    public func store(v: InitialVertex)->void
     {
         vertex.store(v);
         direction = v.sample.direction;
@@ -113,9 +113,9 @@ public struct InitialSampleCall
         flags = uint(v.sample.delta) | (uint(v.sample.transmission) << 1u);
     }
 
-    public InitialVertex result()
+    public func result()->InitialVertex
     {
-        InitialVertex v = vertex.result();
+        var v : InitialVertex = vertex.result();
         v.sample.direction = direction;
         v.sample.weight = response;
         v.sample.medium = medium;
@@ -131,21 +131,21 @@ public struct InitialSampleCall
 /// 真命中终止入口只需权重、随机与介质，几何由内建量提供。
 public struct InitialHitDirectCall
 {
-    public InitialPacket vertex;
-    public Surface surface()
+    public var vertex : InitialPacket;
+    public func surface()->Surface
     {
         return vertex.surface(0, 0);
     }
-    public InitialRequest request()
+    public func request()->InitialRequest
     {
         return vertex.request();
     }
     [mutating]
-    public void store(InitialVertex v)
+    public func store(v: InitialVertex)->void
     {
         vertex.store(v);
     }
-    public InitialVertex result()
+    public func result()->InitialVertex
     {
         return vertex.result();
     }
@@ -154,28 +154,29 @@ public struct InitialHitDirectCall
 /// 已知表面没有硬件命中内建量，五个附加输入仅在调用前有效。
 public struct InitialKnownDirectCall
 {
-    public InitialPacket vertex;
-    public float3 normal;
-    public uint2 token;
+    public var vertex : InitialPacket;
+    public var normal : float3;
+    public var token : uint2;
 
-    public static InitialKnownDirectCall input(Surface s, InitialRequest r, uint4 attributes)
+    public static func input(s: Surface, r: InitialRequest, attributes: uint4)
+        ->InitialKnownDirectCall
     {
         return { InitialPacket::input(s, r, attributes), s.point.normal, s.hit.data.xy };
     }
-    public Surface surface()
+    public func surface()->Surface
     {
         return vertex.surface(normal, token);
     }
-    public InitialRequest request()
+    public func request()->InitialRequest
     {
         return vertex.request();
     }
     [mutating]
-    public void store(InitialVertex v)
+    public func store(v: InitialVertex)->void
     {
         vertex.store(v);
     }
-    public InitialVertex result()
+    public func result()->InitialVertex
     {
         return vertex.result();
     }

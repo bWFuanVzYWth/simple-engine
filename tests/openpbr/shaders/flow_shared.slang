@@ -8,37 +8,30 @@ import bsdf.openpbr.flow;
 
 struct Case
 {
-    openpbr::Material material;
-    float4 view;
-    float4 u;
-    float4 incident;
-    float4 transmitted;
+    var material : openpbr::Material;
+    var view : float4;
+    var u : float4;
+    var incident : float4;
+    var transmitted : float4;
 };
 [[vk::binding(0, 0)]]
-StructuredBuffer<Case> cases;
+var cases : StructuredBuffer<Case>;
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<float4> output;
+var output : RWStructuredBuffer<float4>;
 [[vk::binding(2, 0)]]
-Texture3D<float4> energy_texture;
+var energy_texture : Texture3D<float4>;
 [[vk::binding(3, 0)]]
-SamplerState energy_sampler;
+var energy_sampler : SamplerState;
 
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void main(uint3 id: SV_DispatchThreadID)
+func shade_case<let Shared : bool>(energy: openpbr::Energy, c: Case)->openpbr::Batch
 {
-    uint count, stride;
-    cases.GetDimensions(count, stride);
-    if (id.x >= count)
-        return;
-    Case c = cases[id.x];
-    openpbr::Energy energy = { energy_texture, energy_sampler };
-#if OPENPBR_SHARED
-    openpbr::Batch shaded = openpbr::shade_flow<OPENPBR_FLOW>(
-        energy, c.material, float3(0, 0, 1), c.view.xyz, float3(0.6, 0, 0.8), float3(0.6, 0, -0.8),
-        3u, c.u.xyz, true, c.incident, c.transmitted);
-#else
-    openpbr::Batch shaded = {};
+    if (Shared)
+    {
+        return openpbr::shade_flow<OPENPBR_FLOW>(energy, c.material, float3(0, 0, 1), c.view.xyz,
+                                                 float3(0.6, 0, 0.8), float3(0.6, 0, -0.8), 3u,
+                                                 c.u.xyz, true, c.incident, c.transmitted);
+    }
+    var shaded : openpbr::Batch = {};
     shaded.first =
         openpbr::evaluate_flow<OPENPBR_FLOW>(energy, c.material, float3(0, 0, 1), c.view.xyz,
                                              float3(0.6, 0, 0.8), c.incident, c.transmitted);
@@ -47,8 +40,22 @@ void main(uint3 id: SV_DispatchThreadID)
                                              float3(0.6, 0, -0.8), c.incident, c.transmitted);
     shaded.scattered = openpbr::sample_flow<OPENPBR_FLOW>(
         energy, c.material, float3(0, 0, 1), c.view.xyz, c.u.xyz, c.incident, c.transmitted);
-#endif
-    uint i = id.x * 5;
+    return shaded;
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func main(uint3 id: SV_DispatchThreadID)->void
+{
+    var count : uint;
+    var stride : uint;
+    cases.GetDimensions(count, stride);
+    if (id.x >= count)
+        return;
+    let c : Case = cases[id.x];
+    let energy : openpbr::Energy = { energy_texture, energy_sampler };
+    let shaded = shade_case<OPENPBR_SHARED != 0>(energy, c);
+    let i : uint = id.x * 5;
     output[i] = float4(shaded.scattered.direction, shaded.scattered.relative_eta);
     output[i + 1] = float4(shaded.scattered.response, shaded.scattered.pdf);
     output[i + 2] = asfloat(uint4(shaded.scattered.events, 0, id.x + 1, 0));
