@@ -279,6 +279,14 @@ impl TerrainLight {
         self.planned = None;
         self.history.pending = None;
     }
+    /// 本次post应选择地形遮挡叶子时返回true，否则选择晴空Aerial叶子。
+    ///
+    /// 优先读取已prepare的目标，再读取已record但尚未submitted的目标，最后读取已提交状态；
+    /// 首次使用前为false，cancel后恢复已提交模式。active还会被零radiance_scale关闭。
+    /// prepare返回更新时，调用者仍须上传参数并将record排在post之前；本查询不提交或上传。
+    pub const fn shadowed(&self) -> bool {
+        self.history.shadowed(self.planned.as_ref())
+    }
     /// 供 post 使用的极线坐标、受光积分纹理和相机首命中列。绑定与本次提交的缓存相同。
     pub const fn outputs(&self) -> (Buffer, Image, Buffer) {
         (self.frame, self.radiance, self.first_hits)
@@ -323,6 +331,18 @@ impl History {
             cold: true,
             refresh_requested: false,
             remaining: 0,
+        }
+    }
+    const fn shadowed(&self, planned: Option<&TerrainUpdate>) -> bool {
+        if let Some(update) = planned {
+            return update.key.active;
+        }
+        if let Some((key, _)) = self.pending {
+            return key.active;
+        }
+        match self.last {
+            Some(key) => key.active,
+            None => false,
         }
     }
     fn recorded(&mut self, update: &TerrainUpdate) {
@@ -441,6 +461,48 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_mode_uses_normalized_terrain_activity() -> Result<(), Error> {
+        let mut history = History::new();
+        let update = history
+            .prepare(
+                View {
+                    radiance_scale: [0.; 3],
+                    ..View::default()
+                },
+                [0.; 3],
+                [0.; 3],
+                true,
+            )?
+            .unwrap();
+        assert!(!history.shadowed(Some(&update)));
+        Ok(())
+    }
+    #[test]
+    fn recorded_mode_is_selected_before_submission() -> Result<(), Error> {
+        let mut history = History::new();
+        let view = View::default();
+        let first = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
+        history.recorded(&first);
+        history.submitted();
+        let clear = history.prepare(view, [0.; 3], [0.; 3], false)?.unwrap();
+        history.recorded(&clear);
+        assert!(!history.shadowed(None));
+        Ok(())
+    }
+    #[test]
+    fn cancelled_mode_returns_to_submitted_selection() -> Result<(), Error> {
+        let mut history = History::new();
+        let view = View::default();
+        let first = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
+        history.recorded(&first);
+        history.submitted();
+        let clear = history.prepare(view, [0.; 3], [0.; 3], false)?.unwrap();
+        history.recorded(&clear);
+        history.pending = None;
+        assert!(history.shadowed(None));
+        Ok(())
+    }
     #[test]
     fn ordinary_changes_keep_history_and_refresh_every_slice() -> Result<(), Error> {
         let mut history = History::new();

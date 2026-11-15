@@ -23,13 +23,34 @@ var energy_texture : Texture3D<float4>;
 [[vk::binding(3, 0)]]
 var energy_sampler : SamplerState;
 
-func shade_case<let Shared : bool>(energy: openpbr::Energy, c: Case)->openpbr::Batch
+struct EvaluationSum : openpbr::IFlowEvaluationConsumer
 {
-    if (Shared)
+    var evaluated : openpbr::Evaluation;
+
+    [mutating]
+    func consume(direction: uint, value: openpbr::Evaluation)->void
     {
+        evaluated.response += value.response;
+        evaluated.pdf += value.pdf;
+    }
+};
+
+func shade_case<let Shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::Batch
+{
+    if (Shared == 1)
         return openpbr::shade_flow<OPENPBR_FLOW>(energy, c.material, float3(0, 0, 1), c.view.xyz,
                                                  float3(0.6, 0, 0.8), float3(0.6, 0, -0.8), 3u,
                                                  c.u.xyz, true, c.incident, c.transmitted);
+    if (Shared == 2)
+    {
+        var consumer : EvaluationSum = {};
+        var shaded : openpbr::Batch = {};
+        shaded.scattered =
+            openpbr::shade_flow_consume<OPENPBR_FLOW, openpbr::Energy, EvaluationSum>(
+                energy, c.material, float3(0, 0, 1), c.view.xyz, float3(0.6, 0, 0.8),
+                float3(0.6, 0, -0.8), 3u, c.u.xyz, true, c.incident, c.transmitted, consumer);
+        shaded.first = consumer.evaluated;
+        return shaded;
     }
     var shaded : openpbr::Batch = {};
     shaded.first =
@@ -54,7 +75,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
         return;
     let c : Case = cases[id.x];
     let energy : openpbr::Energy = { energy_texture, energy_sampler };
-    let shaded = shade_case<OPENPBR_SHARED != 0>(energy, c);
+    let shaded = shade_case<OPENPBR_SHARED>(energy, c);
     let i : uint = id.x * 5;
     output[i] = float4(shaded.scattered.direction, shaded.scattered.relative_eta);
     output[i + 1] = float4(shaded.scattered.response, shaded.scattered.pdf);

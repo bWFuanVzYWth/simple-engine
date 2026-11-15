@@ -262,19 +262,22 @@ public func shade_flow_consume<let Flow : uint, Provider, Consumer, let Directio
             incident, transmitted, consumer);
     }
 }
-/// 首表面独立提案；光源MIS使用同一混合密度，2 spp 对提案选择分层后取平均。
-public func shade_primary_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+/// 首表面按 first、second 顺序即时消费所请求的评估，再采样一次散射。
+/// 共享同一闭包准备与首面提案；回调约束同 IFlowEvaluationConsumer。
+/// 调用方保证 samples 为 1 或 2，且 lane<samples。
+public func shade_primary_flow_consume<let Flow : uint, Provider, Consumer,
+                                       let Directions : uint = 3>(
     energy: Provider, material: Material, normal: float3, view: float3, first: float3,
     second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
-    transmitted: float4, samples: uint, lane: uint)
-    ->Batch
+    transmitted: float4, samples: uint, lane: uint, inout consumer: Consumer)
+    ->Sample
     where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where Consumer : IFlowEvaluationConsumer
 {
     var u = u;
     static_assert(Flow == openpbr_composition::SelectedFlow,
                   "primary recipe must match its callable entry");
     u.z = openpbr_primary::selection(u.z, samples, lane);
-    var consumer : BatchConsumer = {};
     var scattered : Sample;
     if ((openpbr_composition::SelectedFlow & 48) == 0)
     {
@@ -282,30 +285,45 @@ public func shade_primary_flow<let Flow : uint, Provider, let Directions : uint 
             (openpbr_composition::SelectedFlow & 11) != 0)
         {
             if (material.surface.y == 1)
-                scattered = consume_closure<openpbr_composition::Metal, Provider, BatchConsumer,
-                                            Directions>(energy, material, normal, view, first,
-                                                        second, evaluation_mask, u, continuation,
-                                                        incident, consumer);
+                scattered =
+                    consume_closure<openpbr_composition::Metal, Provider, Consumer, Directions>(
+                        energy, material, normal, view, first, second, evaluation_mask, u,
+                        continuation, incident, consumer);
             else
                 scattered = consume_closure<openpbr_composition::PrimaryDielectric, Provider,
-                                            BatchConsumer, Directions>(
-                    energy, material, normal, view, first, second, evaluation_mask, u, continuation,
-                    incident, consumer);
+                                            Consumer, Directions>(energy, material, normal, view,
+                                                                  first, second, evaluation_mask, u,
+                                                                  continuation, incident, consumer);
         }
         else
         {
             scattered =
-                consume_closure<openpbr_composition::PrimaryOpaque, Provider, BatchConsumer,
-                                Directions>(energy, material, normal, view, first, second,
-                                            evaluation_mask, u, continuation, incident, consumer);
+                consume_closure<openpbr_composition::PrimaryOpaque, Provider, Consumer, Directions>(
+                    energy, material, normal, view, first, second, evaluation_mask, u, continuation,
+                    incident, consumer);
         }
     }
     else
     {
-        scattered = consume_transmission<Provider, BatchConsumer, Directions, true>(
+        scattered = consume_transmission<Provider, Consumer, Directions, true>(
             energy, material, normal, view, first, second, evaluation_mask, u, continuation,
             incident, transmitted, consumer);
     }
+    return scattered;
+}
+/// 首表面独立提案；光源MIS使用同一混合密度，2 spp 对提案选择分层后取平均。
+/// 调用方保证 samples 为 1 或 2，且 lane<samples。
+public func shade_primary_flow<let Flow : uint, Provider, let Directions : uint = 3>(
+    energy: Provider, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4, samples: uint, lane: uint)
+    ->Batch
+    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+{
+    var consumer : BatchConsumer = {};
+    let scattered = shade_primary_flow_consume<Flow, Provider, BatchConsumer, Directions>(
+        energy, material, normal, view, first, second, evaluation_mask, u, continuation, incident,
+        transmitted, samples, lane, consumer);
     return { consumer.first, consumer.second, scattered };
 }
 struct BatchConsumer : IFlowEvaluationConsumer

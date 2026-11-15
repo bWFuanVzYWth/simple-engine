@@ -1,6 +1,6 @@
 //! 运行时求解的四波长球层大气、SkyView 与 Aerial 资源。
 //!
-//! 固定 Earth 物理模型与 balanced 网格移植自 sky_tracer 的 sky-realtime；携带的是
+//! 仅支持固定 Earth 物理模型与 balanced 坐标标定（63），移植自 sky_tracer 的 sky-realtime；携带的是
 //! 消光、散射、相函数及坐标拟合参数，不含预烘焙散射场。`gpu` 提供 wgpu owner，
 //! `native` 提供直接使用受控 Slang SPIR-V 的 Vulkan owner；共享相同求解与缓存语义。
 //! 调用者拥有 encoder、提交、等待及场景遮挡。
@@ -194,7 +194,7 @@ impl Memory {
     }
 }
 
-/// 与 Slang 同顺序的 400 B 参数；字段私有，由物理模型与 [`View`] 共同维护。
+/// 与 Slang 同顺序的 400 B Earth/balanced 参数；字段私有，由物理模型与 [`View`] 共同维护。
 ///
 /// `words()` 可复制到 native `StructuredBuffer<uint4>`；内容是 IEEE f32 / u32 原始位，
 /// 不做数值转换。布局与版本必须与本 crate 同批构建的 shader 匹配。
@@ -276,8 +276,11 @@ impl Model {
         let bytes = include_bytes!("../data/medium.bin");
         if !bytes.len().is_multiple_of(16)
             || parameters.dims != [40, 160, 128, 512]
-            || parameters.solve[..3] != [1536, 20, 12]
+            || parameters.solve != [1536, 20, 12, 0]
             || parameters.mapping[0] != 63
+            || parameters.size_steps[3] != 1
+            || !parameters.importance[1].is_finite()
+            || parameters.importance[1] <= 0.0
             || !(1..=40).contains(&parameters.offsets1[1])
         {
             return Err(Error::Data("balanced 网格或物理数据长度不匹配"));

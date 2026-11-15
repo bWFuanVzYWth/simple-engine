@@ -10,18 +10,15 @@ namespace pt
 /// 状态初始化、样本域及失败传播由本模块维护。
 public interface IPixelTransport
 {
-    func sample_index(lane: uint, realtime: bool)->uint;
+    func sample_index(lane: uint)->uint;
     func origin()->float3;
     func initial_medium()->float4;
-    func start_path(inout data: TransportCall, lane: uint, realtime: bool)->float2;
+    func start_path(inout data: TransportCall, lane: uint)->float2;
     func trace(inout data: TransportCall, film: float2)->float;
 };
 public struct PixelTransportInput
 {
     public var coordinate : uint2;
-    /// 实时完整调度为 1 或 2；离线及分离 lane 不消费此值。
-    public var samples : uint;
-    public var realtime : bool;
 };
 public struct PixelTransportResult
 {
@@ -35,16 +32,16 @@ public func pixel_sample_index(base: uint, lane: uint, realtime: bool, accumulat
 {
     return base + (realtime ? lane : (accumulated >= batch_begin ? accumulated - batch_begin : 0u));
 }
-/// Lane 为 -1 时由输入选择实时／离线调度，0／1 选择分离 lane。
+/// 实时1／2样本与离线由受控入口固定；Lane为-1时合并，0／1选择分离lane。
+/// 实时Samples须为1或2，分离Lane须小于Samples；离线固定Samples=1、Lane=-1。
 /// previous 仅在分离 lane1 时消费；失败 lane0 不启动下一条路径。
 /// 同一加法顺序和除数用于合并与分离调度，不创建嵌套调度。
-public func integrate_pixel<A : IPixelTransport, let Lane : int>(adapter: A, p: PixelTransportInput,
-                                                                 previous: float4)
+public func integrate_pixel<A : IPixelTransport, let Realtime : bool, let Samples : uint,
+                            let Lane : int>(adapter: A, p: PixelTransportInput, previous: float4)
     ->PixelTransportResult
 {
     var adapter = adapter;
-    let realtime = Lane >= 0 || p.realtime;
-    let paths = Lane >= 0 ? (Lane == 0 ? 1u : 2u) : (realtime ? p.samples : 1u);
+    let paths = Lane >= 0 ? (Lane == 0 ? 1u : 2u) : (Realtime ? Samples : 1u);
     let first = Lane >= 0 ? uint(Lane) : 0u;
     let end = Lane >= 0 ? uint(Lane) + 1u : paths;
     var data : TransportCall = {};
@@ -63,12 +60,12 @@ public func integrate_pixel<A : IPixelTransport, let Lane : int>(adapter: A, p: 
         data.path.previous = 0;
         data.path.previous_pdf = 0;
         data.pixel = p.coordinate;
-        data.sample = adapter.sample_index(lane, realtime);
+        data.sample = adapter.sample_index(lane);
         data.path.origin = adapter.origin();
         data.path.throughput = 1;
         data.path.eta_scale = 1;
         data.path.medium = adapter.initial_medium();
-        var film : float2 = adapter.start_path(data, lane, realtime);
+        let film = adapter.start_path(data, lane);
         distance = adapter.trace(data, film);
         if (data.path.status == PATH_INVALID || data.path.status == PATH_DIELECTRIC_LIMIT)
             break;

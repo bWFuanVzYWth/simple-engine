@@ -2,12 +2,14 @@
 module parameters;
 namespace atmosphere
 {
-/// 固定介质、四波长及观察者参数，按源顺序排列的 400 B；数组均为连续 float4。
+/// Earth/balanced 的固定介质、四波长及观察者参数，按源顺序排列的400 B；数组均为连续float4。
 /// 距离为 km；局部 +Y 为径向上方，太阳方位 atan2(x,z)，仰角 asin(y)。
 /// 数据偏移与维度须来自同一物理输入；API 不支持混合不同求解版本的 LUT。
+/// mapping.x必须为63，size_steps.w必须为1，importance.y有限且为正；生产核不提供legacy坐标模式。
+/// 散射阶由构建入口与宿主阶段调度选择，不由本参数中的迭代记录切换。
 public struct Params
 {
-    /// xy 输出大小，z 积分步数，w 位 0 为 MS、位 1 为太阳显示、位 2 为光谱诊断。
+    /// xy输出大小，z积分步数，w保留源模型的固定MS标记1。
     public var size_steps : uint4;
     /// yaw、pitch、垂直 FOV（弧度）与观察者海拔 km。
     public var view : float4;
@@ -25,11 +27,11 @@ public struct Params
     public var solar : float4;
     /// 四波长到线性 Rec.2020 的拟合系数，w 不使用。
     public var rgb : float4[4];
-    /// 入射方向数、相位数、cone 数、迭代号（首轮 1 跳过先前 volume source）。
+    /// 入射方向数、相位数、cone数及宿主迭代记录；散射阶由对应入口确定。
     public var solve : uint4;
     /// 状态、积分角节点、相位节点的偏移及 optical 积分步数。
     public var extra : uint4;
-    /// 坐标模式位及 solar/optical/cone 节点偏移；balanced 模式为 63。
+    /// 固定标记63及solar/optical/cone节点偏移；只接受同批balanced标定。
     public var mapping : uint4;
     /// SkyView 宽高、低天空行数、全部天空行数，其余行为地面 chart。
     public var sky : uint4;

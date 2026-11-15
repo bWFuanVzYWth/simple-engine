@@ -277,6 +277,10 @@ fn main() -> Result<(), shader_build::Error> {
         .iter()
         .map(|key| format!("primary-{key}.spv"))
         .collect();
+    let consumption_outputs: Vec<_> = keys
+        .iter()
+        .map(|key| format!("primary-consumption-{key}.spv"))
+        .collect();
     let defines: Vec<_> = keys
         .iter()
         .map(|key| format!("-DOPENPBR_FLOW={key}"))
@@ -296,6 +300,24 @@ fn main() -> Result<(), shader_build::Error> {
             args,
         });
     }
+    for (output, args) in consumption_outputs.iter().zip(&arguments) {
+        recipes.push(Recipe {
+            source: "shaders/primary_sampling.slang",
+            entry: "primary_consumption_main",
+            stage: "compute",
+            output,
+            target: Target::Spirv("spirv_1_4"),
+            args,
+        });
+    }
+    recipes.push(Recipe {
+        source: "shaders/primary_sampling.slang",
+        entry: "primary_selection_main",
+        stage: "compute",
+        output: "primary-selection.spv",
+        target: Target::Spirv("spirv_1_4"),
+        args: &["-fp-mode", "precise", "-DOPENPBR_FLOW=131"],
+    });
     build(
         &recipes,
         &[shader_library::root()],

@@ -15,6 +15,7 @@
 //! 固定 GPU payload 常驻约 8.4 MiB；初始化另有约 36.3 MiB 的 bank/scratch/参数。
 //! 构造期间还临时解包 199584 B 物理数据，上传后释放；wgpu staging 与驱动分配另计。
 
+use crate::shaders::Stage;
 use crate::{
     AERIAL_SIZE, Error, FrameState, MAPPING_ROWS, Memory, Model, Parameters, SKY_SIZE, Update, View,
 };
@@ -25,10 +26,10 @@ mod tests;
 
 pub use crate::{SHADERS, ShaderBinary};
 
-/// caller 在同一设备创建的八个生产模块。
+/// caller在同一设备创建的固定balanced生产模块。
 pub struct Shaders {
     /// 顺序严格对应 [`SHADERS`]，仅接受同批构建的产物。
-    pub modules: [wgpu::ShaderModule; 8],
+    pub modules: [wgpu::ShaderModule; SHADERS.len()],
 }
 
 struct Image {
@@ -164,11 +165,20 @@ enum Kind {
     Store3d,
 }
 
-const LAYOUTS: [&[Kind]; 8] = {
+const LAYOUTS: [&[Kind]; SHADERS.len()] = {
     use Kind::*;
     [
         &[Uniform(400), Read, Store16],
         &[Uniform(400), Read, Write],
+        &[
+            Uniform(400),
+            Read,
+            Filtered,
+            Unfiltered,
+            Sampler,
+            Write,
+            Write,
+        ],
         &[
             Uniform(400),
             Read,
@@ -183,6 +193,7 @@ const LAYOUTS: [&[Kind]; 8] = {
         ],
         &[Uniform(400), Write, Write, Write, Store32, Store32],
         &[Uniform(400), Read, Store16, Unfiltered, Write, Write, Write],
+        &[Uniform(400), Read, Filtered, Sampler, Store32],
         &[Uniform(400), Read, Filtered, Sampler, Write, Write, Store32],
         &[
             Uniform(400),
@@ -464,8 +475,8 @@ pub struct Bindings<'a> {
 pub struct Atmosphere {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipelines: [wgpu::ComputePipeline; 8],
-    layouts: [wgpu::BindGroupLayout; 8],
+    pipelines: [wgpu::ComputePipeline; SHADERS.len()],
+    layouts: [wgpu::BindGroupLayout; SHADERS.len()],
     data: wgpu::Buffer,
     base: Parameters,
     calibration: crate::mapping::Calibration,
@@ -673,7 +684,7 @@ impl Atmosphere {
         );
         let sky_group = group(
             device,
-            &layouts[6],
+            &layouts[Stage::Sky.index()],
             &[
                 sky_uniform.as_entire_binding(),
                 data.as_entire_binding(),
@@ -689,7 +700,7 @@ impl Atmosphere {
         );
         let aerial_group = group(
             device,
-            &layouts[7],
+            &layouts[Stage::Aerial.index()],
             &[
                 frame_uniform.as_entire_binding(),
                 data.as_entire_binding(),
@@ -773,7 +784,7 @@ impl Atmosphere {
         let initial = uniform(device, &self.queue, bytemuck::bytes_of(&p));
         let optical = group(
             device,
-            &self.layouts[0],
+            &self.layouts[Stage::Optical.index()],
             &[
                 initial.as_entire_binding(),
                 self.data.as_entire_binding(),
@@ -782,26 +793,24 @@ impl Atmosphere {
         );
         dispatch(
             encoder,
-            &self.pipelines[0],
+            &self.pipelines[Stage::Optical.index()],
             &optical,
             [p.dims[3].div_ceil(8), p.dims[2].div_ceil(8), 1],
         );
         let ground = group(
             device,
-            &self.layouts[5],
+            &self.layouts[Stage::GroundDirect.index()],
             &[
                 initial.as_entire_binding(),
                 self.data.as_entire_binding(),
                 tv(&self.tau),
                 wgpu::BindingResource::Sampler(&self.sampler),
-                directions.as_entire_binding(),
-                incoming.as_entire_binding(),
                 tv(&self.field.ground),
             ],
         );
         dispatch(
             encoder,
-            &self.pipelines[5],
+            &self.pipelines[Stage::GroundDirect.index()],
             &ground,
             [p.dims[1].div_ceil(64), 1, 1],
         );
@@ -822,7 +831,7 @@ impl Atmosphere {
                 let states = params.batch[1] * p.dims[1];
                 let direction_group = group(
                     device,
-                    &self.layouts[1],
+                    &self.layouts[Stage::Directions.index()],
                     &[
                         uniform.as_entire_binding(),
                         self.data.as_entire_binding(),
@@ -831,35 +840,56 @@ impl Atmosphere {
                 );
                 dispatch(
                     encoder,
-                    &self.pipelines[1],
+                    &self.pipelines[Stage::Directions.index()],
                     &direction_group,
                     [p.solve[0].div_ceil(64), states, 1],
                 );
-                let incident_group = group(
-                    device,
-                    &self.layouts[2],
-                    &[
-                        uniform.as_entire_binding(),
-                        self.data.as_entire_binding(),
-                        tv(&self.tau),
-                        tv(&previous.source),
-                        tv(&previous.mean),
-                        tv(&previous.ground),
-                        wgpu::BindingResource::Sampler(&self.sampler),
-                        directions.as_entire_binding(),
-                        incoming.as_entire_binding(),
-                        tv(&previous.high),
-                    ],
-                );
+                let incident_stage = if iteration == 1 {
+                    Stage::IncidentFirst
+                } else {
+                    Stage::IncidentMultiple
+                };
+                let incident_group = if iteration == 1 {
+                    group(
+                        device,
+                        &self.layouts[incident_stage.index()],
+                        &[
+                            uniform.as_entire_binding(),
+                            self.data.as_entire_binding(),
+                            tv(&self.tau),
+                            tv(&previous.ground),
+                            wgpu::BindingResource::Sampler(&self.sampler),
+                            directions.as_entire_binding(),
+                            incoming.as_entire_binding(),
+                        ],
+                    )
+                } else {
+                    group(
+                        device,
+                        &self.layouts[incident_stage.index()],
+                        &[
+                            uniform.as_entire_binding(),
+                            self.data.as_entire_binding(),
+                            tv(&self.tau),
+                            tv(&previous.source),
+                            tv(&previous.mean),
+                            tv(&previous.ground),
+                            wgpu::BindingResource::Sampler(&self.sampler),
+                            directions.as_entire_binding(),
+                            incoming.as_entire_binding(),
+                            tv(&previous.high),
+                        ],
+                    )
+                };
                 dispatch(
                     encoder,
-                    &self.pipelines[2],
+                    &self.pipelines[incident_stage.index()],
                     &incident_group,
                     [p.solve[0].div_ceil(64), states, 1],
                 );
                 let moments_group = group(
                     device,
-                    &self.layouts[3],
+                    &self.layouts[Stage::Moments.index()],
                     &[
                         uniform.as_entire_binding(),
                         directions.as_entire_binding(),
@@ -871,13 +901,13 @@ impl Atmosphere {
                 );
                 dispatch(
                     encoder,
-                    &self.pipelines[3],
+                    &self.pipelines[Stage::Moments.index()],
                     &moments_group,
                     [states.div_ceil(64), 1, 1],
                 );
                 let source_group = group(
                     device,
-                    &self.layouts[4],
+                    &self.layouts[Stage::Source.index()],
                     &[
                         uniform.as_entire_binding(),
                         self.data.as_entire_binding(),
@@ -890,7 +920,7 @@ impl Atmosphere {
                 );
                 dispatch(
                     encoder,
-                    &self.pipelines[4],
+                    &self.pipelines[Stage::Source.index()],
                     &source_group,
                     [
                         (p.dims[1] * p.solve[1]).div_ceil(8),
@@ -901,7 +931,7 @@ impl Atmosphere {
                 );
                 let ground_group = group(
                     device,
-                    &self.layouts[5],
+                    &self.layouts[Stage::GroundMultiple.index()],
                     &[
                         uniform.as_entire_binding(),
                         self.data.as_entire_binding(),
@@ -914,7 +944,7 @@ impl Atmosphere {
                 );
                 dispatch(
                     encoder,
-                    &self.pipelines[5],
+                    &self.pipelines[Stage::GroundMultiple.index()],
                     &ground_group,
                     [p.dims[1].div_ceil(64), 1, 1],
                 );
@@ -990,7 +1020,7 @@ impl Atmosphere {
         if update.sky {
             dispatch(
                 encoder,
-                &self.pipelines[6],
+                &self.pipelines[Stage::Sky.index()],
                 &self.sky_group,
                 [SKY_SIZE.div_ceil(8), SKY_SIZE.div_ceil(8), 1],
             );
@@ -998,7 +1028,7 @@ impl Atmosphere {
         if update.aerial {
             dispatch(
                 encoder,
-                &self.pipelines[7],
+                &self.pipelines[Stage::Aerial.index()],
                 &self.aerial_group,
                 [AERIAL_SIZE.div_ceil(4); 3],
             );

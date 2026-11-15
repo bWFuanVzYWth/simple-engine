@@ -12,14 +12,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stages: Vec<(&str, &str, &[u32])> = vec![
         ("compute", "optical_depth", &[0, 1, 11]),
         ("compute", "prepare_directions", &[0, 1, 16]),
+        ("compute", "trace_incident_first", &[0, 1, 2, 5, 6, 16, 7]),
         (
             "compute",
-            "trace_incident",
+            "trace_incident_multiple",
             &[0, 1, 2, 3, 4, 5, 6, 16, 7, 18],
         ),
         ("compute", "incident_moments", &[0, 16, 7, 17, 19, 9]),
         ("compute", "scattering_source", &[0, 1, 8, 4, 16, 7, 17]),
-        ("compute", "ground_irradiance", &[0, 1, 2, 6, 16, 7, 10]),
+        ("compute", "ground_direct", &[0, 1, 2, 6, 10]),
+        ("compute", "ground_multiple", &[0, 1, 2, 6, 16, 7, 10]),
         ("compute", "build_sky", &[0, 1, 2, 3, 4, 5, 6, 18, 20, 14]),
         (
             "compute",

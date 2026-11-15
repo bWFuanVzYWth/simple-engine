@@ -43,8 +43,51 @@ const CASES: &[(u32, &[u8])] = &[
     ),
 ];
 
+const CONSUMPTION_CASES: &[(u32, &[u8])] = &[
+    (
+        131,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-131.spv")),
+    ),
+    (
+        195,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-195.spv")),
+    ),
+    (
+        2191,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-2191.spv")),
+    ),
+    (
+        2181,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-2181.spv")),
+    ),
+    (
+        132,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-132.spv")),
+    ),
+    (
+        338,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-338.spv")),
+    ),
+    (
+        658,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-658.spv")),
+    ),
+    (
+        354,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-354.spv")),
+    ),
+    (
+        674,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-consumption-674.spv")),
+    ),
+];
+
 fn run(key: u32, mode: u32, n: usize) -> Result<Vec<Row>> {
     let spirv = CASES.iter().find(|case| case.0 == key).unwrap().1;
+    run_shader(key, mode, n, spirv, "primary_sampling_main")
+}
+
+fn run_shader(key: u32, mode: u32, n: usize, spirv: &[u8], entry: &str) -> Result<Vec<Row>> {
     let solid = key & 16 != 0;
     let transmission = key & 48 != 0;
     let smooth = key & 64 != 0;
@@ -95,7 +138,7 @@ fn run(key: u32, mode: u32, n: usize) -> Result<Vec<Row>> {
     let output = gpu.compute(
         Shader {
             spirv,
-            entry: "primary_sampling_main",
+            entry,
             workgroup: [64, 1, 1],
         },
         &bytes,
@@ -118,6 +161,59 @@ fn run(key: u32, mode: u32, n: usize) -> Result<Vec<Row>> {
             })
         })
         .collect())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn stratification_preserves_one_and_two_sample_selection_bits() -> Result {
+    for row in run_shader(
+        131,
+        0,
+        4096,
+        include_bytes!(concat!(env!("OUT_DIR"), "/primary-selection.spv")),
+        "primary_selection_main",
+    )? {
+        let [actual, random, samples, lane] = row[0];
+        let expected = if samples == 2. {
+            (lane + random) * 0.5
+        } else {
+            random
+        };
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan compute GPU"]
+fn consuming_primary_evaluations_preserves_radiance_and_continuation() -> Result {
+    for &(key, shader) in CONSUMPTION_CASES {
+        for mode in 0..6 {
+            for (index, row) in run_shader(key, mode, 4096, shader, "primary_consumption_main")?
+                .into_iter()
+                .enumerate()
+            {
+                assert!(
+                    row.iter().flatten().all(|x| x.is_finite()),
+                    "key={key}, mode={mode}, sample={index}: {row:?}"
+                );
+                assert!(
+                    row[..3].iter().flatten().all(|x| *x == 0.),
+                    "散射或介质改变：key={key}, mode={mode}, sample={index}: {row:?}"
+                );
+                assert_eq!(row[3][3], 0., "散射事件改变：key={key}, sample={index}");
+                assert_eq!(row[4][3], 0., "方向消费顺序改变：key={key}, sample={index}");
+                for channel in 0..3 {
+                    let (actual, expected) = (row[3][channel], row[4][channel]);
+                    assert!(
+                        (actual - expected).abs() <= 2e-6 * expected.abs().max(1.),
+                        "辐射累加改变：key={key}, mode={mode}, sample={index}: {row:?}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

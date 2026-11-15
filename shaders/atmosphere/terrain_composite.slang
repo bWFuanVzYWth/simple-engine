@@ -63,24 +63,29 @@ func terrain_sample(volume: Texture3D<float4>, sampler: SamplerState, filter: Te
                                0);
     return sum;
 }
-/// 在相机空气段合成线性 BT.709。有限命中直接使用受光积分；无支持的采样仅保留背景透射。
-public func composite_terrain_bt709(clear_light: Texture3D<float4>,
-                                    transmittance: Texture3D<float4>, volume: Texture3D<float4>,
-                                    first_hits: StructuredBuffer<uint>, sampler: SamplerState,
-                                    frame: TerrainFrame, uv: float2, metres: float,
-                                    max_distance_km: float, surface: bool, background: float3)
+/// 晴空Aerial合成；不接收地形资源，无表面命中时保留原天空背景。
+public func composite_clear_aerial_bt709(clear_light: Texture3D<float4>,
+                                         transmittance: Texture3D<float4>, sampler: SamplerState,
+                                         uv: float2, metres: float, max_distance_km: float,
+                                         surface: bool, background: float3)
+    ->float3
+{
+    if (metres <= 0 || !surface)
+        return background;
+    let air : AerialSample = aerial_sample(clear_light, transmittance, sampler, uv, metres * 0.001,
+                                           max_distance_km);
+    return color::rec2020_to_bt709(composite_aerial(air, color::bt709_to_rec2020(background)));
+}
+/// 已启用地形遮挡的空气段合成；frame与volume须来自本次owner所选的同一已录制/提交状态。
+/// 有限命中直接使用受光积分；无支持的采样仅保留背景透射。
+public func composite_shadowed_terrain_bt709(
+    clear_light: Texture3D<float4>, transmittance: Texture3D<float4>, volume: Texture3D<float4>,
+    first_hits: StructuredBuffer<uint>, sampler: SamplerState, frame: TerrainFrame, uv: float2,
+    metres: float, max_distance_km: float, surface: bool, background: float3)
     ->float3
 {
     if (metres <= 0)
         return background;
-    if (frame.source.state.y == 0)
-    {
-        if (!surface)
-            return background;
-        let air : AerialSample = aerial_sample(clear_light, transmittance, sampler, uv,
-                                               metres * 0.001, max_distance_km);
-        return color::rec2020_to_bt709(composite_aerial(air, color::bt709_to_rec2020(background)));
-    }
     let beyond : bool = !surface || metres > TERRAIN_RANGE_M;
     let filter : TerrainFilter =
                      terrain_filter(frame, first_hits, uv, min(metres, TERRAIN_RANGE_M), beyond);
@@ -108,5 +113,20 @@ public func composite_terrain_bt709(clear_light: Texture3D<float4>,
     }
     return color::rec2020_to_bt709(radiance +
                                    clear.transmittance * color::bt709_to_rec2020(background));
+}
+/// 兼容/参考入口；生产调用者按TerrainLight所选模式绑定对应固定叶子。
+public func composite_terrain_bt709(clear_light: Texture3D<float4>,
+                                    transmittance: Texture3D<float4>, volume: Texture3D<float4>,
+                                    first_hits: StructuredBuffer<uint>, sampler: SamplerState,
+                                    frame: TerrainFrame, uv: float2, metres: float,
+                                    max_distance_km: float, surface: bool, background: float3)
+    ->float3
+{
+    if (frame.source.state.y == 0)
+        return composite_clear_aerial_bt709(clear_light, transmittance, sampler, uv, metres,
+                                            max_distance_km, surface, background);
+    return composite_shadowed_terrain_bt709(clear_light, transmittance, volume, first_hits, sampler,
+                                            frame, uv, metres, max_distance_km, surface,
+                                            background);
 }
 }

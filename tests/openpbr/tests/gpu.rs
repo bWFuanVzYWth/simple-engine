@@ -909,7 +909,7 @@ fn flow_guide_energy_preserves_supported_materials() -> Result {
 
 #[test]
 #[ignore = "需要 Vulkan compute：组合顶点共享准备与独立查询具有相同输出"]
-fn flow_batch_shares_preparation_without_changing_the_vertex() -> Result {
+fn prepared_vertices_match_independent_evaluation_and_scatter() -> Result {
     for (profile, shared, separate) in [
         (
             8,
@@ -919,6 +919,16 @@ fn flow_batch_shares_preparation_without_changing_the_vertex() -> Result {
         (
             11,
             include_bytes!(concat!(env!("OUT_DIR"), "/flow-shared-solid.spv")).as_slice(),
+            include_bytes!(concat!(env!("OUT_DIR"), "/flow-separate-solid.spv")).as_slice(),
+        ),
+        (
+            8,
+            include_bytes!(concat!(env!("OUT_DIR"), "/flow-consumed-opaque.spv")).as_slice(),
+            include_bytes!(concat!(env!("OUT_DIR"), "/flow-separate-opaque.spv")).as_slice(),
+        ),
+        (
+            11,
+            include_bytes!(concat!(env!("OUT_DIR"), "/flow-consumed-solid.spv")).as_slice(),
             include_bytes!(concat!(env!("OUT_DIR"), "/flow-separate-solid.spv")).as_slice(),
         ),
     ] {

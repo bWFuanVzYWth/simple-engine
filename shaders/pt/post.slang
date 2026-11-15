@@ -24,14 +24,27 @@ public func accumulate_sample(inout sum: float4, inout count: uint, radiance: fl
     }
 }
 
-/// 有效计数须大于零；线性 HDR 保留 BT.709 工作空间，显示模式使用 Prime DRT。
+/// 有效计数须大于零；线性HDR保留BT.709工作空间，不引用显示变换参数。
+public func resolve_linear_hdr(sum: float4, count: uint)->float4
+{
+    if (sum.w < 0)
+        return float4(0, 0, 0, sum.w);
+    return float4(sum.xyz / float(count), 1);
+}
+
+/// 有效计数须大于零；以Prime DRT输出显示颜色。
+public func resolve_display(sum: float4, count: uint, drt: display::PrimeDrtParameters)->float4
+{
+    if (sum.w < 0)
+        return float4(0, 0, 0, sum.w);
+    return float4(display::prime_drt_linear_bt709(sum.xyz / float(count), drt), 1);
+}
+
+/// 显式参考兼容入口；生产按用途调用固定的线性或显示叶子。
 public func resolve_image(sum: float4, count: uint, linear_hdr: bool,
                           drt: display::PrimeDrtParameters)
     ->float4
 {
-    if (sum.w < 0)
-        return float4(0, 0, 0, sum.w);
-    let average : float3 = sum.xyz / float(count);
-    return float4(linear_hdr ? average : display::prime_drt_linear_bt709(average, drt), 1);
+    return linear_hdr ? resolve_linear_hdr(sum, count) : resolve_display(sum, count, drt);
 }
 }

@@ -145,8 +145,7 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
                     var source : float4 = direct *
                                           sun_transmittance(p, tau_read, linear_sampler, h, mus) *
                                           p.solar;
-                    if (p.solve.w != 1u)
-                        source += indirect(h, dot(up, ray), mus, nu, phase_coord(nu), c);
+                    source += indirect(h, dot(up, ray), mus, nu, c);
                     let energy : float4 =
                                      transmission * source * segment_integral(c.extinction, dt);
                     lit += energy * vis;

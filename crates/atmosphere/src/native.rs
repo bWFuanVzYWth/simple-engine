@@ -1,12 +1,13 @@
 //! 直接使用受控 Slang SPIR-V 的原生 Vulkan 大气 owner。
 //!
-//! 与 wgpu owner 使用相同物理数据、八个生产入口及 observer cache。initialize/record
+//! 与 wgpu owner 使用相同物理数据、同一组生产入口及 observer cache。initialize/record
 //! 只录制；资源创建包含同步布局转换，宿主须独占队列并负责提交、排序与完成。
 //! 初始化完成后调用 [`Atmosphere::release_initialization`]。
 //! 每次 `prepare` 前须通过 Context 取消或完成所有引用上次参数的 Recorded/Flight；输出原位复用，
 //! 初始化命令取消后须重建 owner；视图更新在实际提交后调用 [`Atmosphere::submitted`]，
 //! 取消未提交的更新保留 pending。多视图需要独立 owner，不隐藏调度或等待。
 
+use crate::shaders::Stage;
 use crate::{
     AERIAL_SIZE, Error, FrameState, MAPPING_ROWS, Memory, Model, Parameters, SHADERS, SKY_SIZE,
     Update, View,
@@ -74,10 +75,10 @@ fn writable(image: &Image) -> Binding {
 
 fn program(
     context: &mut Context,
-    index: usize,
+    stage: Stage,
     resources: &[Binding],
 ) -> Result<ComputePipeline, Error> {
-    let shader = &SHADERS[index];
+    let shader = &SHADERS[stage.index()];
     let entry = CString::new(shader.entry).expect("固定 shader 入口不含 NUL");
     let bindings = Resources::new(context, resources)?;
     Ok(ComputePipeline::new(
@@ -92,8 +93,8 @@ fn program(
 fn dispatch(
     context: &mut Context,
     commands: &mut Commands,
-    programs: &mut [Option<ComputePipeline>; 6],
-    index: usize,
+    programs: &mut [Option<ComputePipeline>; SHADERS.len()],
+    stage: Stage,
     resources: &[Binding],
     groups: [u32; 3],
 ) -> Result<(), Error> {
@@ -101,10 +102,11 @@ fn dispatch(
         return Ok(());
     }
     let bindings = Resources::new(context, resources)?;
+    let index = stage.index();
     let pipeline = if let Some(template) = &programs[index] {
         template.rebind(context, bindings)?
     } else {
-        let shader = &SHADERS[index];
+        let shader = &SHADERS[stage.index()];
         let entry = CString::new(shader.entry).expect("固定 shader 入口不含 NUL");
         let pipeline = ComputePipeline::new(
             context,
@@ -191,7 +193,7 @@ impl Atmosphere {
         let mapping = upload(context, bytemuck::cast_slice(&[[0.0f32; 4]; MAPPING_ROWS]))?;
         let sky_program = program(
             context,
-            6,
+            Stage::Sky,
             &[
                 uniform(&sky_uniform),
                 storage(&data),
@@ -207,7 +209,7 @@ impl Atmosphere {
         )?;
         let aerial_program = program(
             context,
-            7,
+            Stage::Aerial,
             &[
                 uniform(&frame_uniform),
                 storage(&data),
@@ -273,7 +275,7 @@ impl Atmosphere {
             context,
             &mut commands,
             &mut programs,
-            0,
+            Stage::Optical,
             &[uniform(&initial), storage(&self.data), writable(&self.tau)],
             [p.dims[3].div_ceil(8), p.dims[2].div_ceil(8), 1],
         )?;
@@ -281,14 +283,12 @@ impl Atmosphere {
             context,
             &mut commands,
             &mut programs,
-            5,
+            Stage::GroundDirect,
             &[
                 uniform(&initial),
                 storage(&self.data),
                 sampled(&self.tau),
                 Binding::Sampler(self.sampler),
-                storage(&directions),
-                storage(&incoming),
                 writable(&self.field.ground),
             ],
             [p.dims[1].div_ceil(64), 1, 1],
@@ -312,34 +312,53 @@ impl Atmosphere {
                     context,
                     &mut commands,
                     &mut programs,
-                    1,
+                    Stage::Directions,
                     &[uniform(&u), storage(&self.data), storage(&directions)],
                     [p.solve[0].div_ceil(64), states, 1],
                 )?;
+                if iteration == 1 {
+                    dispatch(
+                        context,
+                        &mut commands,
+                        &mut programs,
+                        Stage::IncidentFirst,
+                        &[
+                            uniform(&u),
+                            storage(&self.data),
+                            sampled(&self.tau),
+                            sampled(&previous.ground),
+                            Binding::Sampler(self.sampler),
+                            storage(&directions),
+                            storage(&incoming),
+                        ],
+                        [p.solve[0].div_ceil(64), states, 1],
+                    )?;
+                } else {
+                    dispatch(
+                        context,
+                        &mut commands,
+                        &mut programs,
+                        Stage::IncidentMultiple,
+                        &[
+                            uniform(&u),
+                            storage(&self.data),
+                            sampled(&self.tau),
+                            sampled(&previous.source),
+                            sampled(&previous.mean),
+                            sampled(&previous.ground),
+                            Binding::Sampler(self.sampler),
+                            storage(&directions),
+                            storage(&incoming),
+                            sampled(&previous.high),
+                        ],
+                        [p.solve[0].div_ceil(64), states, 1],
+                    )?;
+                }
                 dispatch(
                     context,
                     &mut commands,
                     &mut programs,
-                    2,
-                    &[
-                        uniform(&u),
-                        storage(&self.data),
-                        sampled(&self.tau),
-                        sampled(&previous.source),
-                        sampled(&previous.mean),
-                        sampled(&previous.ground),
-                        Binding::Sampler(self.sampler),
-                        storage(&directions),
-                        storage(&incoming),
-                        sampled(&previous.high),
-                    ],
-                    [p.solve[0].div_ceil(64), states, 1],
-                )?;
-                dispatch(
-                    context,
-                    &mut commands,
-                    &mut programs,
-                    3,
+                    Stage::Moments,
                     &[
                         uniform(&u),
                         storage(&directions),
@@ -354,7 +373,7 @@ impl Atmosphere {
                     context,
                     &mut commands,
                     &mut programs,
-                    4,
+                    Stage::Source,
                     &[
                         uniform(&u),
                         storage(&self.data),
@@ -375,7 +394,7 @@ impl Atmosphere {
                     context,
                     &mut commands,
                     &mut programs,
-                    5,
+                    Stage::GroundMultiple,
                     &[
                         uniform(&u),
                         storage(&self.data),

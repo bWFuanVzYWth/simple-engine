@@ -234,7 +234,7 @@ fn main() -> Result<(), shader_build::Error> {
                 args,
             }),
     );
-    const SHARING: [(&str, &[&str]); 4] = [
+    const SHARING: [(&str, &[&str]); 6] = [
         (
             "flow-shared-opaque.spv",
             &[
@@ -269,6 +269,24 @@ fn main() -> Result<(), shader_build::Error> {
                 "precise",
                 "-DOPENPBR_FLOW=658",
                 "-DOPENPBR_SHARED=0",
+            ],
+        ),
+        (
+            "flow-consumed-opaque.spv",
+            &[
+                "-fp-mode",
+                "precise",
+                "-DOPENPBR_FLOW=131",
+                "-DOPENPBR_SHARED=2",
+            ],
+        ),
+        (
+            "flow-consumed-solid.spv",
+            &[
+                "-fp-mode",
+                "precise",
+                "-DOPENPBR_FLOW=658",
+                "-DOPENPBR_SHARED=2",
             ],
         ),
     ];

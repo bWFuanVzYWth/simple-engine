@@ -2,8 +2,6 @@
 import atmosphere.parameters;
 import atmosphere.sampling;
 using namespace atmosphere;
-static const let SKIP_INACTIVE_SPECIES = true;
-static const let CACHE_PHASE_COORDINATE = false;
 struct AerialView
 {
     column_major var matrix : float4x4;
@@ -93,7 +91,7 @@ func dimensions(t: RWTexture3D<float4>)->uint3
 
 func phase_coord(nu: float)->float
 {
-    let a = select((mapping_flags(p) & 4u) != 0u, p.angular_mapping.x, 0.5);
+    let a = p.angular_mapping.x;
     return a * acos(clamp(nu, -1.0, 1.0)) / atmosphere::PI +
            (1.0 - a) * pow(max((1.0 - nu) * 0.5, 0.0), 1.0 / 3.0);
 }
@@ -124,12 +122,8 @@ func high_shape(hi: uint, si: uint, b: float4)->float4
     }
     return (m[0] + m[1] * b.y + m[2] * b.z + m[3] * b.w) / max(dot(m[4], b), 1e-20);
 }
-func indirect(h: float, mu: float, mu_s: float, nu: float, cached_phase: float, c: Medium)->float4
+func indirect(h: float, mu: float, mu_s: float, nu: float, c: Medium)->float4
 {
-    if ((p.size_steps.w & 1u) == 0u)
-    {
-        return float4(0.0);
-    }
     var lo = 0u;
     var hi = p.dims.x - 1u;
     while (hi - lo > 1u)
@@ -165,21 +159,9 @@ func indirect(h: float, mu: float, mu_s: float, nu: float, cached_phase: float, 
     }
     let cp = clamp((mu - mu_s * nu) / sqrt(max((1.0 - mu_s * mu_s) * (1.0 - nu * nu), 1e-20)), -1.0,
                    1.0);
-    var angle = 0.0;
-    if ((mapping_flags(p) & 8u) != 0u)
-    {
-        let t = (1.0 - cp) * 0.5;
-        angle = t + p.angular_mapping.y * t * (1.0 - t) * (2.0 * t - 1.0);
-    }
-    else
-    {
-        angle = acos(cp) / atmosphere::PI;
-    }
-    var phase = cached_phase;
-    if (!CACHE_PHASE_COORDINATE)
-    {
-        phase = phase_coord(nu);
-    }
+    let t = (1.0 - cp) * 0.5;
+    let angle = t + p.angular_mapping.y * t * (1.0 - t) * (2.0 * t - 1.0);
+    let phase = phase_coord(nu);
     let uv = float2(phase, angle);
     let v = lerp(lerp(shape(lo, i0, uv), shape(lo, i0 + 1u, uv), t0),
                  lerp(shape(hi, i1, uv), shape(hi, i1 + 1u, uv), t1), th);
@@ -205,13 +187,7 @@ func write_optical_depth(id: uint3)->void
     }
     let h = data[p.mapping.z + id.y].x;
     let v = float(id.x) / float(p.dims.w - 1u);
-    let a = v * v * v;
-    var x = a;
-    if ((mapping_flags(p) & 16u) == 0u)
-    {
-        let b = (1.0 - v) * (1.0 - v) * (1.0 - v);
-        x = a / max(a + b, 1e-20);
-    }
+    let x = v * v * v;
     let mu = horizon(p, h) + (1.0 - horizon(p, h)) * x;
     let length = boundary(p, h, mu, false);
     let dt = length / float(p.extra.w);
@@ -294,9 +270,7 @@ func prepare_directions(uint3 id: SV_DispatchThreadID)->void
 
     directions[id.y * p.solve.x + id.x] = float4(v, w);
 }
-[shader("compute")]
-[numthreads(64, 1, 1)]
-func trace_incident(uint3 id: SV_DispatchThreadID)->void
+func trace_incident_core<let MultipleScattering : bool>(id: uint3)->void
 {
     if (id.x >= p.solve.x || id.y >= p.batch.y * p.dims.y)
     {
@@ -312,10 +286,23 @@ func trace_incident(uint3 id: SV_DispatchThreadID)->void
     }
     let sun = float3(0.0, state.y, state.z);
     let index = id.y * p.solve.x + id.x;
-    let result = integrate_at(q.xyz, sun, state.x, 0.0, p.size_steps.z);
+    let result = integrate_core<MultipleScattering, true>(q.xyz, sun, state.x, 0.0, p.size_steps.z);
     let light = result.light;
     incoming[index] = light;
 }
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func trace_incident_first(uint3 id: SV_DispatchThreadID)->void
+{
+    trace_incident_core<false>(id);
+}
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func trace_incident_multiple(uint3 id: SV_DispatchThreadID)->void
+{
+    trace_incident_core<true>(id);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 func incident_moments(uint3 id: SV_DispatchThreadID)->void
@@ -400,8 +387,7 @@ func scattering_source(uint3 id: SV_DispatchThreadID)->void
         var species_enabled : bool[4] = { (bool)0, (bool)0, (bool)0, (bool)0 };
         for (var species = 0u; species < 4u; species++)
         {
-            species_enabled[species] =
-                !SKIP_INACTIVE_SPECIES || any(data[coeff + species + 1u] != float4(0.0));
+            species_enabled[species] = any(data[coeff + species + 1u] != float4(0.0));
         }
         for (var j = 0u; j < p.solve.x; j++)
         {
@@ -436,9 +422,7 @@ func scattering_source(uint3 id: SV_DispatchThreadID)->void
     let mean = exp(log_mean(hi, si));
     source_write[int2(pixel)] = max(source / max(mean * sigma, float4(1e-30)), float4(0.0));
 }
-[shader("compute")]
-[numthreads(64, 1, 1)]
-func ground_irradiance(uint3 id: SV_DispatchThreadID)->void
+func ground_irradiance_core<let IncludeIncoming : bool>(id: uint3)->void
 {
     if (id.x >= p.dims.y || p.batch.x != 0u)
     {
@@ -447,7 +431,7 @@ func ground_irradiance(uint3 id: SV_DispatchThreadID)->void
     let mu_s = data[p.extra.x + id.x].y;
     var irradiance =
         sun_transmittance(p, tau_read, linear_sampler, 0.0, mu_s) * max(mu_s, 0.0) * p.solar;
-    if (p.solve.w > 0u)
+    if (IncludeIncoming)
     {
         for (var j = 0u; j < p.solve.x; j++)
         {
@@ -457,13 +441,21 @@ func ground_irradiance(uint3 id: SV_DispatchThreadID)->void
     }
     ground_write[int2(int(id.x), 0)] = irradiance * (p.medium.y / atmosphere::PI);
 }
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func ground_direct(uint3 id: SV_DispatchThreadID)->void
+{
+    ground_irradiance_core<false>(id);
+}
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func ground_multiple(uint3 id: SV_DispatchThreadID)->void
+{
+    ground_irradiance_core<true>(id);
+}
 
 func solar_layer(layer: uint, e: float)->float
 {
-    if ((mapping_flags(p) & 2u) == 0u)
-    {
-        return solar_coord(p, data[layer].x, sin(e));
-    }
     let offset = p.mapping.y + 4u * layer;
     let base = data[offset];
     let d = max(atmosphere::PI * 0.5 - e, 0.0);
@@ -531,8 +523,8 @@ struct Transport
 };
 // 四波长共同积分核；include_ground 仅控制末端理想行星表面的边界辐射。
 // Aerial 组合显式场景表面，因此传 false；求解器与 SkyView 保留源边界条件 true。
-func integrate_core(ray: float3, sun: float3, initial_height: float, segment: float, steps: uint,
-                    include_ground: bool)
+func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
+    ray: float3, sun: float3, initial_height: float, segment: float, steps: uint)
     ->Transport
 {
     var result : Transport = (Transport)0;
@@ -578,13 +570,8 @@ func integrate_core(ray: float3, sun: float3, initial_height: float, segment: fl
     let hmin = height_at(p, h, mu, middle);
     let hend = height_at(p, h, mu, length);
     let scale = max(p.importance.y, 1e-10);
-    var before = 0.0;
-    var after = 0.0;
-    if (p.importance.y > 0.0)
-    {
-        before = log(1.0 + max(h - hmin, 0.0) / scale);
-        after = log(1.0 + max(hend - hmin, 0.0) / scale);
-    }
+    let before = log(1.0 + max(h - hmin, 0.0) / scale);
+    let after = log(1.0 + max(hend - hmin, 0.0) / scale);
     var split = uint(round(float(count) * before / max(before + after, 1e-20)));
     if (middle <= 0.0)
     {
@@ -607,8 +594,6 @@ func integrate_core(ray: float3, sun: float3, initial_height: float, segment: fl
         solar_phase[k + 1u] = tabulated_phase(stencil, k);
     }
     var previous = 0.0;
-    var cached_phase = 0.0;
-    var phase_cached = false;
     for (var i = 1u; i <= count; i++)
     {
         var edge = length * float(i) / float(count);
@@ -659,22 +644,15 @@ func integrate_core(ray: float3, sun: float3, initial_height: float, segment: fl
         direct *= p.solar;
         var source = direct;
 
-        if (p.solve.w != 1u)
-        {
-            if (CACHE_PHASE_COORDINATE && !phase_cached && hp < 35.0 && (p.size_steps.w & 1u) != 0u)
-            {
-                cached_phase = phase_coord(nu);
-                phase_cached = true;
-            }
-            source += indirect(hp, dot(local_up, ray), dot(local_up, sun), nu, cached_phase, c);
-        }
+        if (MultipleScattering)
+            source += indirect(hp, dot(local_up, ray), dot(local_up, sun), nu, c);
         let tau = c.extinction * dt;
         let trans = exp(-tau);
         let integral = segment_integral(c.extinction, dt);
         result.light += result.transmittance * source * integral;
         result.transmittance *= trans;
     }
-    if (include_ground && hit && length >= full_length)
+    if (IncludeGround && hit && length >= full_length)
     {
         let end_up = (up * (p.sun.w + h) + ray * length) / p.sun.w;
         result.light += result.transmittance * ground_light(dot(end_up, sun));
@@ -685,65 +663,17 @@ func integrate_core(ray: float3, sun: float3, initial_height: float, segment: fl
 func integrate_at(ray: float3, sun: float3, initial_height: float, segment: float, steps: uint)
     ->Transport
 {
-    return integrate_core(ray, sun, initial_height, segment, steps, true);
+    return integrate_core<true, true>(ray, sun, initial_height, segment, steps);
 }
 
 func integrate(ray: float3, sun: float3)->Transport
 {
     return integrate_at(ray, sun, p.view.w, p.medium.z, p.size_steps.z);
 }
-func camera_ray(id: uint2)->float3
-{
-    let uv = (float2(id) + 0.5) / float2(p.size_steps.xy) * 2.0 - 1.0;
-    let sy = sin(p.view.x);
-    let cy = cos(p.view.x);
-    let sp = sin(p.view.y);
-    let cp = cos(p.view.y);
-    let forward = float3(sy * cp, sp, cy * cp);
-    let right = float3(cy, 0.0, -sy);
-    let up = cross(forward, right);
-    return normalize(forward +
-                     right * uv.x * tan(p.view.z * 0.5) * float(p.size_steps.x) /
-                         float(p.size_steps.y) -
-                     up * uv.y * tan(p.view.z * 0.5));
-}
 func world_sun()->float3
 {
     return float3(sin(p.sun.x) * cos(p.sun.y), sin(p.sun.y), cos(p.sun.x) * cos(p.sun.y));
 }
-[shader("compute")]
-[numthreads(8, 8, 1)]
-func render(uint3 id: SV_DispatchThreadID)->void
-{
-    if (any(id.xy >= p.size_steps.xy))
-    {
-        return;
-    }
-    let ray = camera_ray(id.xy);
-    let sun = world_sun();
-    let result = integrate(ray, sun);
-    var light = result.light;
-    var rgb = float3(0.0);
-    let half_radius = sin(p.sun.z * 0.5);
-    if ((p.size_steps.w & 2u) != 0u && p.medium.z <= 0.0 && !ground(p, p.view.w, ray.y) &&
-        dot(ray - sun, ray - sun) <= 4.0 * half_radius * half_radius)
-    {
-        light +=
-            result.transmittance * p.solar / (4.0 * atmosphere::PI * half_radius * half_radius);
-    }
-    for (var i = 0u; i < 4u; i++)
-    {
-        rgb += light[i] * p.rgb[i].xyz;
-    }
-    var value = float4(rgb, 1.0);
-    if ((p.size_steps.w & 4u) != 0u)
-    {
-        value = light;
-    }
-    output[int2(id.xy)] = value;
-    output_t[int2(id.xy)] = result.transmittance;
-}
-
 [shader("compute")]
 [numthreads(8, 8, 1)]
 func build_sky(uint3 id: SV_DispatchThreadID)->void
@@ -775,11 +705,8 @@ func build_sky(uint3 id: SV_DispatchThreadID)->void
     }
     let hit = chart == 2u;
     let u = float(id.x) / float(p.sky.x - 1u);
-    var a = u * u;
-    if ((mapping_flags(p) & 32u) != 0u)
-    {
-        a *= a;
-    }
+    let square = u * u;
+    let a = square * square;
     let cp = 1.0 - 2.0 * a;
 
     var mu = sky_mapping[12u + id.y].x;
@@ -816,8 +743,8 @@ func build_aerial(uint3 id: SV_DispatchThreadID)->void
         : float3 =
               normalize(mul(aerial_view.matrix, float4(uv.x * 2. - 1., 1. - uv.y * 2., 0, 1)).xyz);
     let z : float = (float(id.z) + .5) / float(dims.z);
-    let result : Transport = integrate_core(ray, world_sun(), p.view.w,
-                                            aerial_view.settings.x * z * z, p.size_steps.z, false);
+    let result : Transport = integrate_core<true, false>(
+                     ray, world_sun(), p.view.w, aerial_view.settings.x * z * z, p.size_steps.z);
     var light : float3 = 0;
     var clear : float3 = 0;
     var filtered : float3 = 0;

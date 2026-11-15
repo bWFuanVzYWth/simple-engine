@@ -117,7 +117,29 @@ func visible_light<let Flow : uint, let Solar : bool, Scene : IFlowScene>(scene:
     return visible;
 }
 
+// evaluation_mask 只请求 pdf>0 的方向；即时折叠到已有辐射，不保留 BSDF 结果。
+struct DirectEvaluationConsumer : openpbr::IFlowEvaluationConsumer
+{
+    var first : float4;
+    var second : float4;
+    var throughput : float3;
+    var radiance : float3;
+    var continuation : bool;
+
+    [mutating]
+    func consume(direction: uint, evaluated: openpbr::Evaluation)->void
+    {
+        let light = direction == 0 ? first : second;
+        if (any(evaluated.response > 0))
+            radiance +=
+                throughput *
+                triple_product(evaluated.response, light.xyz,
+                               power_heuristic_over_pdf(light.w, continuation ? evaluated.pdf : 0));
+    }
+};
+
 /// 已解码的本次命中由一个材质入口消费；路径结果直接原位发布。
+/// Primary 为 true 时，调用方保证 primarySamples 为 1 或 2，且 primaryLane<primarySamples。
 public func shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : uint = 3,
                            let Primary : bool = false>(scene: Scene, inout call: MaterialCall,
                                                        hit: Hit, material: SurfaceMaterial,
@@ -163,31 +185,27 @@ public func shade_material<let Flow : uint, Scene : IFlowScene, let LightMask : 
                                            scene.sample_light(hit.surface, sampler.light(depth)));
     }
     let scatter : bool = continuation && !limited;
-    var bsdf : openpbr::Batch;
+    var consumer : DirectEvaluationConsumer = { float4(sun.incidentRadiance, sun.pdf),
+                                                float4(lamp.incidentRadiance, lamp.pdf),
+                                                call.throughput, call.radiance, continuation };
+    var next : openpbr::Sample;
 #if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
     if (Primary)
-        bsdf = openpbr::shade_primary_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
+        next = openpbr::shade_primary_flow_consume<Flow, openpbr::Energy, DirectEvaluationConsumer,
+                                                   Continuous ? LightMask : 0u>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
-            primarySamples, primaryLane);
+            primarySamples, primaryLane, consumer);
     else
 #endif
-        bsdf = openpbr::shade_flow<Flow, openpbr::Energy, Continuous ? LightMask : 0u>(
+        next = openpbr::shade_flow_consume<Flow, openpbr::Energy, DirectEvaluationConsumer,
+                                           Continuous ? LightMask : 0u>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
-            scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted);
-    if (Continuous && (LightMask & 1u) != 0 && sun.pdf > 0 && any(bsdf.first.response > 0))
-        call.radiance +=
-            call.throughput *
-            triple_product(bsdf.first.response, sun.incidentRadiance,
-                           power_heuristic_over_pdf(sun.pdf, continuation ? bsdf.first.pdf : 0));
-    if (Continuous && (LightMask & 2u) != 0 && lamp.pdf > 0 && any(bsdf.second.response > 0))
-        call.radiance +=
-            call.throughput *
-            triple_product(bsdf.second.response, lamp.incidentRadiance,
-                           power_heuristic_over_pdf(lamp.pdf, continuation ? bsdf.second.pdf : 0));
-    var next : openpbr::Sample = bsdf.scattered;
+            scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
+            consumer);
+    call.radiance = consumer.radiance;
     if (!scatter || next.events == 0)
     {
         call.direction = incoming;
