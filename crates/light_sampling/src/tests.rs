@@ -1,6 +1,25 @@
 use crate::{AliasTable, Error, QuadArea, SELECTORS, pack_vertices};
 
 #[test]
+fn cone_chord_matches_spherical_area_across_the_small_angle_boundary() {
+    for angle in [
+        0.0_f32,
+        1e-6,
+        1e-4,
+        0.00465,
+        0.19999999,
+        0.2,
+        0.20000002,
+        1.0,
+        std::f32::consts::PI,
+    ] {
+        let expected = 4.0 * (0.5 * f64::from(angle)).sin().powi(2);
+        let actual = f64::from(crate::cone_chord_squared(angle));
+        assert!((actual - expected).abs() <= 6e-7 * expected.max(1e-20));
+    }
+}
+
+#[test]
 fn emission_power_scales_with_area_brightness_and_emitting_sides() {
     let weight = crate::emission_weight([1.; 3], 4.).unwrap();
     assert_eq!(

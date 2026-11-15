@@ -33,6 +33,22 @@ pub const BACK_SIDE: u32 = 2;
 /// 正反两侧发射，对应 shader `LIGHT_BOTH`；不复制几何或加倍面积密度。
 pub const BOTH_SIDES: u32 = FRONT_SIDE | BACK_SIDE;
 
+/// 圆锥半角对应的球面弦长平方，可供采样、PDF和发光支持域共享。
+///
+/// angle为有限弧度，属于`[0,pi]`；正半角的PDF另要求结果非零且可表示。
+/// 与`geometry/cone.slang`共用小角Horner表达式，避免按帧常量在每次命中重复计算。
+/// 计算只返回几何量，不校验或改变调用方已经建立的角度域。
+pub fn cone_chord_squared(angle: f32) -> f32 {
+    let half = 0.5 * angle;
+    let squared = half * half;
+    let sine = if half < 0.1 {
+        half * (1.0 + squared * (-1.0 / 6.0 + squared * (1.0 / 120.0)))
+    } else {
+        half.sin()
+    };
+    4.0 * sine * sine
+}
+
 /// 资源期的线性 BT.709 发光亮度估计；材质与纹理解码由应用完成。
 ///
 /// RGB和幅度须有限非负。本值仅决定提案，不替代真实辐射；忽略动态tint和当前动画帧。

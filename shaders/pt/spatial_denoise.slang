@@ -24,7 +24,8 @@ public interface ISpatialImage
 
 /// 深度/法线/前景与材质边界保护；颜色不决定核权重，避免噪声中心自锁。
 /// depth 为正向线性深度或 DENOISE_SKY_DEPTH；不跨前景/天空混合。
-public func spatial_weight(offset: float2, center: SpatialSample, sample_value: SpatialSample)
+func spatial_weight_prepared(offset: float2, center: SpatialSample, sample_value: SpatialSample,
+                             inverse_depth_scale: float, center_normal_squared: float)
     ->float
 {
 
@@ -34,28 +35,42 @@ public func spatial_weight(offset: float2, center: SpatialSample, sample_value: 
     let sky : bool = center.depth == DENOISE_SKY_DEPTH;
     if (sky != (sample_value.depth == DENOISE_SKY_DEPTH))
         return 0;
-    var weight : float = exp(-dot(offset, offset) / 4);
+    var exponent = -0.25 * dot(offset, offset);
+    var angular = 1.0;
     if (!sky)
     {
         if (!(center.depth > 0) || !(sample_value.depth > 0) || !isfinite(center.depth) ||
             !isfinite(sample_value.depth))
             return 0;
-        let relative : float = (sample_value.depth - center.depth) / max(0.01, 0.02 * center.depth);
-        let normal_length
-            : float = dot(center.normal_roughness.xyz, center.normal_roughness.xyz) *
-                      dot(sample_value.normal_roughness.xyz, sample_value.normal_roughness.xyz);
+        let relative : float = (sample_value.depth - center.depth) * inverse_depth_scale;
+        let normal_length : float = center_normal_squared * dot(sample_value.normal_roughness.xyz,
+                                                                sample_value.normal_roughness.xyz);
         if (!(normal_length > 1e-12) || !isfinite(normal_length))
             return 0;
-        weight *= exp(-relative * relative) *
-                  pow(saturate(dot(center.normal_roughness.xyz, sample_value.normal_roughness.xyz) *
-                               rsqrt(normal_length)),
-                      32);
+        exponent -= relative * relative;
+        let cosine = saturate(dot(center.normal_roughness.xyz, sample_value.normal_roughness.xyz) *
+                              rsqrt(normal_length));
+        let square = cosine * cosine;
+        let fourth = square * square;
+        let eighth = fourth * fourth;
+        let sixteenth = eighth * eighth;
+        angular = sixteenth * sixteenth;
     }
     let diffuse : float3 = center.diffuse - sample_value.diffuse;
     let specular : float3 = center.specular - sample_value.specular;
     let roughness : float = center.normal_roughness.w - sample_value.normal_roughness.w;
-    weight *= exp(-64 * (dot(diffuse, diffuse) + dot(specular, specular) + roughness * roughness));
+    exponent -= 64 * (dot(diffuse, diffuse) + dot(specular, specular) + roughness * roughness);
+    let weight = exp(exponent) * angular;
     return isfinite(weight) ? weight : 0;
+}
+
+/// 同一深度、法线和材质权重；独立调用时在此准备中心的公共几何量。
+/// depth为正线性深度或DENOISE_SKY_DEPTH；不跨前景/天空混合，颜色不决定权重。
+public func spatial_weight(offset: float2, center: SpatialSample, sample_value: SpatialSample)
+    ->float
+{
+    return spatial_weight_prepared(offset, center, sample_value, 1 / max(0.01, 0.02 * center.depth),
+                                   dot(center.normal_roughness.xyz, center.normal_roughness.xyz));
 }
 
 /// 在连续输入像素坐标重建一个输出点，输入像素中心为整数，extent 两轴非零。
@@ -70,6 +85,8 @@ public func spatial_reconstruct<Image>(image: Image, source: float2, extent: uin
     valid = center.valid && all(isfinite(center.color));
     if (!valid)
         return 0;
+    let inverse_depth_scale = 1 / max(0.01, 0.02 * center.depth);
+    let center_normal_squared = dot(center.normal_roughness.xyz, center.normal_roughness.xyz);
     var sum : float3 = 0;
     var total : float = 0;
     for (var y: int = -2; y <= 2; ++y)
@@ -81,7 +98,9 @@ public func spatial_reconstruct<Image>(image: Image, source: float2, extent: uin
             var sample : SpatialSample = center;
             if (x != 0 || y != 0)
                 sample = image.load(uint2(pixel));
-            let weight : float = spatial_weight(float2(pixel) - source, center, sample);
+            let weight : float =
+                             spatial_weight_prepared(float2(pixel) - source, center, sample,
+                                                     inverse_depth_scale, center_normal_squared);
             if (weight > 0)
             {
                 sum += sample.color * weight;

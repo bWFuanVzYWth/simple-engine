@@ -12,7 +12,7 @@ func transport_probe(uint3 id: SV_DispatchThreadID)->void
     var rows : uint;
     var stride : uint;
     probe_queries.GetDimensions(rows, stride);
-    if (id.x >= rows / 2)
+    if (id.x >= (rows >> 1u))
         return;
     let ray : float4 = probe_queries[2 * id.x];
     let sun : float4 = probe_queries[2 * id.x + 1];

@@ -16,11 +16,30 @@ public func ground(p: Params, h: float, mu: float)->bool
 {
     return mu < 0.0 && mu <= horizon(p, h);
 }
-/// 从海拔 h 沿单位方向余弦 mu 前进 d km 后的海拔，采用避免大半径相消的形式。
+/// 同一径向射线的固定几何量；距离使用km，twice_radial_dot为两倍半径乘方向余弦。
+public struct RadialRay
+{
+    public var height : float;
+    public var radius : float;
+    public var radius_squared : float;
+    public var twice_radial_dot : float;
+};
+/// 为固定海拔h和单位方向余弦mu准备几何量；p来自同批Earth模型。
+public func radial_ray(p: Params, h: float, mu: float)->RadialRay
+{
+    let radius = p.sun.w + h;
+    return { h, radius, radius * radius, 2.0 * radius * mu };
+}
+/// 沿已准备的射线前进d km后的海拔；保留避免大半径相消的有理化形式。
+public func height_at(ray: RadialRay, d: float)->float
+{
+    let dh = d * (d + ray.twice_radial_dot);
+    return max(0.0, ray.height + dh / (sqrt(max(ray.radius_squared + dh, 0.0)) + ray.radius));
+}
+/// 从海拔h沿单位方向余弦mu前进d km后的海拔；单点调用与批量射线共享数值实现。
 public func height_at(p: Params, h: float, mu: float, d: float)->float
 {
-    let dh = d * (d + 2.0 * (p.sun.w + h) * mu);
-    return max(0.0, h + dh / (sqrt(max((p.sun.w + h) * (p.sun.w + h) + dh, 0.0)) + p.sun.w + h));
+    return height_at(radial_ray(p, h, mu), d);
 }
 /// 从大气内出发至地面（hit）或顶层球面的非负距离 km；hit 须等于 ground。
 public func boundary(p: Params, h: float, mu: float, hit: bool)->float
@@ -59,11 +78,12 @@ public func sun_transmittance(p: Params, tau_read: Texture2D<float4>, linear_sam
                               h: float, mu: float)
     ->float4
 {
-    if (ground(p, h, mu))
+    let hor = horizon(p, h);
+    if (mu < 0.0 && mu <= hor)
     {
         return float4(0.0);
     }
-    let x = clamp((mu - horizon(p, h)) / (1.0 - horizon(p, h)), 0.0, 1.0);
+    let x = clamp((mu - hor) / (1.0 - hor), 0.0, 1.0);
     let u = pow(x, 1.0 / 3.0);
     let pixel = float2(u * float(p.dims.w - 1u), height_coord(p, h) * float(p.dims.z - 1u)) + 0.5;
     return exp(-tau_read.SampleLevel(linear_sampler,
@@ -182,14 +202,25 @@ public func view_transmittance(p: Params, tau_read: Texture2D<float4>, linear_sa
     return sun_transmittance(p, tau_read, linear_sampler, h, mu);
 }
 
-/// 常系数线段的源积分权重 (1-exp(-sigma*dt))/sigma；sigma>=0，dt>=0，单位 km。
-/// 低光学厚度采用源三项展开，sigma=0 的极限为 dt；不执行完整介质积分或采样策略。
-public func segment_integral(sigma: float4, dt: float)->float4
+/// 常系数线段的四波长透射与源积分权重，均由同一次光学厚度和指数求得。
+public struct SegmentTransport
+{
+    public var transmittance : float4;
+    public var integral : float4;
+};
+/// sigma>=0、dt>=0，单位km；低光学厚度使用同一三项展开，真空积分极限为dt。
+public func segment_transport(sigma: float4, dt: float)->SegmentTransport
 {
     let tau : float4 = sigma * dt;
     let transmittance : float4 = exp(-tau);
-    return select(tau < float4(0.001), dt * (1.0 - tau * 0.5 + tau * tau / 6.0),
-                  (1.0 - transmittance) / max(sigma, float4(1e-30)));
+    let series = dt * fma(tau, fma(tau, float4(1.0 / 6.0), float4(-0.5)), float4(1.0));
+    return { transmittance, select(tau < float4(0.001), series,
+                                   (1.0 - transmittance) / max(sigma, float4(1e-30))) };
+}
+/// 常系数线段的源积分权重(1-exp(-sigma*dt))/sigma；其余前提同segment_transport。
+public func segment_integral(sigma: float4, dt: float)->float4
+{
+    return segment_transport(sigma, dt).integral;
 }
 
 /// 线性 Rec.2020 的有限距离 L/T；T 是太阳谱加权的 RGB 近似，不能代表任意背景光谱。

@@ -71,10 +71,16 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
     if (!updateShadowProfile(slice, lane))
         return;
     let f : TerrainFrame = frames[0];
-    let ray : float3 = terrain_ray(f, lane, slice);
+    let segment : AtmEpipolarSegment = { terrain_segment_endpoints.xy, terrain_segment_endpoints.zw,
+                                         false };
+    let ray : float3 = terrain_ray(f, lane, segment);
     let sun : float3 = f.source.sun.xyz;
     let height : float = f.source.camera.w;
     let radius : float = p.sun.w + height;
+    let radial = radial_ray(p, height, ray.y);
+    let radial_dot = radial.twice_radial_dot * 0.5;
+    let sun_radial_dot = radius * sun.y;
+    let ray_squared = dot(ray, ray);
     let first_hit : float = asfloat(first_hits[slice * TERRAIN_RADIAL + lane] & 0x7fffffffu);
     var entry : float = 0;
     var end : float = first_hit * 0.001;
@@ -98,10 +104,13 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
     if (entry < end)
         end = min(end,
                   entry + boundary(p, entry_height, entry_mu, ground(p, entry_height, entry_mu)));
-    let nu = clamp(dot(ray, sun), -1.0, 1.0);
-    let stencil = phase_stencil(nu);
+    let ray_sun_dot = dot(ray, sun);
+    let nu = clamp(ray_sun_dot, -1.0, 1.0);
+    let power = phase_power(nu);
+    let stencil = phase_stencil_from_power(power);
+    let angle : IndirectAngle = { nu, 1.0 - nu * nu, phase_coord(nu, power) };
     var phase : float4[5];
-    phase[0] = float4(3.0 * (1.0 + nu * nu) / (16.0 * atmosphere::PI));
+    phase[0] = float4((3.0 / (16.0 * atmosphere::PI)) * (1.0 + nu * nu));
     for (var k: uint = 0; k < 4; ++k)
         phase[k + 1] = tabulated_phase(stencil, k);
     var lit : float4 = 0;
@@ -109,14 +118,14 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
     var transmission : float4 = 1;
     var previous : float = 0;
     var boundary_visibility : float = 1;
-    let projected = float2(dot(ray, sunShadowProfileBasisU), dot(ray, sunShadowProfileBasisV));
-    let rate : float = dot(projected, sunShadowProfileDirection);
+    let shadow_ray = sunShadowProfileRay(ray);
+    let rate = shadow_ray.scalar_rate;
     let covered_metres
         : float =
               rate > SUN_SHADOW_PROFILE_EPSILON
                   ? min(TERRAIN_RANGE_M, sunShadowProfileCascadeEnd(shadowSource<false>(),
-                                                                    SUN_SHADOW_CASCADE_COUNT - 1) /
-                                             rate)
+                                                                    SUN_SHADOW_CASCADE_COUNT - 1) *
+                                             shadow_ray.inverse_scalar_rate)
                   : TERRAIN_RANGE_M;
     for (var z: uint = 0; z < TERRAIN_DEPTH; ++z)
     {
@@ -130,28 +139,30 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
             {
                 let a : float = start + float(step) * dt;
                 let d : float = a + dt * 0.5;
-                let h : float = height_at(p, height, ray.y, d);
-                let up : float3 = (float3(0, radius, 0) + ray * d) / (p.sun.w + h);
-                let c : Medium = medium(h);
-                let vis : float = localSunVisibilityInterval(shadowSource<false>(), ray, a * 1000.0,
-                                                             (a + dt) * 1000.0);
+                let h = height_at(radial, d);
+                let inverse_radius = 1.0 / (p.sun.w + h);
+                let mu = (radial_dot + ray_squared * d) * inverse_radius;
+                let mus = (sun_radial_dot + ray_sun_dot * d) * inverse_radius;
+                let stencil = medium_stencil(h);
+                let extinction = medium_extinction(stencil);
+                let vis : float = localSunVisibilityInterval(shadowSource<false>(), shadow_ray,
+                                                             a * 1000.0, (a + dt) * 1000.0);
                 // 有限表面只需要受光积分。只有可达近场末端的射线还要给天空提供遮挡积分。
                 if (vis > 0 || first_hit >= TERRAIN_RANGE_M)
                 {
-                    var direct : float4 = 0;
-                    for (var k: uint = 0; k < 5; ++k)
-                        direct += c.scattering[k] * phase[k];
-                    let mus : float = dot(up, sun);
-                    var source : float4 = direct *
+                    let c = medium<true>(h, stencil, phase);
+                    var source : float4 = c.direct *
                                           sun_transmittance(p, tau_read, linear_sampler, h, mus) *
                                           p.solar;
-                    source += indirect(h, dot(up, ray), mus, nu, c);
-                    let energy : float4 =
-                                     transmission * source * segment_integral(c.extinction, dt);
+                    source += indirect(h, mu, mus, angle, c.rayleigh, c.sigma);
+                    let segment = segment_transport(extinction, dt);
+                    let energy : float4 = transmission * source * segment.integral;
                     lit += energy * vis;
                     blocked += energy * (1. - vis);
+                    transmission *= segment.transmittance;
                 }
-                transmission *= exp(-dt * c.extinction);
+                else
+                    transmission *= exp(-dt * extinction);
                 let measured : float = min((a + dt) * 1000.0, covered_metres) - a * 1000.0;
                 if (measured > 0)
                     boundary_visibility = saturate(vis * dt * 1000.0 / measured);

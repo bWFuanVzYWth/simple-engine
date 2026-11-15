@@ -575,8 +575,25 @@ fn flow_compositions_preserve_the_complete_supported_closure() -> Result {
                 for channel in 0..4 {
                     let a = a[row][channel];
                     let b = b[row][channel];
+                    // null-metal用f64采样值检查原3e-5物理阈值；旧f32重建微法线也有舍入误差。
+                    let physical =
+                        if profile == 26 && row == 1 && actual[index][2][0].to_bits() != 0 {
+                            null_metal_sample(&cases[index])
+                                .map(|(response, pdf)| if channel < 3 { response } else { pdf })
+                        } else {
+                            None
+                        };
+                    let tolerance = if let Some(expected) = physical {
+                        assert!(
+                            (f64::from(a) - expected).abs() <= 3e-5 * expected.abs().max(1.),
+                            "profile={profile} case={index} channel={channel}: {a} != f64 {expected}"
+                        );
+                        3e-5 * expected.abs().max(1.) + (f64::from(b) - expected).abs()
+                    } else {
+                        3e-5 * f64::from(b).abs().max(1.)
+                    };
                     assert!(
-                        a.is_finite() && b.is_finite() && (a - b).abs() <= 3e-5 * b.abs().max(1.0),
+                        a.is_finite() && b.is_finite() && f64::from(a - b).abs() <= tolerance,
                         "profile={profile} case={index} row={row} channel={channel}: {a} != {b}; {:?}",
                         cases[index]
                     );
@@ -1499,6 +1516,285 @@ fn transport_matches_wide_precision_reference() -> Result {
                 "result {index}: {actual} versus {reference}"
             );
         }
+    }
+    Ok(())
+}
+#[test]
+#[ignore = "真实GPU；GGX尖峰与掠射密度由独立f64解析式核对"]
+fn ggx_distribution_and_reflection_density_match_analytic_limits() -> Result {
+    let mut cases = Vec::new();
+    for roughness in [0.01_f32, 0.010001, 0.05, 0.4, 1.] {
+        for half_cosine in [0_f32, 1e-6, 0.1, 0.9, 0.9999, 1.] {
+            for cosine in [1e-6_f32, 0.2, 1.] {
+                cases.push(Case {
+                    material: Material::dielectric(roughness, None)?,
+                    view: [(1. - cosine * cosine).sqrt(), 0., cosine, 0.],
+                    u: [(1. - half_cosine * half_cosine).sqrt(), 0., half_cosine, 0.],
+                    incident: Medium::VACUUM,
+                    transmitted: Medium::VACUUM,
+                });
+            }
+        }
+    }
+    let rows = run_shader_entry(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/math.spv")),
+        false,
+        "math_main",
+    )?;
+    for (case, row) in cases.iter().zip(rows) {
+        let roughness = f32::from_bits(case.material.to_words()[3]);
+        let alpha = f64::from(roughness * roughness);
+        let h = case.u.map(f64::from);
+        let v = case.view.map(f64::from);
+        let denominator = h[0] * h[0] + h[1] * h[1] + alpha * alpha * h[2] * h[2];
+        let d = if h[2] > 0. {
+            alpha * alpha / (std::f64::consts::PI * denominator * denominator)
+        } else {
+            0.
+        };
+        let s = 1. + v[0].hypot(v[1]);
+        let k = (1. - alpha * alpha) * s * s / (s * s + alpha * alpha * v[2] * v[2]);
+        let length = (alpha * alpha * (v[0] * v[0] + v[1] * v[1]) + v[2] * v[2]).sqrt();
+        let pdf = d / (2. * (k * v[2] + length));
+        for (actual, expected) in [f64::from(row[0][0]), f64::from(row[0][1])]
+            .into_iter()
+            .zip([d, pdf])
+        {
+            assert!(
+                (actual - expected).abs() <= 8e-6 * expected + 1e-35,
+                "{case:?}: {actual} != {expected}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "真实GPU；无偏振Fresnel保留Snell、匹配界面与全反射极限"]
+fn dielectric_fresnel_matches_independent_snell_response() -> Result {
+    let mut cases = Vec::new();
+    for (incident, transmitted) in [
+        (1_f32, 4_f32),
+        (1., 2.),
+        (1., 1.0000001),
+        (1., 1.),
+        (1.0000001, 1.),
+        (1.5, 1.),
+        (4., 1.),
+    ] {
+        for cosine in [0_f32, 1e-8, 1e-4, 0.03, 0.5, 1., -0.5, -1.] {
+            cases.push(Case {
+                material: Material::dielectric(0.4, None)?,
+                view: [(1. - cosine * cosine).sqrt(), 0., cosine, 0.],
+                u: [0., 0., 1., 0.],
+                incident: Medium::new(incident, [0.; 3])?,
+                transmitted: Medium::new(transmitted, [0.; 3])?,
+            });
+        }
+    }
+    let rows = run_shader_entry(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/math.spv")),
+        false,
+        "math_main",
+    )?;
+    for (case, row) in cases.iter().zip(rows) {
+        let ratio = f64::from(case.incident.to_array()[0] / case.transmitted.to_array()[0]);
+        let eta = if case.view[2] < 0. { 1. / ratio } else { ratio };
+        let cosine = f64::from(case.view[2]).abs();
+        let transmitted_sine_squared = (1. - cosine * cosine) / (eta * eta);
+        let expected = if eta == 1. {
+            0.
+        } else if transmitted_sine_squared >= 1. {
+            1.
+        } else {
+            let outgoing = (1. - transmitted_sine_squared).sqrt();
+            let s = (cosine - eta * outgoing) / (cosine + eta * outgoing);
+            let p = (eta * cosine - outgoing) / (eta * cosine + outgoing);
+            (s * s + p * p) * 0.5
+        };
+        let actual = f64::from(row[0][2]);
+        assert!(
+            (actual - expected).abs() <= 3e-5,
+            "{case:?}: {actual} != {expected}"
+        );
+    }
+    Ok(())
+}
+
+// t=logistic(v)直接积分Beta定义；不复用生产Gamma近似或其连分式。
+fn beta_integral(a: f64, b: f64) -> f64 {
+    let center = (a / b).ln();
+    let steps = 16384_u32;
+    let width = 80. / f64::from(steps);
+    let mut sum = 0.;
+    for index in 0..=steps {
+        let v = center - 40. + f64::from(index) * width;
+        let value = (-a * (-v).exp().ln_1p() - b * v.exp().ln_1p()).exp();
+        let weight = if index == 0 || index == steps {
+            1.
+        } else if index % 2 == 0 {
+            2.
+        } else {
+            4.
+        };
+        sum += weight * value;
+    }
+    sum * width / 3.
+}
+
+#[test]
+#[ignore = "真实GPU；非整数透射遮蔽由独立Beta定义积分核对"]
+fn transmission_masking_matches_noninteger_beta_integrals() -> Result {
+    let mut cases = Vec::new();
+    let mut expected = Vec::new();
+    for roughness in [0.01_f32, 0.2, 0.7, 1.] {
+        let alpha = f64::from(roughness * roughness);
+        for cosine in [1e-6_f32, 0.01, 0.2, 0.8, 1.] {
+            for outgoing in [0.001_f32, 0.1, 0.6, 1.] {
+                let sine = (1. - cosine * cosine).sqrt();
+                let outgoing_sine = (1. - outgoing * outgoing).sqrt();
+                let a = (1. + (1. + (alpha * f64::from(sine) / f64::from(cosine)).powi(2)).sqrt())
+                    * 0.5;
+                let b = (1.
+                    + (1. + (alpha * f64::from(outgoing_sine) / f64::from(outgoing)).powi(2))
+                        .sqrt())
+                    * 0.5;
+                expected.push(beta_integral(a, b));
+                cases.push(Case {
+                    material: Material::dielectric(roughness, None)?,
+                    view: [sine, 0., cosine, 0.],
+                    u: [outgoing_sine, 0., -outgoing, 0.],
+                    incident: Medium::VACUUM,
+                    transmitted: Medium::VACUUM,
+                });
+            }
+        }
+    }
+    let rows = run_shader(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
+        false,
+    )?;
+    for ((case, row), expected) in cases.iter().zip(rows).zip(expected) {
+        let actual = f64::from(row[0][0]);
+        assert!(
+            (actual - expected).abs() <= 3e-4 * expected + 1e-37,
+            "{case:?}: {actual} != {expected}"
+        );
+    }
+    Ok(())
+}
+// 黑色非金属端只提供null质量；连续金属端的f64 GGX/Schlick采样值。
+// 直接消费随机数，不从已舍入的出射方向重建微法线。
+fn null_metal_sample(case: &Case) -> Option<(f64, f64)> {
+    let words = case.material.to_words();
+    let weight = f64::from(f32::from_bits(words[5]));
+    if f64::from(case.u[2]) >= weight {
+        return None;
+    }
+    let roughness = f64::from(f32::from_bits(words[3]));
+    let alpha = roughness * roughness;
+    let wi = [
+        f64::from(case.view[0]),
+        f64::from(case.view[1]),
+        f64::from(case.view[2]).abs(),
+    ];
+    let length = (alpha * alpha * (wi[0] * wi[0] + wi[1] * wi[1]) + wi[2] * wi[2]).sqrt();
+    let visible = [
+        alpha * wi[0] / length,
+        alpha * wi[1] / length,
+        wi[2] / length,
+    ];
+    let s = 1. + wi[0].hypot(wi[1]);
+    let k = (1. - alpha * alpha) * s * s / (s * s + alpha * alpha * wi[2] * wi[2]);
+    let z = 1. - (1. + k * visible[2]) * f64::from(case.u[1]);
+    let phi = std::f64::consts::TAU * f64::from(case.u[0]);
+    let sine = (1. - z * z).max(0.).sqrt();
+    let half = [
+        alpha * (sine * phi.cos() + visible[0]),
+        alpha * (sine * phi.sin() + visible[1]),
+        (z + visible[2]).max(0.),
+    ];
+    let half_length = half.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let half = half.map(|x| x / half_length);
+    let cosine = wi.iter().zip(half).map(|(a, b)| a * b).sum::<f64>();
+    let outgoing = std::array::from_fn::<_, 3, _>(|axis| -wi[axis] + 2. * cosine * half[axis]);
+    if outgoing[2] <= 0. {
+        return None;
+    }
+    let denominator = half[0] * half[0] + half[1] * half[1] + alpha * alpha * half[2] * half[2];
+    let distribution = alpha * alpha / (std::f64::consts::PI * denominator * denominator);
+    let outgoing_length = (alpha * alpha * (outgoing[0] * outgoing[0] + outgoing[1] * outgoing[1])
+        + outgoing[2] * outgoing[2])
+        .sqrt();
+    let factor = 0.5 * outgoing[2] / (wi[2] * outgoing_length + outgoing[2] * length);
+    Some((
+        weight * distribution * factor * (1. - cosine).powi(5),
+        weight * distribution / (2. * (k * wi[2] + length)),
+    ))
+}
+
+#[test]
+#[ignore = "真实GPU；投影能量保持roughness零端、阈值邻域和真实LUT坐标"]
+fn projected_energy_preserves_roughness_endpoints_and_lut_sampling() -> Result {
+    let at = 0.01_f32.to_bits();
+    let mut cases = Vec::new();
+    for roughness in [
+        0_f32,
+        f32::from_bits(1),
+        1e-12,
+        f32::from_bits(at - 1),
+        f32::from_bits(at),
+        f32::from_bits(at + 1),
+        f32::from_bits(at + 2),
+        0.010001,
+        0.03,
+        0.4,
+        1.,
+    ] {
+        for (incident, transmitted) in [
+            (1_f32, 1_f32),
+            (1., 1.0000001),
+            (1.0000001, 1.),
+            (1., 1.5),
+            (1.5, 1.),
+            (1., 4.),
+            (4., 1.),
+        ] {
+            for cosine in [0_f32, 0.0199, 0.02, 0.0201, 0.3, 1., -0.02, -0.3, -1.] {
+                cases.push(Case {
+                    material: Material::dielectric(roughness, None)?,
+                    view: [(1. - cosine * cosine).sqrt(), 0., cosine, 0.],
+                    u: [0.; 4],
+                    incident: Medium::new(incident, [0.; 3])?,
+                    transmitted: Medium::new(transmitted, [0.; 3])?,
+                });
+            }
+        }
+    }
+    let rows = run_shader_entry(
+        &cases,
+        include_bytes!(concat!(env!("OUT_DIR"), "/purpose.spv")),
+        true,
+        "purpose_main",
+    )?;
+    for (case, row) in cases.iter().zip(rows) {
+        for channel in 0..3 {
+            let (before, after) = (row[0][channel], row[1][channel]);
+            assert!(
+                before.is_finite()
+                    && after.is_finite()
+                    && (after - before).abs() <= 3e-5 * before.abs().max(1.),
+                "{case:?}, channel={channel}: {after} != {before}"
+            );
+        }
+        assert_eq!(
+            row[3][0].to_bits(),
+            row[3][1].to_bits(),
+            "delta R改变：{case:?}"
+        );
     }
     Ok(())
 }

@@ -15,6 +15,22 @@ fn main() -> Result<(), shader_build::Error> {
             args: &["-fp-mode", "precise"],
         },
         Recipe {
+            source: "shaders/numerical.slang",
+            entry: "math_main",
+            stage: "compute",
+            output: "math.spv",
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-fp-mode", "precise"],
+        },
+        Recipe {
+            source: "shaders/numerical.slang",
+            entry: "purpose_main",
+            stage: "compute",
+            output: "purpose.spv",
+            target: Target::Spirv("spirv_1_4"),
+            args: &["-fp-mode", "precise"],
+        },
+        Recipe {
             source: "shaders/production.slang",
             entry: "main",
             stage: "compute",

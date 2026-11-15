@@ -17,6 +17,8 @@ internal static const let EXPOSURE_MIN_EV : float = -16.0;
 internal static const let EXPOSURE_MAX_EV = 16.0;
 internal static const let EXPOSURE_DARKEN_T90 = 0.5;
 internal static const let EXPOSURE_BRIGHTEN_T90 = 2.0;
+internal static const let EXPOSURE_DARKEN_RATE = 2.302585092994046 / EXPOSURE_DARKEN_T90;
+internal static const let EXPOSURE_BRIGHTEN_RATE = 2.302585092994046 / EXPOSURE_BRIGHTEN_T90;
 
 /// 16B 时域状态；按当前 EV、初始化标记、目标 EV、测量 log2 亮度排列，首次使用前清零。
 public struct ExposureState
@@ -53,11 +55,16 @@ public func exposure_bin(radiance: float3, linear709: bool)->int
                    EXPOSURE_BIN_COUNT - 1u));
 }
 
-/// 返回桶中心的 log2 亮度，bin 须在 0..255。
-public func exposure_bin_log(bin: uint)->float
+/// 将0..255内的桶坐标仿射映射到log2亮度；允许传入保留样本的平均桶坐标。
+public func exposure_bin_log(bin: float)->float
 {
     let range : float = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
-    return EXPOSURE_MIN_LOG_BRIGHTNESS + (float(bin) + 0.5) * (range / float(EXPOSURE_BIN_COUNT));
+    return EXPOSURE_MIN_LOG_BRIGHTNESS + (bin + 0.5) * (range / float(EXPOSURE_BIN_COUNT));
+}
+/// 返回整数桶中心的log2亮度；桶须在0..255。
+public func exposure_bin_log(bin: uint)->float
+{
+    return exposure_bin_log(float(bin));
 }
 
 /// 有效测量的目标 EV；compensation 是 0..1 的自动调节强度，不是附加 EV。
@@ -76,8 +83,8 @@ public func exposure_target_ev(measured: float, minimum: float, maximum: float, 
 /// EV 域指数平滑；参数须有限，dt 须非负。暗化 T90 为 0.5 秒，亮化为 2 秒。
 public func exposure_adapt(previous: float, target: float, dt: float)->float
 {
-    let t90 : float = target < previous ? EXPOSURE_DARKEN_T90 : EXPOSURE_BRIGHTEN_T90;
-    let blend : float = 1.0 - exp(-max(dt, 0.0) * 2.302585092994046 / t90);
+    let rate : float = target < previous ? EXPOSURE_DARKEN_RATE : EXPOSURE_BRIGHTEN_RATE;
+    let blend : float = 1.0 - exp(-max(dt, 0.0) * rate);
     return lerp(previous, target, clamp(blend, 0.0, 1.0));
 }
 }

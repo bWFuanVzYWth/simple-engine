@@ -32,6 +32,10 @@ public struct PrimeDrtParameters
 static const let NEUTRAL_WEIGHTS =
     float3(0.2120053547549465, 0.3921825078090138, 0.3958121374360396);
 static const let GAMUT_COMPRESSION = 0.04;
+static const let INVERSE_GAMUT_SCALE = 1.0 / (1.0 - GAMUT_COMPRESSION);
+static const let INVERSE_SRGB_SCALE = 1.0 / 1.055;
+static const let INVERSE_SRGB_SLOPE = 1.0 / 12.92;
+static const let INVERSE_SRGB_GAMMA = 1.0 / 2.4;
 
 internal func to_virtual_rgb(color: float3)->float3
 {
@@ -43,7 +47,7 @@ internal func from_virtual_rgb(color: float3)->float3
 {
     // neutral 投影不变，因此这是上述线性映射的逆。
     let neutral : float = dot(color, NEUTRAL_WEIGHTS);
-    return (color - GAMUT_COMPRESSION * neutral.xxx) / (1.0 - GAMUT_COMPRESSION);
+    return (color - GAMUT_COMPRESSION * neutral.xxx) * INVERSE_GAMUT_SCALE;
 }
 
 internal func curve_component(value: float, parameters: PrimeDrtParameters)->float
@@ -66,7 +70,7 @@ internal func encode_srgb(linear_rgb: float3)->float3
 {
     // 负 outset 值保留到 HSV 补偿，不能在此饱和裁剪。
     let cutoff : bool3 = linear_rgb < 0.0031308;
-    let higher : float3 = 1.055 * pow(max(linear_rgb, 0.0), 1.0 / 2.4) - 0.055;
+    let higher : float3 = 1.055 * pow(max(linear_rgb, 0.0), INVERSE_SRGB_GAMMA) - 0.055;
     let lower : float3 = linear_rgb * 12.92;
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
                   cutoff.z ? lower.z : higher.z);
@@ -75,8 +79,8 @@ internal func encode_srgb(linear_rgb: float3)->float3
 internal func decode_srgb(encoded: float3)->float3
 {
     let cutoff : bool3 = encoded <= 0.04045;
-    let lower : float3 = encoded / 12.92;
-    let higher : float3 = pow((encoded + 0.055) / 1.055, 2.4);
+    let lower : float3 = encoded * INVERSE_SRGB_SLOPE;
+    let higher : float3 = pow((encoded + 0.055) * INVERSE_SRGB_SCALE, 2.4);
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
                   cutoff.z ? lower.z : higher.z);
 }
@@ -89,15 +93,13 @@ internal func rgb_to_hsv(color: float3)->float3
     var hue = 0.0;
     if (chroma > 0.0 && maximum > 1.0e-7)
     {
-        if (maximum == color.x)
-            hue = (color.y - color.z) / chroma;
-        else if (maximum == color.y)
-            hue = (color.z - color.x) / chroma + 2.0;
-        else
-            hue = (color.x - color.y) / chroma + 4.0;
-        hue = frac(hue / 6.0);
+        let red = maximum == color.x;
+        let green = maximum == color.y;
+        let numerator = red ? color.y - color.z : (green ? color.z - color.x : color.x - color.y);
+        let sector = red ? 0.0 : (green ? 2.0 : 4.0);
+        hue = frac((numerator / chroma + sector) * (1.0 / 6.0));
     }
-    let saturation : float = maximum > 1.0e-7 ? chroma / max(maximum, 1.0e-7) : 0.0;
+    let saturation : float = maximum > 1.0e-7 ? chroma / maximum : 0.0;
     return float3(hue, saturation, maximum);
 }
 

@@ -279,6 +279,7 @@ impl Model {
             || parameters.solve != [1536, 20, 12, 0]
             || parameters.mapping[0] != 63
             || parameters.size_steps[3] != 1
+            || parameters.medium[3] != 3.0
             || !parameters.importance[1].is_finite()
             || parameters.importance[1] <= 0.0
             || !(1..=40).contains(&parameters.offsets1[1])

@@ -14,7 +14,8 @@ func cone_main(uint3 id: SV_DispatchThreadID)->void
     if (2 * id.x >= count)
         return;
     let cone : float4 = inputs[2 * id.x];
-    let d : float3 = geometry::sample_uniform_cone(cone.xyz, cone.w, inputs[2 * id.x + 1].xy);
-    outputs[2 * id.x] = float4(d, geometry::uniform_cone_pdf(cone.w));
-    outputs[2 * id.x + 1] = float4(geometry::cone_contains(cone.xyz, cone.w, d), 0, 0, 0);
+    let chord = geometry::cone_chord_squared(cone.w);
+    let d = geometry::sample_uniform_cone_chord(cone.xyz, chord, inputs[2 * id.x + 1].xy);
+    outputs[2 * id.x] = float4(d, geometry::uniform_cone_pdf_chord(chord));
+    outputs[2 * id.x + 1] = float4(geometry::cone_contains_chord(cone.xyz, chord, d), 0, 0, 0);
 }

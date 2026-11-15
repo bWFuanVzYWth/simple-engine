@@ -1,6 +1,7 @@
 /// 无资源绑定的 float32 采样内核；种子、随机流和样本维度顺序由调用方决定。
 /// PCG RXS-M-XS 来源：https://www.jcgt.org/published/0009/03/02/
 module sampling;
+import geometry.frame;
 
 namespace pt
 {
@@ -30,10 +31,11 @@ public func random(inout state: uint)->float
 public func cosine_hemisphere(normal: float3, u: float2)->float3
 {
     let phi : float = 2.0 * pi * u.y;
-    let tangent
-        : float3 =
-              normalize(cross(abs(normal.z) < 0.999 ? float3(0, 0, 1) : float3(0, 1, 0), normal));
+    let tangent = geometry::unit_tangent(normal);
     let bitangent : float3 = cross(normal, tangent);
-    return sqrt(u.x) * (cos(phi) * tangent + sin(phi) * bitangent) + sqrt(1.0 - u.x) * normal;
+    var sine : float;
+    var cosine : float;
+    sincos(phi, sine, cosine);
+    return sqrt(u.x) * (cosine * tangent + sine * bitangent) + sqrt(1.0 - u.x) * normal;
 }
 }

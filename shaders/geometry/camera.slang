@@ -48,6 +48,13 @@ public func camera_sample_uv(pixel: uint2, extent: uint2, jitter: float2)->float
     return (float2(pixel) + 0.5 + jitter) / float2(extent);
 }
 
+/// offset从像素左上角起算；inverse_extent须由同一非零输入尺寸计算且正有限。
+/// 宿主可按帧计算倒尺寸，采样点无隐式中心偏移。
+public func camera_sample_uv_offset(pixel: uint2, inverse_extent: float2, offset: float2)->float2
+{
+    return (float2(pixel) + offset) * inverse_extent;
+}
+
 /// 从已包含 jitter 的左上原点 UV 生成单位世界方向；UV 须有限。
 public func camera_direction(camera: Camera, sample_uv: float2)->float3
 {

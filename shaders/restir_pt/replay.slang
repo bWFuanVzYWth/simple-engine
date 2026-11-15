@@ -226,8 +226,8 @@ public func traceReplayedPath<Scene : IRestirScene>(
             endpoint.point.normal = emitter.normal;
             let emitterSegment : ReplaySegment = replaySegment(surface, endpoint, scatterPdf);
             let emitterCouldReconnect
-                : bool = min(emitterSegment.rayFootprint, emitterSegment.inverseGeometryFactor /
-                                                              (0.5 / 3.14159265358979323846)) >=
+                : bool = min(emitterSegment.rayFootprint, emitterSegment.inverseGeometryFactor *
+                                                              (2.0 * 3.14159265358979323846)) >=
                              primaryRayFootprint * distanceThreshold &&
                          (!surface.supportSimpleRoughnessThreshold || rough);
             if (nextDepth < rcLength && emitterCouldReconnect)

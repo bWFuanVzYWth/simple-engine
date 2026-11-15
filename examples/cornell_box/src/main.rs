@@ -222,13 +222,20 @@ fn parameters(args: &Args, first: u32, count: u32) -> [u8; 144] {
     ] {
         words.next().unwrap().copy_from_slice(&value.to_le_bytes());
     }
+    let [u, v] = [scene::LIGHT_EDGE_U, scene::LIGHT_EDGE_V];
+    let cross = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    let area = cross.into_iter().map(|x| x * x).sum::<f32>().sqrt();
     for (vector, w) in [
-        (scene::CAMERA_ORIGIN, 0.0),
+        (scene::CAMERA_ORIGIN, 1.0 / args.size as f32),
         (scene::CAMERA_FORWARD, 0.0),
         (scene::CAMERA_RIGHT, 0.0),
         (scene::CAMERA_UP, 0.0),
         (scene::LIGHT_CORNER, scene::LIGHT as f32),
-        (scene::LIGHT_EDGE_U, 0.0),
+        (scene::LIGHT_EDGE_U, area),
         (scene::LIGHT_EDGE_V, 0.0),
     ] {
         for value in [vector[0], vector[1], vector[2], w] {

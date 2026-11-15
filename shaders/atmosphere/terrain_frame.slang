@@ -53,13 +53,19 @@ public func terrain_range(f: TerrainFrame)->AtmEpipolarRange
 {
     return { f.projection.z, f.projection.w, f.angular.xy, f.angular.z, f.angular.w != 0 };
 }
-public func terrain_ray(f: TerrainFrame, lane: uint, slice: uint)->float3
+/// 在同一极线段内按径向lane重建单位相机射线；段可由工作组共享。
+public func terrain_ray(f: TerrainFrame, lane: uint, segment: AtmEpipolarSegment)->float3
 {
-    let segment : AtmEpipolarSegment = atmEpipolarSliceSegment(f.projection.xy, terrain_range(f),
-                                                               int(slice), int(TERRAIN_SLICES));
     let ndc : float2 =
                   lerp(segment.entry, segment.exit, (float(lane) + 0.5) / float(TERRAIN_RADIAL));
     return normalize(f.source.forward.xyz + ndc.x * f.source.right.xyz + ndc.y * f.source.up.xyz);
+}
+/// 独立查询的相机射线；批量同切片调用可先求极线段。
+public func terrain_ray(f: TerrainFrame, lane: uint, slice: uint)->float3
+{
+    let segment =
+        atmEpipolarSliceSegment(f.projection.xy, terrain_range(f), int(slice), int(TERRAIN_SLICES));
+    return terrain_ray(f, lane, segment);
 }
 // 冷启动覆盖全部切片。自然刷新每帧更新八分之一，按实际提交轮转。
 public func terrain_full(f: TerrainFrame)->bool

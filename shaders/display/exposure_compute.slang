@@ -128,9 +128,9 @@ func update_main()->void
     let end : uint = valid - begin;
     var cursor : uint = 0;
     var retained : uint = 0;
-    var weighted : float = 0;
-    var minimum : float = 0;
-    var maximum : float = 0;
+    var weighted_bins : float = 0;
+    var minimum_bin : uint = 0;
+    var maximum_bin : uint = 0;
     for (var bin: uint = 0; bin < 256; ++bin)
     {
         let next : uint = cursor + histogram[bin];
@@ -138,18 +138,19 @@ func update_main()->void
         let high : uint = min(next, end);
         if (high > low)
         {
-            let logarithm : float = display::exposure_bin_log(bin);
             if (retained == 0)
-                minimum = logarithm;
-            maximum = logarithm;
-            weighted += logarithm * float(high - low);
+                minimum_bin = bin;
+            maximum_bin = bin;
+            weighted_bins += float(bin) * float(high - low);
             retained += high - low;
         }
         cursor = next;
     }
     if (retained == 0)
         return;
-    state.measured_log_brightness = weighted / float(retained);
+    state.measured_log_brightness = display::exposure_bin_log(weighted_bins / float(retained));
+    let minimum = display::exposure_bin_log(minimum_bin);
+    let maximum = display::exposure_bin_log(maximum_bin);
     state.target_ev = display::exposure_target_ev(state.measured_log_brightness, minimum, maximum,
                                                   p.compensation);
     state.exposure_ev =

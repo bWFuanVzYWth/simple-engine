@@ -91,7 +91,7 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
         for (var width: uint = 2; width <= 64; width *= 2)
         {
             [unroll]
-            for (var stride: uint = width / 2; stride > 0; stride /= 2)
+            for (var stride: uint = width >> 1u; stride > 0; stride >>= 1u)
             {
                 let peer : uint = lane ^ stride;
                 if (lane < peer)
@@ -184,7 +184,7 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
         let d : float3 = local.d;
         let area0 : float = length(cross(b - a, c - a));
         let area1 : float = length(cross(c - a, d - a));
-        center = (a + c + lerp(d, b, area0 / (area0 + area1))) / 3.0 + offset;
+        center = (a + c + lerp(d, b, area0 / (area0 + area1))) * (1.0 / 3.0) + offset;
         power = asfloat(leaf[1]);
         child = 0x80000000u | rank;
         let at : uint = (((p.count - 1u) * 10u + 7u) & ~7u) + rank * 8u;

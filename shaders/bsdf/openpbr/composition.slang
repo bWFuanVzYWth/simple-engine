@@ -29,12 +29,18 @@ public interface IBase
 {
     associatedtype State;
     static func prepare(color: float3, weight: float)->State;
+    static func marginal_required()->bool;
     static func energy(wi: float3, state: State)->float3;
     static func evaluate(wi: float3, wo: float3, state: State)->Value;
     static func sample(wi: float3, u: float3, state: State)->Proposal;
 };
 public struct Absorber : IBase
 {
+    public static func marginal_required()->bool
+    {
+        return false;
+    }
+
     public typedef Empty State;
     public static func prepare(color: float3, weight: float)->State
     {
@@ -55,6 +61,11 @@ public struct Absorber : IBase
 };
 public struct Lambert : IBase
 {
+    public static func marginal_required()->bool
+    {
+        return false;
+    }
+
     public typedef float3 State;
     public static func prepare(color: float3, weight: float)->State
     {
@@ -84,6 +95,11 @@ public struct Lambert : IBase
 };
 public struct Subsurface : IBase
 {
+    public static func marginal_required()->bool
+    {
+        return false;
+    }
+
     public typedef float3 State;
     public static func prepare(color: float3, weight: float)->State
     {
@@ -135,6 +151,11 @@ public struct BaseSwitchState
 };
 public struct SubsurfaceSwitch : IBase
 {
+    public static func marginal_required()->bool
+    {
+        return false;
+    }
+
     public typedef BaseSwitchState State;
     public static func prepare(color: float3, weight: float)->State
     {
@@ -163,6 +184,11 @@ public struct BaseBlendState
 };
 public struct SubsurfaceBlend : IBase
 {
+    public static func marginal_required()->bool
+    {
+        return true;
+    }
+
     public typedef BaseBlendState State;
     public static func prepare(color: float3, weight: float)->State
     {
@@ -239,7 +265,8 @@ public interface IMeasure
     static func sample(wi: float3, u: float3, s: State)->PrimeFullOpenPbrReflectiveSampleBase;
     static func conductor_energy(wi: float3, s: State)->float;
     static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(energy: P, wi: float3,
-                                                                              ior: float, s: State)
+                                                                              ior: float, s: State,
+                                                                              roughness: float)
         ->float3;
 };
 public struct Smooth : IMeasure
@@ -280,14 +307,12 @@ public struct Smooth : IMeasure
     {
         return 1;
     }
-    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(energy: P,
-                                                                                     wi: float3,
-                                                                                     ior: float,
-                                                                                     s: State)
+    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, wi: float3, ior: float, s: State, roughness: float)
         ->float3
     {
-        return primeFullOpenPbrMicrofacetDielectricMsCompensation<true>(energy, distribution(s),
-                                                                        wi.z, ior);
+        return primeFullOpenPbrMicrofacetDielectricMsCompensation<true, false, false, true>(
+            energy, distribution(s), wi.z, ior, roughness);
     }
 };
 public struct Continuous : IMeasure
@@ -316,30 +341,28 @@ public struct Continuous : IMeasure
     public static func evaluate(wi: float3, wo: float3, s: State)
         ->PrimeFullOpenPbrReflectiveEvalBase
     {
-        return primeFullOpenPbrReflectiveEvalBaseImpl<true>(wi, wo, distribution(s),
-                                                            PRIME_FULL_OPENPBR_FLAG_ALL,
-                                                            PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+        return primeFullOpenPbrReflectiveEvalBaseImpl<true, true>(
+            wi, wo, distribution(s), PRIME_FULL_OPENPBR_FLAG_ALL,
+            PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     }
     public static func sample(wi: float3, u: float3, s: State)->PrimeFullOpenPbrReflectiveSampleBase
     {
-        return primeFullOpenPbrReflectiveSampleBaseImpl<true>(wi, u, distribution(s),
-                                                              PRIME_FULL_OPENPBR_FLAG_ALL,
-                                                              PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+        return primeFullOpenPbrReflectiveSampleBaseImpl<true, true>(
+            wi, u, distribution(s), PRIME_FULL_OPENPBR_FLAG_ALL,
+            PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     }
     public static func conductor_energy(wi: float3, s: State)->float
     {
-        return primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(distribution(s), wi.z,
-                                                                     float3(1), float3(1))
+        return primeFullOpenPbrMicrofacetDirectionalAlbedoReflection<true>(distribution(s), wi.z,
+                                                                           float3(1), float3(1))
             .x;
     }
-    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(energy: P,
-                                                                                     wi: float3,
-                                                                                     ior: float,
-                                                                                     s: State)
+    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, wi: float3, ior: float, s: State, roughness: float)
         ->float3
     {
-        return primeFullOpenPbrMicrofacetDielectricMsCompensation<false>(energy, distribution(s),
-                                                                         wi.z, ior);
+        return primeFullOpenPbrMicrofacetDielectricMsCompensation<false, true, false, true>(
+            energy, distribution(s), wi.z, ior, roughness);
     }
 };
 public struct MixedMeasure : IMeasure
@@ -368,27 +391,25 @@ public struct MixedMeasure : IMeasure
     public static func evaluate(wi: float3, wo: float3, s: State)
         ->PrimeFullOpenPbrReflectiveEvalBase
     {
-        return primeFullOpenPbrReflectiveEvalBaseImpl<false>(wi, wo, distribution(s),
-                                                             PRIME_FULL_OPENPBR_FLAG_ALL,
-                                                             PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+        return primeFullOpenPbrReflectiveEvalBaseImpl<false, true>(
+            wi, wo, distribution(s), PRIME_FULL_OPENPBR_FLAG_ALL,
+            PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     }
     public static func sample(wi: float3, u: float3, s: State)->PrimeFullOpenPbrReflectiveSampleBase
     {
-        return primeFullOpenPbrReflectiveSampleBaseImpl<false>(wi, u, distribution(s),
-                                                               PRIME_FULL_OPENPBR_FLAG_ALL,
-                                                               PRIME_FULL_OPENPBR_FLAG_REFLECTION);
+        return primeFullOpenPbrReflectiveSampleBaseImpl<false, true>(
+            wi, u, distribution(s), PRIME_FULL_OPENPBR_FLAG_ALL,
+            PRIME_FULL_OPENPBR_FLAG_REFLECTION);
     }
     public static func conductor_energy(wi: float3, s: State)->float
     {
         return delta(s) ? 1 : Continuous.conductor_energy(wi, s);
     }
-    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(energy: P,
-                                                                                     wi: float3,
-                                                                                     ior: float,
-                                                                                     s: State)
+    public static func dielectric_energy<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
+        energy: P, wi: float3, ior: float, s: State, roughness: float)
         ->float3
     {
-        return Continuous.dielectric_energy(energy, wi, ior, s);
+        return Continuous.dielectric_energy(energy, wi, ior, s, roughness);
     }
 };
 
@@ -418,11 +439,15 @@ public struct ConductorState<G : IMeasure>
 {
     public var geometry : G.State;
     public var color : float3;
-    public var ess : float;
+    public var compensation : float;
 };
 public func conductor_fresnel(color: float3)->PrimeFullOpenPbrConductorFresnel
 {
     return { color, float3(1), float3(1), 1, color };
+}
+func conductor_response(color: float3, cosine: float)->float3
+{
+    return saturate(lerp(color, float3(1), primeFullOpenPbrPow5(1 - cosine)));
 }
 public struct Conductor<G : IMeasure> : IReflectionClosure
 {
@@ -438,7 +463,8 @@ public struct Conductor<G : IMeasure> : IReflectionClosure
         ->State
     {
         let g : G.State = G.prepare(m.base_roughness.w);
-        return { g, saturate(m.base_roughness.xyz), G.conductor_energy(wi, g) };
+        let ess = G.conductor_energy(wi, g);
+        return { g, saturate(m.base_roughness.xyz), (1 - ess) / ess };
     }
     public static func evaluate(wi: float3, wo: float3, s: State)->Value
     {
@@ -450,25 +476,22 @@ public struct Conductor<G : IMeasure> : IReflectionClosure
     {
         if (b.flags == 0)
             return {};
-        var value : float3 = primeFullOpenPbrConductorFresnelUnpolarized(conductor_fresnel(s.color),
-                                                                         b.microCosine) *
-                             b.factor;
-        value *= 1 + s.color * (1 - s.ess) / s.ess;
+        var value : float3 = conductor_response(s.color, b.microCosine) * b.factor;
+        value *= 1 + s.color * s.compensation;
         return { { value, b.flags }, b.pdf };
     }
     public static func sample(wi: float3, u: float3, s: State)->Proposal
     {
         let b : PrimeFullOpenPbrReflectiveSampleBase = G.sample(wi, u, s.geometry);
         var p : Proposal = b.bsdfSample;
-        p.throughput.value *=
-            primeFullOpenPbrConductorFresnelUnpolarized(conductor_fresnel(s.color), b.microCosine);
+        p.throughput.value *= conductor_response(s.color, b.microCosine);
         if (!G.has_delta() || primeFullOpenPbrIsNonDelta(p.throughput.flags))
-            p.throughput.value *= 1 + s.color * (1 - s.ess) / s.ess;
+            p.throughput.value *= 1 + s.color * s.compensation;
         return p;
     }
     public static func delta_response(wi: float3, s: State)->float3
     {
-        return primeFullOpenPbrConductorFresnelUnpolarized(conductor_fresnel(s.color), wi.z);
+        return conductor_response(s.color, wi.z);
     }
     public static func delta_pdf(s: State)->float
     {
@@ -487,7 +510,7 @@ public struct LayerState<G : IMeasure, B : IBase>
 {
     public var geometry : G.State;
     public var base : B.State;
-    public var ior : float;
+    public var energyIor : float;
     public var compensation : float3;
     public var mixture : PrimeFullCompactLayerState;
 };
@@ -495,6 +518,11 @@ public func dielectric_fresnel(ior: float)->PrimeFullOpenPbrSpecularFresnel
 {
     return { ior, primeFullOpenPbrIorAdjustment(ior, 1), float3(1) };
 }
+func dielectric_reflectance(energyIor: float, cosine: float)->float3
+{
+    return float3(primeFullOpenPbrDielectricUnpolarized(energyIor, cosine));
+}
+
 public struct DeltaDielectric : IClosure
 {
     public static func has_delta()->bool
@@ -545,7 +573,7 @@ public struct DeltaDielectric : IClosure
 public struct SpecularState<G : IMeasure>
 {
     public var geometry : G.State;
-    public var ior : float;
+    public var energyIor : float;
     public var compensation : float;
     public var available : bool;
 };
@@ -563,8 +591,8 @@ public struct Specular<G : IMeasure> : IReflectionClosure
         ->State
     {
         let g : G.State = G.prepare(m.base_roughness.w);
-        let ior : float = m.surface.x / incident;
-        let ms : float3 = G.dielectric_energy(energy, wi, primeFullOpenPbrIorAdjustment(ior, 1), g);
+        let ior : float = primeFullOpenPbrIorAdjustment(m.surface.x / incident, 1);
+        let ms : float3 = G.dielectric_energy(energy, wi, ior, g, m.base_roughness.w);
         return { g, ior, ms.x, ms.z > 0 };
     }
     public static func evaluate(wi: float3, wo: float3, s: State)->Value
@@ -577,9 +605,7 @@ public struct Specular<G : IMeasure> : IReflectionClosure
     {
         if (b.flags == 0)
             return {};
-        return { { primeFullOpenPbrSpecularFresnelUnpolarized(dielectric_fresnel(s.ior),
-                                                              b.microCosine) *
-                       b.factor * s.compensation,
+        return { { dielectric_reflectance(s.energyIor, b.microCosine) * b.factor * s.compensation,
                    b.flags },
                  s.available ? b.pdf : 0 };
     }
@@ -589,15 +615,14 @@ public struct Specular<G : IMeasure> : IReflectionClosure
             return primeFullOpenPbrZeroSample();
         let b : PrimeFullOpenPbrReflectiveSampleBase = G.sample(wi, u, s.geometry);
         var p : Proposal = b.bsdfSample;
-        p.throughput.value *=
-            primeFullOpenPbrSpecularFresnelUnpolarized(dielectric_fresnel(s.ior), b.microCosine);
+        p.throughput.value *= dielectric_reflectance(s.energyIor, b.microCosine);
         if (!G.has_delta() || primeFullOpenPbrIsNonDelta(p.throughput.flags))
             p.throughput.value *= s.compensation;
         return p;
     }
     public static func delta_response(wi: float3, s: State)->float3
     {
-        return primeFullOpenPbrSpecularFresnelUnpolarized(dielectric_fresnel(s.ior), wi.z);
+        return dielectric_reflectance(s.energyIor, wi.z);
     }
     public static func delta_pdf(s: State)->float
     {
@@ -609,7 +634,7 @@ public struct Specular<G : IMeasure> : IReflectionClosure
     }
     public static func marginal_required(s: State)->bool
     {
-        return true;
+        return false;
     }
 };
 public struct DielectricLayer<G : IMeasure, B : IBase> : IReflectionClosure
@@ -628,9 +653,9 @@ public struct DielectricLayer<G : IMeasure, B : IBase> : IReflectionClosure
         var s : State;
         s.geometry = G.prepare(m.base_roughness.w);
         s.base = B.prepare(m.base_roughness.xyz, m.surface.z);
-        s.ior = m.surface.x / incident;
+        s.energyIor = primeFullOpenPbrIorAdjustment(m.surface.x / incident, 1);
         s.compensation =
-            G.dielectric_energy(energy, wi, primeFullOpenPbrIorAdjustment(s.ior, 1), s.geometry);
+            G.dielectric_energy(energy, wi, s.energyIor, s.geometry, m.base_roughness.w);
         s.mixture =
             primeFullCompactMakeLayerState(B.energy(wi, s.base), float3(1 - s.compensation.z),
                                            wi.z >= 0 ? float3(s.compensation.z) : float3(0));
@@ -645,10 +670,15 @@ public struct DielectricLayer<G : IMeasure, B : IBase> : IReflectionClosure
         ->Value
     {
         let base : Value = B.evaluate(wi, wo, s.base);
+        return from_base(base, s, reflected);
+    }
+    public static func from_base(base: Value, s: State,
+                                 reflected: PrimeFullOpenPbrReflectiveEvalBase)
+        ->Value
+    {
         var specular : PrimeFullOpenPbrThroughput = primeFullOpenPbrZeroThroughput();
         if (reflected.flags != 0)
-            specular = { primeFullOpenPbrSpecularFresnelUnpolarized(dielectric_fresnel(s.ior),
-                                                                    reflected.microCosine) *
+            specular = { dielectric_reflectance(s.energyIor, reflected.microCosine) *
                              reflected.factor * s.compensation.x,
                          reflected.flags };
         return { primeFullCompactLayerEval(base.throughput, specular, s.mixture),
@@ -667,7 +697,7 @@ public struct DielectricLayer<G : IMeasure, B : IBase> : IReflectionClosure
                       G.sample(wi, float3(u.xy, u.z / s.mixture.specularSampleWeight), s.geometry);
             var p : Proposal = b.bsdfSample;
             p.throughput.value *= primeFullOpenPbrSpecularFresnelUnpolarized(
-                dielectric_fresnel(s.ior), b.microCosine);
+                dielectric_fresnel(s.energyIor), b.microCosine);
             if (!G.has_delta() || primeFullOpenPbrIsNonDelta(p.throughput.flags))
                 p.throughput.value *= s.compensation.x;
             p.pdf *= s.mixture.specularSampleWeight;
@@ -683,7 +713,7 @@ public struct DielectricLayer<G : IMeasure, B : IBase> : IReflectionClosure
     }
     public static func delta_response(wi: float3, s: State)->float3
     {
-        return primeFullOpenPbrSpecularFresnelUnpolarized(dielectric_fresnel(s.ior), wi.z);
+        return dielectric_reflectance(s.energyIor, wi.z);
     }
     public static func delta_pdf(s: State)->float
     {
@@ -738,7 +768,7 @@ public struct BaseClosure<B : IBase> : IClosure
     }
     public static func marginal_required(s: State)->bool
     {
-        return true;
+        return B.marginal_required();
     }
 };
 public struct MetalBlendState<L : IClosure, M : IClosure>
@@ -903,7 +933,7 @@ public struct NullMetal<M : IClosure> : IClosure
     }
     public static func marginal_required(s: State)->bool
     {
-        return s.weight < 1;
+        return M.marginal_required(s.metal);
     }
 };
 public func sample_closure<C : IClosure>(wi: float3, u: float3, s: C.State)->Proposal

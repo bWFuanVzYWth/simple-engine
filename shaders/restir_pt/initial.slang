@@ -230,7 +230,7 @@ public func sampleInitialPathTraced<
                     : bool =
                           settings.shiftMapping == 0 ||
                           min(segment.rayFootprint,
-                              segment.inverseGeometryFactor / (0.5 / 3.14159265358979323846)) >=
+                              segment.inverseGeometryFactor * (2.0 * 3.14159265358979323846)) >=
                                   primaryFootprint * distanceThreshold &&
                               (!previousSurface.supportSimpleRoughnessThreshold || previousRough);
                 if (canConnect)

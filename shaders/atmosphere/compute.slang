@@ -89,11 +89,14 @@ func dimensions(t: RWTexture3D<float4>)->uint3
     return uint3(w, h, d);
 }
 
-func phase_coord(nu: float)->float
+func phase_power(cosine: float)->float
+{
+    return pow(max((1.0 - cosine) * 0.5, 0.0), 1.0 / 3.0);
+}
+func phase_coord(cosine: float, power: float)->float
 {
     let a = p.angular_mapping.x;
-    return a * acos(clamp(nu, -1.0, 1.0)) / atmosphere::PI +
-           (1.0 - a) * pow(max((1.0 - nu) * 0.5, 0.0), 1.0 / 3.0);
+    return a * acos(cosine) * (1.0 / atmosphere::PI) + (1.0 - a) * power;
 }
 func shape(hi: uint, si: uint, uv: float2)->float4
 {
@@ -115,14 +118,27 @@ func high_basis(mu: float, mu_s: float, nu: float)->float4
 }
 func high_shape(hi: uint, si: uint, b: float4)->float4
 {
-    var m : float4[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
-    for (var k = 0u; k < 5u; k++)
-    {
-        m[k] = high_read.Load(int3(int2(int(si * 5u + k), int(hi + 1u - p.offsets1.y)), 0));
-    }
-    return (m[0] + m[1] * b.y + m[2] * b.z + m[3] * b.w) / max(dot(m[4], b), 1e-20);
+    let pixel = int2(int(si * 5u), int(hi + 1u - p.offsets1.y));
+    var numerator = high_read.Load(int3(pixel, 0));
+    numerator = fma(high_read.Load(int3(pixel + int2(1, 0), 0)), b.y, numerator);
+    numerator = fma(high_read.Load(int3(pixel + int2(2, 0), 0)), b.z, numerator);
+    numerator = fma(high_read.Load(int3(pixel + int2(3, 0), 0)), b.w, numerator);
+    let denominator = dot(high_read.Load(int3(pixel + int2(4, 0), 0)), b);
+    return numerator / max(denominator, 1e-20);
 }
-func indirect(h: float, mu: float, mu_s: float, nu: float, c: Medium)->float4
+struct IndirectAngle
+{
+    var cosine : float;
+    var radial_factor : float;
+    var phase : float;
+};
+func use_high_shape(h: float)->bool
+{
+    return h >= 35.0 && p.offsets1.y < p.dims.x;
+}
+func indirect(h: float, mu: float, mu_s: float, angle: IndirectAngle, rayleigh: float4,
+              sigma: float4)
+    ->float4
 {
     var lo = 0u;
     var hi = p.dims.x - 1u;
@@ -150,26 +166,21 @@ func indirect(h: float, mu: float, mu_s: float, nu: float, c: Medium)->float4
     let t1 = s1 - float(i1);
     let brightness = exp(lerp(lerp(log_mean(lo, i0), log_mean(lo, i0 + 1u), t0),
                               lerp(log_mean(hi, i1), log_mean(hi, i1 + 1u), t1), th));
-    if (h >= 35.0 && p.offsets1.y < p.dims.x)
+    if (use_high_shape(h))
     {
-        let b = high_basis(mu, mu_s, nu);
+        let b = high_basis(mu, mu_s, angle.cosine);
         let v = lerp(lerp(high_shape(lo, i0, b), high_shape(lo, i0 + 1u, b), t0),
                      lerp(high_shape(hi, i1, b), high_shape(hi, i1 + 1u, b), t1), th);
-        return max(v * brightness * c.scattering[0], float4(0.0));
+        return max(v * brightness * rayleigh, float4(0.0));
     }
-    let cp = clamp((mu - mu_s * nu) / sqrt(max((1.0 - mu_s * mu_s) * (1.0 - nu * nu), 1e-20)), -1.0,
-                   1.0);
+    let cp = clamp((mu - mu_s * angle.cosine) /
+                       sqrt(max((1.0 - mu_s * mu_s) * angle.radial_factor, 1e-20)),
+                   -1.0, 1.0);
     let t = (1.0 - cp) * 0.5;
-    let angle = t + p.angular_mapping.y * t * (1.0 - t) * (2.0 * t - 1.0);
-    let phase = phase_coord(nu);
-    let uv = float2(phase, angle);
+    let warped = t + p.angular_mapping.y * t * (1.0 - t) * (2.0 * t - 1.0);
+    let uv = float2(angle.phase, warped);
     let v = lerp(lerp(shape(lo, i0, uv), shape(lo, i0 + 1u, uv), t0),
                  lerp(shape(hi, i1, uv), shape(hi, i1 + 1u, uv), t1), th);
-    var sigma = float4(0.0);
-    for (var k = 0u; k < 5u; k++)
-    {
-        sigma += c.scattering[k];
-    }
     return max(v * brightness * sigma, float4(0.0));
 }
 func ground_light(mu_s: float)->float4
@@ -191,10 +202,11 @@ func write_optical_depth(id: uint3)->void
     let mu = horizon(p, h) + (1.0 - horizon(p, h)) * x;
     let length = boundary(p, h, mu, false);
     let dt = length / float(p.extra.w);
+    let radial = radial_ray(p, h, mu);
     var tau = float4(0.0);
     for (var j = 0u; j < p.extra.w; j++)
     {
-        tau += medium(height_at(p, h, mu, (float(j) + 0.5) * dt)).extinction * dt;
+        tau += medium_extinction(medium_stencil(height_at(radial, (float(j) + 0.5) * dt))) * dt;
     }
     tau_write[int2(id.xy)] = min(tau, float4(80.0));
 }
@@ -253,7 +265,8 @@ func prepare_directions(uint3 id: SV_DispatchThreadID)->void
             low = hor;
             high = 1.0;
         }
-        let u = pow(q.x, p.medium.w);
+        let square = q.x * q.x;
+        let u = square * q.x;
         var mu = lerp(hor, low, u);
         if (id.x >= 2u * n)
         {
@@ -261,7 +274,7 @@ func prepare_directions(uint3 id: SV_DispatchThreadID)->void
         }
         let r = sqrt(max(1.0 - mu * mu, 0.0));
         v = float3(r * q.z, mu, r * q.y);
-        w = q.w * (high - low) * p.medium.w * pow(q.x, p.medium.w - 1.0);
+        w = q.w * (high - low) * 3.0 * square;
     }
     let d = 0.0004 + max(1.0 - dot(v, sun), 0.0);
     let sw = p.importance.x / (p.importance.x + d * d) *
@@ -318,35 +331,36 @@ func incident_moments(uint3 id: SV_DispatchThreadID)->void
     {
         let q = directions[id.x * p.solve.x + j];
         let l = incoming[id.x * p.solve.x + j] * q.w;
+        let square = q.xyz * q.xyz;
+        let cross = q.y * q.z;
         m[0] += l;
-        m[1] += l * q.x * q.x;
-        m[2] += l * q.y * q.y;
-        m[3] += l * q.z * q.z;
-        m[4] += l * q.y * q.z;
-        m[5] += q.w * float4(1.0, q.x * q.x, q.y * q.y, q.z * q.z);
-        m[6].x += q.w * q.y * q.z;
+        m[1] += l * square.x;
+        m[2] += l * square.y;
+        m[3] += l * square.z;
+        m[4] += l * cross;
+        m[5] += q.w * float4(1.0, square);
+        m[6].x += q.w * cross;
     }
     for (var k = 0u; k < 7u; k++)
     {
         moments[id.x * 7u + k] = m[k];
     }
     let hi = state_index / p.dims.y;
+    let scale = max(m[0] * (1.0 / (4.0 * atmosphere::PI)), float4(1e-30));
     if (hi + 1u >= p.offsets1.y)
     {
-        let scale = max(m[0] / (4.0 * atmosphere::PI), float4(1e-30));
-
-        let packed : float4[5] = {
-            (m[0] + m[1]) / scale, (m[2] - m[1]) / scale, (m[3] - m[1]) / scale, 2.0 * m[4] / scale,
-            float4(m[5].x + m[5].y, m[5].z - m[5].y, m[5].w - m[5].y, 2.0 * m[6].x)
-        };
+        let inverse_scale = 1.0 / scale;
+        let packed : float4[5] = { (m[0] + m[1]) * inverse_scale, (m[2] - m[1]) * inverse_scale,
+                                   (m[3] - m[1]) * inverse_scale, 2.0 * m[4] * inverse_scale,
+                                   float4(m[5].x + m[5].y, m[5].z - m[5].y, m[5].w - m[5].y,
+                                          2.0 * m[6].x) };
         for (var k = 0u; k < 5u; k++)
         {
             high_write[int2(int((id.x % p.dims.y) * 5u + k), int(hi + 1u - p.offsets1.y))] =
                 packed[k];
         }
     }
-    mean_write[int2(int(state_index % p.dims.y), int(hi))] =
-        log(max(m[0] / (4.0 * atmosphere::PI), float4(1e-30)));
+    mean_write[int2(int(state_index % p.dims.y), int(hi))] = log(scale);
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -372,11 +386,12 @@ func scattering_source(uint3 id: SV_DispatchThreadID)->void
         sun * nu + sqrt(max(1.0 - nu * nu, 0.0)) * (tangent * cone.x + float3(cone.y, 0.0, 0.0));
     let coeff = p.offsets0.x + hi * 6u;
     let mi = local_state * 7u;
-    let ray = moments[mi] + moments[mi + 1u] * v.x * v.x + moments[mi + 2u] * v.y * v.y +
-              moments[mi + 3u] * v.z * v.z + 2.0 * moments[mi + 4u] * v.y * v.z;
+    let square = v * v;
+    let cross = 2.0 * v.y * v.z;
+    let ray = moments[mi] + moments[mi + 1u] * square.x + moments[mi + 2u] * square.y +
+              moments[mi + 3u] * square.z + moments[mi + 4u] * cross;
     let weights = moments[mi + 5u];
-    let normalization = weights.x + weights.y * v.x * v.x + weights.z * v.y * v.y +
-                        weights.w * v.z * v.z + 2.0 * moments[mi + 6u].x * v.y * v.z;
+    let normalization = weights.x + dot(weights.yzw, square) + moments[mi + 6u].x * cross;
     var source = data[coeff] * ray / max(normalization, 1e-20);
 
     if (h < 35.0)
@@ -470,10 +485,17 @@ func solar_layer(layer: uint, e: float)->float
 }
 struct Medium
 {
-    var extinction : float4;
-    var scattering : float4[5];
+    var direct : float4;
+    var rayleigh : float4;
+    var sigma : float4;
 };
-func medium(h: float)->Medium
+struct MediumStencil
+{
+    var low : uint;
+    var high : uint;
+    var fraction : float;
+};
+func medium_stencil(h: float)->MediumStencil
 {
     var lo = 0u;
     var hi = p.offsets1.z - 1u;
@@ -492,11 +514,27 @@ func medium(h: float)->Medium
     let a = p.offsets0.z + lo * 7u;
     let b = p.offsets0.z + hi * 7u;
     let t = clamp((h - data[a].x) / (data[b].x - data[a].x), 0.0, 1.0);
-    var result : Medium = (Medium)0;
-    result.extinction = lerp(data[a + 1u], data[b + 1u], t);
-    for (var j = 0u; j < 5u; j++)
+    return { a, b, t };
+}
+func medium_extinction(stencil: MediumStencil)->float4
+{
+    return lerp(data[stencil.low + 1u], data[stencil.high + 1u], stencil.fraction);
+}
+func medium<let MultipleScattering : bool>(h: float, stencil: MediumStencil, phase: float4[5])
+    ->Medium
+{
+    var result : Medium;
+    result.rayleigh = lerp(data[stencil.low + 2u], data[stencil.high + 2u], stencil.fraction);
+    result.direct = result.rayleigh * phase[0];
+    result.sigma = result.rayleigh;
+    let total_scattering = MultipleScattering && !use_high_shape(h);
+    for (var j = 1u; j < 5u; j++)
     {
-        result.scattering[j] = lerp(data[a + 2u + j], data[b + 2u + j], t);
+        let scattering =
+            lerp(data[stencil.low + 2u + j], data[stencil.high + 2u + j], stencil.fraction);
+        result.direct += scattering * phase[j];
+        if (total_scattering)
+            result.sigma += scattering;
     }
     return result;
 }
@@ -507,7 +545,11 @@ struct PhaseStencil
 };
 func phase_stencil(mu: float)->PhaseStencil
 {
-    let x = clamp(pow(max((1.0 - mu) * 0.5, 0.0), 1.0 / 3.0) * 1024.0 - 0.5, 0.0, 1023.0);
+    return phase_stencil_from_power(phase_power(mu));
+}
+func phase_stencil_from_power(power: float)->PhaseStencil
+{
+    let x = clamp(power * 1024.0 - 0.5, 0.0, 1023.0);
     let i = min(uint(x), 1022u);
     return PhaseStencil(i, x - float(i));
 }
@@ -565,10 +607,13 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     }
     let count = steps;
 
-    let b = (p.sun.w + h) * mu;
+    let radial = radial_ray(p, h, mu);
+    let b = radial.twice_radial_dot * 0.5;
+    let sun_radial_dot = radial.radius * mu_s;
+    let ray_squared = dot(ray, ray);
     let middle = clamp(-b, 0.0, length);
-    let hmin = height_at(p, h, mu, middle);
-    let hend = height_at(p, h, mu, length);
+    let hmin = height_at(radial, middle);
+    let hend = height_at(radial, length);
     let scale = max(p.importance.y, 1e-10);
     let before = log(1.0 + max(h - hmin, 0.0) / scale);
     let after = log(1.0 + max(hend - hmin, 0.0) / scale);
@@ -585,10 +630,16 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     {
         split = clamp(split, 1u, count - 1u);
     }
+    let inverse_count = 1.0 / float(count);
+    let inverse_split = 1.0 / max(float(split), 1.0);
+    let inverse_tail = 1.0 / max(float(count - split), 1.0);
     var solar_phase : float4[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
     let cosine = clamp(nu, -1.0, 1.0);
-    let stencil = phase_stencil(cosine);
-    solar_phase[0] = float4(3.0 * (1.0 + cosine * cosine) / (16.0 * atmosphere::PI));
+    let power = phase_power(cosine);
+    let stencil = phase_stencil_from_power(power);
+    let angle : IndirectAngle = { nu, 1.0 - nu * nu,
+                                  MultipleScattering ? phase_coord(cosine, power) : 0.0 };
+    solar_phase[0] = float4((3.0 / (16.0 * atmosphere::PI)) * (1.0 + cosine * cosine));
     for (var k = 0u; k < 4u; k++)
     {
         solar_phase[k + 1u] = tabulated_phase(stencil, k);
@@ -596,7 +647,7 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     var previous = 0.0;
     for (var i = 1u; i <= count; i++)
     {
-        var edge = length * float(i) / float(count);
+        var edge = length * (float(i) * inverse_count);
         if (before + after >= 1e-5 && i < count)
         {
             if (i == split)
@@ -606,10 +657,10 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
             else
             {
                 let incoming = i < split;
-                var lh = after * float(i - split) / max(float(count - split), 1.0);
+                var lh = after * (float(i - split) * inverse_tail);
                 if (incoming)
                 {
-                    lh = before * (1.0 - float(i) / float(split));
+                    lh = before * (1.0 - float(i) * inverse_split);
                 }
                 let hh = hmin + scale * (exp(lh) - 1.0);
                 let c = (h - hh) * (2.0 * p.sun.w + h + hh);
@@ -632,30 +683,27 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
         let dt = edge - previous;
         let d = (edge + previous) * 0.5;
         previous = edge;
-        let hp = height_at(p, h, mu, d);
-        let local_up = (up * (p.sun.w + h) + ray * d) / (p.sun.w + hp);
-        let c = medium(hp);
-        var direct = float4(0.0);
-        for (var k = 0u; k < 5u; k++)
-        {
-            direct += c.scattering[k] * solar_phase[k];
-        }
-        direct *= sun_transmittance(p, tau_read, linear_sampler, hp, dot(local_up, sun));
-        direct *= p.solar;
+        let hp = height_at(radial, d);
+        let inverse_radius = 1.0 / (p.sun.w + hp);
+        let local_mu = (b + ray_squared * d) * inverse_radius;
+        let local_mu_s = (sun_radial_dot + nu * d) * inverse_radius;
+        let stencil = medium_stencil(hp);
+        let extinction = medium_extinction(stencil);
+        let c = medium<MultipleScattering>(hp, stencil, solar_phase);
+        let direct =
+            c.direct * sun_transmittance(p, tau_read, linear_sampler, hp, local_mu_s) * p.solar;
         var source = direct;
 
         if (MultipleScattering)
-            source += indirect(hp, dot(local_up, ray), dot(local_up, sun), nu, c);
-        let tau = c.extinction * dt;
-        let trans = exp(-tau);
-        let integral = segment_integral(c.extinction, dt);
-        result.light += result.transmittance * source * integral;
-        result.transmittance *= trans;
+            source += indirect(hp, local_mu, local_mu_s, angle, c.rayleigh, c.sigma);
+        let segment = segment_transport(extinction, dt);
+        result.light += result.transmittance * source * segment.integral;
+        result.transmittance *= segment.transmittance;
     }
     if (IncludeGround && hit && length >= full_length)
     {
-        let end_up = (up * (p.sun.w + h) + ray * length) / p.sun.w;
-        result.light += result.transmittance * ground_light(dot(end_up, sun));
+        let end_mu_s = (sun_radial_dot + nu * length) / p.sun.w;
+        result.light += result.transmittance * ground_light(end_mu_s);
     }
     return result;
 }
@@ -672,7 +720,14 @@ func integrate(ray: float3, sun: float3)->Transport
 }
 func world_sun()->float3
 {
-    return float3(sin(p.sun.x) * cos(p.sun.y), sin(p.sun.y), cos(p.sun.x) * cos(p.sun.y));
+    var azimuth_sine : float;
+    var azimuth_cosine : float;
+    var elevation_sine : float;
+    var elevation_cosine : float;
+    sincos(p.sun.x, azimuth_sine, azimuth_cosine);
+    sincos(p.sun.y, elevation_sine, elevation_cosine);
+    return float3(azimuth_sine * elevation_cosine, elevation_sine,
+                  azimuth_cosine * elevation_cosine);
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -750,9 +805,10 @@ func build_aerial(uint3 id: SV_DispatchThreadID)->void
     var filtered : float3 = 0;
     for (var k: uint = 0; k < 4; k++)
     {
+        let solar_rgb = p.solar[k] * p.rgb[k].xyz;
         light += result.light[k] * p.rgb[k].xyz;
-        clear += p.solar[k] * p.rgb[k].xyz;
-        filtered += result.transmittance[k] * p.solar[k] * p.rgb[k].xyz;
+        clear += solar_rgb;
+        filtered += result.transmittance[k] * solar_rgb;
     }
     aerial_light[id] = float4(max(light * aerial_view.settings.yzw, 0), 1);
     aerial_t[id] = float4(clamp(filtered / max(clear, 1e-20), 0, 1), 1);

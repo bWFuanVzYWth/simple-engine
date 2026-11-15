@@ -61,10 +61,10 @@ public struct SolidContinuous : ITransmission
     {
         let alpha : float = roughness * roughness;
         let distribution : PrimeFullOpenPbrMicrofacet = { float2(alpha) };
-        return {
-            alpha, ior,
-            primeFullOpenPbrMicrofacetDielectricMsCompensation(energy, distribution, wi.z, ior).xy
-        };
+        return { alpha, ior,
+                 primeFullOpenPbrMicrofacetDielectricMsCompensation<false, true, true, true>(
+                     energy, distribution, wi.z, ior, roughness)
+                     .xy };
     }
     public static func evaluate<let Balanced : bool = false>(wi: float3, wo: float3, s: State)
         ->Value
@@ -205,20 +205,15 @@ public struct ThinRough<G : IMeasure> : ITransmission
         if (transmitted)
             wo.z = -wo.z;
         let b : PrimeFullOpenPbrReflectiveEvalBase = G.evaluate(wi, wo, G.prepare_alpha(s.alpha));
+        if (b.flags == 0)
+            return {};
+        let rt : PrimeFullOpenPbrVecPair = primeFullThinWallRt(
+                     b.microCosine, dielectric_fresnel(s.ior), float3(1), s.extinction);
         var v : Value = {};
-        if (b.flags != 0)
-        {
-            let rt : PrimeFullOpenPbrVecPair = primeFullThinWallRt(
-                         b.microCosine, dielectric_fresnel(s.ior), float3(1), s.extinction);
-            v.throughput = { float3(b.factor) * (transmitted ? rt.second : rt.first),
-                             transmitted ? PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION
-                                         : b.flags };
-            v.throughput.value /= primeFullOpenPbrMicrofacetDirectionalAlbedoUnity(
-                G.distribution(G.prepare_alpha(s.alpha)), wi.z);
-        }
-        let rt : PrimeFullOpenPbrVecPair =
-                     primeFullThinWallRt(dot(wi, normalize(wi + wo)), dielectric_fresnel(s.ior),
-                                         float3(1), s.extinction);
+        v.throughput = { float3(b.factor) * (transmitted ? rt.second : rt.first),
+                         transmitted ? PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION : b.flags };
+        v.throughput.value /= primeFullOpenPbrMicrofacetDirectionalAlbedoUnity<true>(
+            G.distribution(G.prepare_alpha(s.alpha)), wi.z);
         var reflection : float = primeFullOpenPbrSpectrumToWeight(rt.first);
         var transmission : float = primeFullOpenPbrSpectrumToWeight(rt.second);
         if (Balanced)
@@ -272,7 +267,7 @@ public struct ThinRough<G : IMeasure> : ITransmission
             p.pdf *= reflection / sum;
         }
         p.throughput.value /=
-            primeFullOpenPbrMicrofacetDirectionalAlbedoUnity(G.distribution(geometry), wi.z);
+            primeFullOpenPbrMicrofacetDirectionalAlbedoUnity<true>(G.distribution(geometry), wi.z);
         return p;
     }
 };
@@ -326,7 +321,7 @@ public func solid_evaluate<let Balanced : bool = false>(wi: float3, wo: float3, 
     if (microIncident * wi.z < 0.0 || microOutgoing * wo.z < 0.0)
         return result;
     let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
-    let distribution : float = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+    let distribution : float = primeFullOpenPbrMicrofacetD<true>(microfacet, halfVector);
     if (reflected)
     {
         result.throughput.value =
@@ -386,8 +381,9 @@ public func solid_sample<let Balanced : bool = false>(wi: float3, randomValue: f
     let sampleDirection : float3 = wi.z > 0.0 ? wi : -wi;
     halfVector =
         primeFullOpenPbrMicrofacetSample(microfacet, sampleDirection, randomValue.xy, false);
-    microfacetPdf = primeFullOpenPbrMicrofacetPdf(microfacet, sampleDirection, halfVector, false);
-    distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+    distribution = primeFullOpenPbrMicrofacetD<true>(microfacet, halfVector);
+    microfacetPdf = primeFullOpenPbrMicrofacetPdfFromDistribution(microfacet, sampleDirection,
+                                                                  halfVector, false, distribution);
     let microIncident : float = dot(halfVector, wi);
     let rt : PrimeFullOpenPbrVecPair = primeFullOpenPbrSpecularFresnelRt(fresnel, microIncident);
     var reflection : float3 = rt.first;

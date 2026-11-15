@@ -65,7 +65,8 @@ func vertex_main(uint vertex_id: SV_VulkanVertexID, uint instance_id: SV_VulkanI
 float4 fragment_main(VertexOutput input) : SV_Target0
 {
     let radius : float = clamp(input.params.y, 0.0, min(input.extent.x, input.extent.y) * 0.5);
-    let q : float2 = abs(input.local - input.extent * 0.5) - input.extent * 0.5 + radius;
+    let half_extent = input.extent * 0.5;
+    let q : float2 = abs(input.local - half_extent) - half_extent + radius;
     let distance : float = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
     let width : float = max(fwidth(distance), 0.00001);
     if (input.params.x == 0.0)

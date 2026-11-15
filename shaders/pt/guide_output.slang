@@ -49,7 +49,7 @@ public func write_sky_guide(images: GuideImages, p: GuideFrame, pixel: uint2, fi
     images.depth[pixel] = pt::DENOISE_SKY_DEPTH;
     images.motion[pixel] = motion;
     images.normal[pixel] = float4(0, 0, 0, 1);
-    images.diffuse[pixel] = float4(0.5, 0.5, 0.5, float(flags | pt::GUIDE_SKY) / 255);
+    images.diffuse[pixel] = float4(0.5, 0.5, 0.5, float(flags | pt::GUIDE_SKY) * (1.0 / 255.0));
     images.specular[pixel] = float4(0.5, 0.5, 0.5, 0);
     images.distance[pixel] = 0;
     images.specular_motion[pixel] = motion;
@@ -80,8 +80,8 @@ public func write_surface_guides<Scene>(scene: Scene, images: GuideImages, p: Gu
         images.depth[pixel] = projection.depth;
         images.motion[pixel] = projection.motion;
         images.normal[pixel] = float4(projection.normal, albedos.normal_roughness.w);
-        images.diffuse[pixel] =
-            float4(albedos.diffuse_albedo, float(projection.flags | GUIDE_FOREGROUND) / 255);
+        images.diffuse[pixel] = float4(albedos.diffuse_albedo,
+                                       float(projection.flags | GUIDE_FOREGROUND) * (1.0 / 255.0));
         images.specular[pixel] = float4(albedos.specular_albedo, 0);
     }
     let reflection : pt::GuideEndpoint = pt::trace_reflection_guide(scene, first, p.max_depth);
@@ -116,8 +116,8 @@ public func write_key_guides<Scene : pt::IKeyGuideTrace>(
         images.depth[pixel] = projection.depth;
         images.motion[pixel] = projection.motion;
         images.normal[pixel] = float4(projection.normal, keyed.albedos.normal_roughness.w);
-        images.diffuse[pixel] =
-            float4(keyed.albedos.diffuse_albedo, float(projection.flags | GUIDE_FOREGROUND) / 255);
+        images.diffuse[pixel] = float4(keyed.albedos.diffuse_albedo,
+                                       float(projection.flags | GUIDE_FOREGROUND) * (1.0 / 255.0));
         images.specular[pixel] = float4(keyed.albedos.specular_albedo, 0);
     }
     let reflectedKey : pt::KeyGuideEndpoint =

@@ -55,7 +55,7 @@ public func primeFullOpenPbrReduceMin(value: float3)->float
 }
 public func primeFullOpenPbrSpectrumToWeight(value: float3)->float
 {
-    return primeFullOpenPbrReduceSum(value) / 3.0;
+    return primeFullOpenPbrReduceSum(value) * (1.0 / 3.0);
 }
 
 public func primeFullOpenPbrUniformSampleHemisphere(sampleValue: float2)->float3

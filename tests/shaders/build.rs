@@ -5,6 +5,24 @@ use simple_engine::shader_library;
 fn main() -> Result<(), shader_build::Error> {
     let recipes = [
         (
+            "shaders/light_geometry.slang",
+            "light_geometry_main",
+            "compute",
+            "light_geometry_main.spv",
+        ),
+        (
+            "shaders/light_geometry.slang",
+            "uniform_area_main",
+            "compute",
+            "uniform_area_main.spv",
+        ),
+        (
+            "shaders/light_geometry.slang",
+            "emitter_connection_main",
+            "compute",
+            "emitter_connection_main.spv",
+        ),
+        (
             "shaders/cone.slang",
             "cone_main",
             "compute",
@@ -93,6 +111,12 @@ fn main() -> Result<(), shader_build::Error> {
             "atmosphere_main",
             "compute",
             "atmosphere_main.spv",
+        ),
+        (
+            "shaders/atmosphere.slang",
+            "shadow_interval_main",
+            "compute",
+            "shadow_interval_main.spv",
         ),
         (
             "shaders/display.slang",

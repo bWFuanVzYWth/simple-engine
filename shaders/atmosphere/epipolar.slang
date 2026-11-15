@@ -169,7 +169,10 @@ public func atmEpipolarSliceSegment(epipoleNdc: float2, range: AtmEpipolarRange,
         return atmEpipolarRaySegment(origin, range.axis);
     }
     let angle : float = range.start + range.span * sliceCoordinate;
-    return atmEpipolarRaySegment(epipoleNdc, float2(cos(angle), sin(angle)));
+    var sine : float;
+    var cosine : float;
+    sincos(angle, sine, cosine);
+    return atmEpipolarRaySegment(epipoleNdc, float2(cosine, sine));
 }
 
 public func atmEpipolarRadialCoordinate(screenNdc: float2, segment: AtmEpipolarSegment)->float

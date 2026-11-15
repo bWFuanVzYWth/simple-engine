@@ -46,7 +46,7 @@ public func uniform_at(view: DagView, voxel: uint3, inout path: DagPath)->DagSam
         let changed : uint = different.x | different.y | different.z;
         if (changed < (1u << path.sample.lod))
             return path.sample;
-        level = uint(firstbithigh(changed)) / 2;
+        level = uint(firstbithigh(changed)) >> 1u;
         child = uint2(1, path.ancestors[level]);
     }
     path.voxel = voxel;
@@ -59,9 +59,9 @@ public func uniform_at(view: DagView, voxel: uint3, inout path: DagPath)->DagSam
             return path.sample;
         }
         path.ancestors[level] = child.y;
-        let index : uint = view.offsets[level / 4][level % 4] + child.y;
+        let index : uint = view.offsets[level >> 2u][level & 3u] + child.y;
         let slot : uint = slot_at(voxel, level);
-        let bits : uint = view.masks[index][slot / 32];
+        let bits : uint = view.masks[index][slot >> 5u];
         child = uint2((bits >> (slot & 31)) & 1, view.values[index * 64 + slot]);
         if (level == 0)
             break;
@@ -252,7 +252,7 @@ func crossings_before(axis: int, inverse: float, boundary: int, step: int, count
     [loop]
     while (lo < hi)
     {
-        let mid : uint = (lo + hi + 1) / 2;
+        let mid : uint = (lo + hi + 1) >> 1u;
         if (crossing_reaches(axis, inverse, boundary, step, mid - 1, limit, equal, origin))
             lo = mid;
         else

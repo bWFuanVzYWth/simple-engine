@@ -69,7 +69,7 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
     if (distance < ray.TMax)
     {
         blocker = f.source.basisV.w + 4096.0 - distance;
-        blocker -= floor(blocker / 32768.0) * 32768.0;
+        blocker -= floor(blocker * (1.0 / 32768.0)) * 32768.0;
     }
     cells[index] = uint4(f.source.state.x, tag, blocker == 0 ? 0x80000000u : asuint(blocker));
 }

@@ -84,10 +84,11 @@ public struct PrimaryMetalLayer<G : IMeasure, B : IBase> : IClosure
     {
         let reflected : PrimeFullOpenPbrReflectiveEvalBase =
                             G.evaluate(wi, wo, s.conductor.geometry);
-        let a : Value = Dielectric.from_reflection(wi, wo, s.dielectric, reflected);
+        let base = B.evaluate(wi, wo, s.dielectric.base);
+        let a : Value = Dielectric.from_base(base, s.dielectric, reflected);
         let b : Value = Conductor<G>.from_reflection(wi, wo, s.conductor, reflected);
         let q : float = probability(s);
-        let pdf : float = q * reflected.pdf + (1 - q) * B.evaluate(wi, wo, s.dielectric.base).pdf;
+        let pdf : float = q * reflected.pdf + (1 - q) * base.pdf;
         return { primeFullCompactMixEval(a.throughput, b.throughput, s.metalness), pdf };
     }
     public static func sample(wi: float3, u: float3, s: State)->Proposal
@@ -141,10 +142,9 @@ public struct PrimaryMetalBase<G : IMeasure, B : IBase> : IClosure
     }
     public static func probability(wi: float3, s: State)->float
     {
+        let base = B.energy(wi, s.dielectric);
         return openpbr_primary::reflection_probability(
-            s.metalness, (1 - s.metalness) *
-                             max(B.energy(wi, s.dielectric).x,
-                                 max(B.energy(wi, s.dielectric).y, B.energy(wi, s.dielectric).z)));
+            s.metalness, (1 - s.metalness) * max(base.x, max(base.y, base.z)));
     }
     public static func evaluate(wi: float3, wo: float3, s: State)->Value
     {

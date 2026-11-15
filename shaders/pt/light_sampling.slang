@@ -38,17 +38,12 @@ public interface IEmitterAlias
     func density(proposal: LightSurfaceProposal, half: uint, uv: float2)->float;
 };
 
-/// 纯色灯预留的单列alias；与真实alias相同地建立选择概率和条件残量。
-/// 目前唯一列质量为1，编译器可消除选择；未来纹理发光由非零offset承接。
+/// 均匀灯面没有alias离散选择；仅由面积采样器量化一次24-bit选择器。
 public struct UniformEmitterAlias : IEmitterAlias
 {
     public func sample(proposal: LightSurfaceProposal, u: float2)->QuadAreaSample
     {
-        static const let RESERVED_UNIFORM_ALIAS = uint4(LIGHT_SELECTORS, 0, LIGHT_SELECTORS, 0);
-        let selector : uint = min(uint(u.x * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
-        // 保留24-bit格点；面积采样器只在选定半片内取中点，避免两次取中点舍入。
-        let residual = float(selector) / float(RESERVED_UNIFORM_ALIAS.x);
-        return sample_quad_area(proposal.area, float2(residual, u.y));
+        return sample_quad_area(proposal.area, u);
     }
     public func density(proposal: LightSurfaceProposal, half: uint, uv: float2)->float
     {
@@ -82,15 +77,19 @@ func connect_quad_emitter(point_value: geometry::SurfacePoint, target: geometry:
     let squared : float = dot(delta, delta);
     if (!(squared > 0) || !isfinite(squared))
         return result;
-    result.direction = delta * rsqrt(squared);
-    result.pdf = quad_light_pdf(point_value.position, target.position, target.normal, density,
-                                selectionPmf, sides);
-    if (result.pdf <= 0 || !geometry::connection_ray(point_value, target, result.visibility))
+    let inverse_distance = rsqrt(squared);
+    result.direction = delta * inverse_distance;
+    result.pdf = quad_light_pdf_geometry(squared, dot(target.normal, -result.direction), density,
+                                         selectionPmf, sides);
+    if (result.pdf <= 0)
+        return result;
+    let distance = squared * inverse_distance;
+    if (!geometry::connection_ray(point_value, target, result.visibility))
     {
         result.pdf = 0;
         return result;
     }
-    result.distance = sqrt(squared);
+    result.distance = distance;
     return result;
 }
 

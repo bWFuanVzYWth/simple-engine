@@ -191,7 +191,8 @@ func sunShadowProfileFind(cascade: int, scalar: float)->int
 }
 
 func sunShadowProfileCascadeLitLength(cascade: int, startDistance: float, endDistance: float,
-                                      scalarRate: float, rayDepthRate: float)
+                                      scalarRate: float, inverseScalarRate: float,
+                                      rayDepthRate: float)
     ->float
 {
     let count : int = sunShadowProfileCounts[cascade];
@@ -218,7 +219,7 @@ func sunShadowProfileCascadeLitLength(cascade: int, startDistance: float, endDis
          ++traversal, ++index)
     {
         let entry : float2 = sunShadowProfileEntries[base + index];
-        let spanEnd : float = min(entry.x / scalarRate, endDistance);
+        let spanEnd : float = min(entry.x * inverseScalarRate, endDistance);
         if (spanEnd <= cursor + SUN_SHADOW_TRAVERSAL_EPSILON)
         {
             continue;
@@ -232,7 +233,29 @@ func sunShadowProfileCascadeLitLength(cascade: int, startDistance: float, endDis
     return litLength;
 }
 
-public func localSunVisibilityInterval<Source>(source: Source, rayDirection: float3,
+/// 同一相机射线在极线剖面中的固定速率；仅在正速率有效域内求倒数。
+public struct SunShadowProfileRay
+{
+    public var scalar_rate : float;
+    public var inverse_scalar_rate : float;
+    public var depth_rate : float;
+    public var supported : bool;
+};
+/// profile初始化后准备同一射线的方向投影，供其各积分段复用。
+public func sunShadowProfileRay(rayDirection: float3)->SunShadowProfileRay
+{
+    let projectedRay = float2(dot(rayDirection, sunShadowProfileBasisU),
+                              dot(rayDirection, sunShadowProfileBasisV));
+    let scalarRate = dot(projectedRay, sunShadowProfileDirection);
+    let perpendicularRate = abs(projectedRay.x * sunShadowProfileDirection.y -
+                                projectedRay.y * sunShadowProfileDirection.x);
+    let rate = max(scalarRate, 0.0);
+    return { rate, rate > SUN_SHADOW_PROFILE_EPSILON ? 1.0 / rate : 0.0,
+             dot(rayDirection, sunShadowProfileDirectionToSun),
+             !(scalarRate < -SUN_SHADOW_PROFILE_EPSILON || perpendicularRate > 2.0e-4) };
+}
+/// 已准备射线的有限区间可见比例；保留缺失覆盖、剖面容量和区间阈值的原有语义。
+public func localSunVisibilityInterval<Source>(source: Source, ray: SunShadowProfileRay,
                                                startDistance: float, endDistance: float)
     ->float
     where Source : IPrimeSunShadowProfileSource
@@ -247,32 +270,33 @@ public func localSunVisibilityInterval<Source>(source: Source, rayDirection: flo
         return 0.0;
     }
 
-    let projectedRay = float2(dot(rayDirection, sunShadowProfileBasisU),
-                              dot(rayDirection, sunShadowProfileBasisV));
-    var scalarRate : float = dot(projectedRay, sunShadowProfileDirection);
-    let perpendicularRate : float = abs(projectedRay.x * sunShadowProfileDirection.y -
-                                        projectedRay.y * sunShadowProfileDirection.x);
-    if (scalarRate < -SUN_SHADOW_PROFILE_EPSILON || perpendicularRate > 2.0e-4)
-    {
+    if (!ray.supported)
         return 0.0;
-    }
-    scalarRate = max(scalarRate, 0.0);
-    let rayDepthRate : float = dot(rayDirection, sunShadowProfileDirectionToSun);
 
     var cursor : float = startDistance;
     var litLength = 0.0;
     for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT && cursor < tracedEnd; ++cascade)
     {
-        let cascadeEnd
-            : float = scalarRate > SUN_SHADOW_PROFILE_EPSILON
-                          ? min(tracedEnd, sunShadowProfileCascadeEnd(source, cascade) / scalarRate)
-                          : tracedEnd;
+        let cascadeEnd : float = ray.scalar_rate > SUN_SHADOW_PROFILE_EPSILON
+                                     ? min(tracedEnd, sunShadowProfileCascadeEnd(source, cascade) *
+                                                          ray.inverse_scalar_rate)
+                                     : tracedEnd;
         if (cascadeEnd > cursor)
         {
-            litLength += sunShadowProfileCascadeLitLength(cascade, cursor, cascadeEnd, scalarRate,
-                                                          rayDepthRate);
+            litLength +=
+                sunShadowProfileCascadeLitLength(cascade, cursor, cascadeEnd, ray.scalar_rate,
+                                                 ray.inverse_scalar_rate, ray.depth_rate);
             cursor = cascadeEnd;
         }
     }
     return clamp(litLength / (endDistance - startDistance), 0.0, 1.0);
+}
+/// 单区间调用；批量积分可先准备sunShadowProfileRay，避免逐段重复投影。
+public func localSunVisibilityInterval<Source>(source: Source, rayDirection: float3,
+                                               startDistance: float, endDistance: float)
+    ->float
+    where Source : IPrimeSunShadowProfileSource
+{
+    return localSunVisibilityInterval(source, sunShadowProfileRay(rayDirection), startDistance,
+                                      endDistance);
 }

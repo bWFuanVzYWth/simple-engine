@@ -16,16 +16,21 @@ import "bsdf/openpbr/math/spectrum.slang";
 public func primeFullOpenPbrMicrofacetLambda(microfacet: PrimeFullOpenPbrMicrofacet, value: float3)
     ->float
 {
-    return (sqrt(1.0 +
-                 primeFullOpenPbrReduceSum(primeFullOpenPbrSquare(microfacet.alpha * value.xy)) /
-                     primeFullOpenPbrSquare(value.z)) -
-            sign(value.z)) *
+    return (length(float3(microfacet.alpha * value.xy, value.z)) / abs(value.z) - sign(value.z)) *
            0.5;
 }
 
-public func primeFullOpenPbrMicrofacetD(microfacet: PrimeFullOpenPbrMicrofacet, halfVector: float3)
+public func primeFullOpenPbrMicrofacetD<let Isotropic : bool = false>(
+    microfacet: PrimeFullOpenPbrMicrofacet, halfVector: float3)
     ->float
 {
+    if (Isotropic)
+    {
+        let alpha2 = microfacet.alpha.x * microfacet.alpha.x;
+        let d = dot(halfVector.xy, halfVector.xy) + alpha2 * halfVector.z * halfVector.z;
+        let value = alpha2 / (PRIME_FULL_OPENPBR_PI * d * d);
+        return value * halfVector.z > 1.0e-20 ? value : 0.0;
+    }
     let denominator
         : float =
               primeFullOpenPbrReduceSum(primeFullOpenPbrSquare(halfVector.xy / microfacet.alpha)) +
@@ -50,18 +55,14 @@ public func primeFullOpenPbrReflectionFactor(microfacet: PrimeFullOpenPbrMicrofa
 
 func primeFullOpenPbrStirlingCorrection(value: float)->float
 {
-    let gam0 : float = 1.0 / 12.0;
-    let gam1 : float = 1.0 / 30.0;
-    let gam2 : float = 53.0 / 210.0;
-    let gam3 : float = 195.0 / 371.0;
-    let gam4 : float = 22999.0 / 22737.0;
-    let gam5 : float = 29944523.0 / 19733142.0;
-    let gam6 : float = 109535241009.0 / 48264275462.0;
-    return gam0 /
-           (value +
-            gam1 /
-                (value +
-                 gam2 / (value + gam3 / (value + gam4 / (value + gam5 / (value + gam6 / value))))));
+    // 原连分式的同一有理函数；生产 value>=6，正系数分母不会相消。
+    let inverse = 1.0 / value;
+    let t = inverse * inverse;
+    let numerator =
+        ((0.5793759231628358 * t + 5.497138891779732) * t + 5.576473112868737) * t + 1.0;
+    let denominator =
+        ((0.7222456732620475 * t + 5.674608630462658) * t + 5.60980644620207) * t + 1.0;
+    return (1.0 / 12.0) * inverse * numerator / denominator;
 }
 
 func primeFullOpenPbrLogGamma(value: float)->float
@@ -83,10 +84,18 @@ func primeFullOpenPbrBeta(first: float, second: float)->float
     if (a == 1)
         return 1 / b;
     if (b < 8)
-        return primeFullOpenPbrGamma(a) * primeFullOpenPbrGamma(b) / primeFullOpenPbrGamma(a + b);
+    {
+        let sum = a + b;
+        let pa = a * (a + 1) * (a + 2) * (a + 3) * (a + 4);
+        let pb = b * (b + 1) * (b + 2) * (b + 3) * (b + 4);
+        let ps = sum * (sum + 1) * (sum + 2) * (sum + 3) * (sum + 4);
+        return exp(primeFullOpenPbrLogGamma(a + 5) + primeFullOpenPbrLogGamma(b + 5) -
+                   primeFullOpenPbrLogGamma(sum + 5)) *
+               (ps / (pa * pb));
+    }
     // log Γ(b)-log Γ(a+b) 先代数约分，既不构造 Γ，也不相减两个巨大的 log Γ。
     let r : float = a / b;
-    let log1p : float = r < 0.001 ? r * (1 - r * (0.5 - r / 3)) : log(1 + r);
+    let log1p : float = r < 0.001 ? r * (1 - r * (0.5 - r * (1.0 / 3.0))) : log(1 + r);
     let logGammaA : float = primeFullOpenPbrLogGamma(a + 5) -
                             (log(a) + log(a + 1) + log(a + 2) + log(a + 3) + log(a + 4));
     return exp(logGammaA - a * log(b) - (a + b - 0.5) * log1p + a +
@@ -197,9 +206,10 @@ public func primeFullOpenPbrReflectiveEvalBase(wi: float3, wo: float3,
                                                          checkFlags);
 }
 
-public func primeFullOpenPbrReflectiveEvalBaseImpl<let Continuous : bool>(
-    wi: float3, wo: float3, microfacet: PrimeFullOpenPbrMicrofacet, samplingFlags: uint,
-    checkFlags: uint)
+public func primeFullOpenPbrReflectiveEvalBaseImpl<
+    let Continuous : bool, let Isotropic : bool = false>(wi: float3, wo: float3,
+                                                         microfacet: PrimeFullOpenPbrMicrofacet,
+                                                         samplingFlags: uint, checkFlags: uint)
     ->PrimeFullOpenPbrReflectiveEvalBase
 {
     var result : PrimeFullOpenPbrReflectiveEvalBase;
@@ -220,7 +230,7 @@ public func primeFullOpenPbrReflectiveEvalBaseImpl<let Continuous : bool>(
     }
     halfVector *= rsqrt(lengthSquared);
     result.microCosine = dot(wi, halfVector);
-    let distribution : float = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+    let distribution : float = primeFullOpenPbrMicrofacetD<Isotropic>(microfacet, halfVector);
     result.factor = distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
     result.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
     result.pdf = primeFullOpenPbrReflectionPdf(microfacet, wi, true, distribution);
@@ -236,9 +246,10 @@ public func primeFullOpenPbrReflectiveSampleBase(wi: float3, randomValue: float3
                                                            samplingFlags, checkFlags);
 }
 
-public func primeFullOpenPbrReflectiveSampleBaseImpl<let Continuous : bool>(
-    wi: float3, randomValue: float3, microfacet: PrimeFullOpenPbrMicrofacet, samplingFlags: uint,
-    checkFlags: uint)
+public func primeFullOpenPbrReflectiveSampleBaseImpl<
+    let Continuous : bool, let Isotropic : bool = false>(wi: float3, randomValue: float3,
+                                                         microfacet: PrimeFullOpenPbrMicrofacet,
+                                                         samplingFlags: uint, checkFlags: uint)
     ->PrimeFullOpenPbrReflectiveSampleBase
 {
     var result : PrimeFullOpenPbrReflectiveSampleBase;
@@ -257,7 +268,7 @@ public func primeFullOpenPbrReflectiveSampleBaseImpl<let Continuous : bool>(
             return result;
         }
         halfVector = primeFullOpenPbrMicrofacetSample(microfacet, wi, randomValue.xy, true);
-        distribution = primeFullOpenPbrMicrofacetD(microfacet, halfVector);
+        distribution = primeFullOpenPbrMicrofacetD<Isotropic>(microfacet, halfVector);
     }
     else if ((samplingFlags & (checkFlags & PRIME_FULL_OPENPBR_FLAG_DELTA)) == 0u)
     {

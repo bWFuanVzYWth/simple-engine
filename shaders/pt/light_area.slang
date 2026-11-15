@@ -8,6 +8,7 @@ import pt.transport;
 namespace pt
 {
 public static const let LIGHT_SELECTORS = 16777216u;
+public static const let LIGHT_INVERSE_SELECTORS = 1.0 / 16777216.0;
 public static const let LIGHT_FRONT = 1u;
 public static const let LIGHT_BACK = 2u;
 public static const let LIGHT_BOTH = 3u;
@@ -31,15 +32,15 @@ public func uniform_light_sample(count: uint, selector: float)->LightAliasSample
     let boundary : uint = extra * (base + 1u);
     result.index = target < boundary ? target / (base + 1u) : extra + (target - boundary) / base;
     let mass : uint = base + uint(result.index < extra);
-    result.pmf = float(mass) / float(LIGHT_SELECTORS);
+    result.pmf = float(mass) * LIGHT_INVERSE_SELECTORS;
     return result;
 }
 public func uniform_light_pmf(count: uint, index: uint)->float
 {
     if (index >= count)
         return 0;
-    return float(LIGHT_SELECTORS / count + uint(index < LIGHT_SELECTORS % count)) /
-           float(LIGHT_SELECTORS);
+    return float(LIGHT_SELECTORS / count + uint(index < LIGHT_SELECTORS % count)) *
+           LIGHT_INVERSE_SELECTORS;
 }
 
 /// entries 是 CPU AliasTable::entries，count/shift 来自同一个不可变表。
@@ -57,7 +58,7 @@ public func sample_light_alias(entries: StructuredBuffer<uint4>, count: uint, sh
     let local : uint = target & ((1u << shift) - 1u);
     let entry : uint4 = entries[base + column];
     result.index = local < entry.x ? column : entry.y;
-    result.pmf = float(entries[base + result.index].z) / float(LIGHT_SELECTORS);
+    result.pmf = float(entries[base + result.index].z) * LIGHT_INVERSE_SELECTORS;
     return result;
 }
 
@@ -68,7 +69,7 @@ public func light_alias_pmf(entries: StructuredBuffer<uint4>, count: uint, index
 {
     if (index >= count)
         return 0;
-    return float(entries[base + index].z) / float(LIGHT_SELECTORS);
+    return float(entries[base + index].z) * LIGHT_INVERSE_SELECTORS;
 }
 
 public struct LightQuadVertices
@@ -101,10 +102,11 @@ public func dynamic_quad_area(vertices_value: LightQuadVertices)->uint4
     var split = uint(round(first / total * float(LIGHT_SELECTORS)));
     if (first > 0 && second > 0)
         split = clamp(split, 1u, LIGHT_SELECTORS - 1u);
-    let density0 : float = split == 0u ? 0.0 : (float(split) / float(LIGHT_SELECTORS)) / first;
-    let density1 : float = split == LIGHT_SELECTORS
-                               ? 0.0
-                               : (float(LIGHT_SELECTORS - split) / float(LIGHT_SELECTORS)) / second;
+    let density0 : float = split == 0u ? 0.0 : (float(split) * LIGHT_INVERSE_SELECTORS) / first;
+    let density1 : float =
+                       split == LIGHT_SELECTORS
+                           ? 0.0
+                           : (float(LIGHT_SELECTORS - split) * LIGHT_INVERSE_SELECTORS) / second;
     return uint4(split, asuint(density0), asuint(density1), 0);
 }
 
@@ -173,11 +175,29 @@ public func quad_light_pdf(receiver: float3, target: float3, normal: float3, are
         !isfinite(distance_squared))
         return 0;
     let cosine : float = dot(normal, delta * rsqrt(distance_squared));
-    let side : uint = cosine >= 0 ? LIGHT_FRONT : LIGHT_BACK;
-    if ((sides & side) == 0 || abs(cosine) <= 0)
+    return quad_light_pdf_supported(distance_squared, cosine, area_density * selection_pmf, sides);
+}
+
+/// 复用连接采样已计算的距离平方和带符号发光侧余弦；其输入域和失败语义同quad_light_pdf。
+/// cosine是单位normal与从灯到接收点单位方向的点积，不重复归一化或重建坐标差。
+public func quad_light_pdf_geometry(distance_squared: float, cosine: float, area_density: float,
+                                    selection_pmf: float, sides: uint)
+    ->float
+{
+    if (area_density <= 0 || selection_pmf <= 0 || distance_squared <= 0 ||
+        !isfinite(distance_squared))
         return 0;
-    let pdf : float =
-                  area_solid_angle_pdf(selection_pmf * area_density, distance_squared, abs(cosine));
+    return quad_light_pdf_supported(distance_squared, cosine, area_density * selection_pmf, sides);
+}
+
+func quad_light_pdf_supported(distance_squared: float, cosine: float, area_pdf: float, sides: uint)
+    ->float
+{
+    let side : uint = cosine >= 0 ? LIGHT_FRONT : LIGHT_BACK;
+    let absolute_cosine = abs(cosine);
+    if ((sides & side) == 0 || absolute_cosine <= 0)
+        return 0;
+    let pdf = product_over(area_pdf, distance_squared, absolute_cosine);
     return isfinite(pdf) ? pdf : 0;
 }
 }

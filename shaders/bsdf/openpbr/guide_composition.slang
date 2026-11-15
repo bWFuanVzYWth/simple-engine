@@ -39,10 +39,12 @@ public struct DielectricGuide<B : IBase> : IGuideEnergy
     {
         let distribution
             : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
-        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                                    energy, distribution, cosine,
-                                    primeFullOpenPbrIorAdjustment(m.surface.x / incident.x, 1))
-                                    .z;
+        let reflected
+            : float = primeFullOpenPbrMicrofacetDielectricMsCompensation<false, false, false, true>(
+                          energy, distribution, cosine,
+                          primeFullOpenPbrIorAdjustment(m.surface.x / incident.x, 1),
+                          m.base_roughness.w)
+                          .z;
         return { B.energy(float3(0, 0, cosine), B.prepare(m.base_roughness.xyz, m.surface.z)) *
                      (1 - reflected),
                  float3(reflected) };
@@ -57,14 +59,11 @@ public struct MetalGuide : IGuideEnergy
         let distribution
             : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
         let f0 : float3 = saturate(m.base_roughness.xyz);
-        let ess : float = primeFullOpenPbrMicrofacetEffectivelySmooth(distribution)
-                              ? 1
-                              : primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
-                                    distribution, cosine, float3(1), float3(1))
-                                    .x;
-        return { float3(0), primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
-                                distribution, cosine, f0, float3(1)) *
-                                (float3(1) + f0 * (1 - ess) / ess) };
+        let ab =
+            primeFullOpenPbrMicrofacetDirectionalAlbedoCoefficients<true>(distribution, cosine);
+        let ess : float =
+                      primeFullOpenPbrMicrofacetEffectivelySmooth(distribution) ? 1 : ab.x + ab.y;
+        return { float3(0), (f0 * ab.x + ab.y) * (float3(1) + f0 * (1 - ess) / ess) };
     }
 };
 public struct MetalGuideBlend<D : IGuideEnergy> : IGuideEnergy
@@ -108,9 +107,10 @@ public struct SolidGuide : IGuideEnergy
         let ior : float = exiting ? incident.x / transmitted.x : transmitted.x / incident.x;
         let distribution
             : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
-        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                                    energy, distribution, exiting ? -cosine : cosine, ior)
-                                    .z;
+        let reflected
+            : float = primeFullOpenPbrMicrofacetDielectricMsCompensation<false, false, false, true>(
+                          energy, distribution, exiting ? -cosine : cosine, ior, m.base_roughness.w)
+                          .z;
         return { float3(1 - reflected), float3(reflected) };
     }
 };
@@ -122,9 +122,11 @@ public struct ThinGuide : IGuideEnergy
     {
         let distribution
             : PrimeFullOpenPbrMicrofacet = { float2(m.base_roughness.w * m.base_roughness.w) };
-        let reflected : float = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-                                    energy, distribution, cosine, transmitted.x / incident.x)
-                                    .z;
+        let reflected
+            : float =
+                  primeFullOpenPbrMicrofacetDielectricMsCompensation<false, false, false, true>(
+                      energy, distribution, cosine, transmitted.x / incident.x, m.base_roughness.w)
+                      .z;
         return { float3(1 - reflected), float3(reflected) };
     }
 };

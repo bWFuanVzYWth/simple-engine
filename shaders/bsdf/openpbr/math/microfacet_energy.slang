@@ -17,13 +17,22 @@ func primeFullOpenPbrMicrofacetAlpha2(microfacet: PrimeFullOpenPbrMicrofacet)->f
     return 0.5 * primeFullOpenPbrReduceSum(primeFullOpenPbrSquare(microfacet.alpha));
 }
 
-public func primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
+public func primeFullOpenPbrMicrofacetDirectionalAlbedoReflection<let Isotropic : bool = false>(
     microfacet: PrimeFullOpenPbrMicrofacet, cosineTheta: float, f0: float3, f90: float3)
     ->float3
 {
+    let ab =
+        primeFullOpenPbrMicrofacetDirectionalAlbedoCoefficients<Isotropic>(microfacet, cosineTheta);
+    return f0 * ab.x + f90 * ab.y;
+}
+
+public func primeFullOpenPbrMicrofacetDirectionalAlbedoCoefficients<let Isotropic : bool = false>(
+    microfacet: PrimeFullOpenPbrMicrofacet, cosineTheta: float)
+    ->float2
+{
     let x : float = cosineTheta;
     let y2 : float = primeFullOpenPbrMicrofacetAlpha2(microfacet);
-    let y : float = sqrt(y2);
+    let y : float = Isotropic ? microfacet.alpha.x : sqrt(y2);
     // The same biquadratic, with three independent x chains and no xy temporaries.
     let r0
         : float4 =
@@ -40,15 +49,16 @@ public func primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(
                  float4(-8.245, -0.7684, -7.507, 41.26);
     let r : float4 = (r2 * y + r1) * y + r0;
     let ab : float2 = clamp(r.xy / r.zw, float2(0.0), float2(1.0));
-    return f0 * ab.x + f90 * ab.y;
+    return ab;
 }
 
 /// Smooth=true 只供已证明 roughness²<1e-4 的 opaque delta specular；微面固定为0，只有 z 被消费。
 /// z 的 LUT 坐标在该域固定为首层，仍保留原 base 透过率与 proposal 权重。
 public func primeFullOpenPbrMicrofacetDielectricMsCompensation<
-    let Smooth : bool = false, TransmissionGgxEnergy>(transmissionGgxEnergy: TransmissionGgxEnergy,
-                                                      microfacet: PrimeFullOpenPbrMicrofacet,
-                                                      cosineTheta: float, ior: float)
+    let Smooth : bool = false, let ReflectionScale : bool = true,
+    let TransmissionScale : bool = true, let Isotropic : bool = false, TransmissionGgxEnergy>(
+    transmissionGgxEnergy: TransmissionGgxEnergy, microfacet: PrimeFullOpenPbrMicrofacet,
+    cosineTheta: float, ior: float, perceptualRoughness: float = 0)
     ->float3
     where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
 {
@@ -75,15 +85,18 @@ public func primeFullOpenPbrMicrofacetDielectricMsCompensation<
     let nearZ : float = nearU - 0.65 * nearU * (1.0 - nearU) * (2.0 * nearU - 1.0);
     let farU : float = clamp((log2(q / (1.0 - q)) - farLog2Min) * farLog2Scale, 0.0, 1.0);
     let farZ : float = sqrt(farU);
-    let exteriorZ : float = q <= qCritical ? (12.0 / 47.0) * nearZ : (12.0 + 35.0 * farZ) / 47.0;
+    let exteriorZ : float = q <= qCritical ? (12.0 / 47.0) * nearZ
+                                           : (12.0 + 35.0 * farZ) * (1.0 / 47.0);
     let logicalZ : float = inside ? (nearInside ? nearZ : farZ) : exteriorZ;
     let zOffset : float = inside ? (nearInside ? 48.0 : (belowCritical ? 111.0 : 63.0)) : 0.0;
     let zExtent : float = nearInside ? 15.0 : 47.0;
 
-    let roughness : float = Smooth ? 0.0 : sqrt(sqrt(primeFullOpenPbrMicrofacetAlpha2(microfacet)));
-    let roughnessCoordinate : float =
-                                  Smooth ? 0.0 : sqrt(clamp((roughness - 0.01) / 0.99, 0.0, 1.0));
-    let linearView : float = (mu - 0.02) / 0.98;
+    let roughness : float = Smooth      ? 0.0
+                            : Isotropic ? perceptualRoughness
+                                        : sqrt(sqrt(primeFullOpenPbrMicrofacetAlpha2(microfacet)));
+    let roughnessCoordinate
+        : float = Smooth ? 0.0 : sqrt(clamp((roughness - 0.01) * (1.0 / 0.99), 0.0, 1.0));
+    let linearView : float = (mu - 0.02) * (1.0 / 0.98);
     let belowView : float = (mu - 0.02) / max(critical - 0.02, 1.0e-20);
     let aboveView : float = (mu - critical) / max(1.0 - critical, 1.0e-20);
     var view : float = clamp(belowCritical ? belowView
@@ -92,25 +105,31 @@ public func primeFullOpenPbrMicrofacetDielectricMsCompensation<
     view = view <= 0.5 ? 0.5 * sqrt(2.0 * view) : 1.0 - 0.5 * sqrt(2.0 * (1.0 - view));
     view -= 0.64 * view * (1.0 - view) * (2.0 * view - 1.0);
 
-    let uvw = float3((view * 43.0 + 0.5) / 44.0, (roughnessCoordinate * 31.0 + 0.5) / 32.0,
-                     (zOffset + logicalZ * zExtent + 0.5) / 159.0);
+    let uvw = float3((view * 43.0 + 0.5) * (1.0 / 44.0),
+                     (roughnessCoordinate * 31.0 + 0.5) * (1.0 / 32.0),
+                     (zOffset + logicalZ * zExtent + 0.5) * (1.0 / 159.0));
     let encoded : float4 = transmissionGgxEnergy.sampleLevel(uvw);
 
-    let a : float = 0.5 * (sqrt(1.0 + primeFullOpenPbrMicrofacetAlpha2(microfacet) *
-                                          (1.0 - mu * mu) / (mu * mu)) +
-                           1.0);
-    let inverseA : float = 1.0 / a;
-    let etaOneLog2T
-        : float =
-              1.0 - 2.0 * a + 0.5 * log2(PRIME_FULL_OPENPBR_PI * a) - 1.45676773e-5 +
-              inverseA * (1.80676418e-1 + inverseA * (-1.85532904e-3 - 4.61868116e-3 * inverseA));
-    let etaQ0 : float = 3.0e-4 + 6.82190321e-2 * roughness * mu;
-    let etaFactor : float = etaQ0 / (q + etaQ0) * etaOneLog2T;
-    let qFraction : float = frac(logicalZ * zExtent);
-    let transmissionCorrection : float = (2.0 / 3.0) * encoded.w * qFraction * (1.0 - qFraction);
-    let scale : float2 =
-                    exp2(clamp(float2(encoded.x, encoded.y - etaFactor + transmissionCorrection),
-                               float2(-80.0), float2(80.0)));
+    var scale = float2(1);
+    if (ReflectionScale)
+        scale.x = exp2(clamp(encoded.x, -80.0, 80.0));
+    if (TransmissionScale)
+    {
+        let a : float = 0.5 * (sqrt(1.0 + primeFullOpenPbrMicrofacetAlpha2(microfacet) *
+                                              (1.0 - mu * mu) / (mu * mu)) +
+                               1.0);
+        let inverseA : float = 1.0 / a;
+        let etaOneLog2T
+            : float = 1.0 - 2.0 * a + 0.5 * log2(PRIME_FULL_OPENPBR_PI * a) - 1.45676773e-5 +
+                      inverseA *
+                          (1.80676418e-1 + inverseA * (-1.85532904e-3 - 4.61868116e-3 * inverseA));
+        let etaQ0 : float = 3.0e-4 + 6.82190321e-2 * roughness * mu;
+        let etaFactor : float = etaQ0 / (q + etaQ0) * etaOneLog2T;
+        let qFraction : float = frac(logicalZ * zExtent);
+        let transmissionCorrection : float =
+                                         (2.0 / 3.0) * encoded.w * qFraction * (1.0 - qFraction);
+        scale.y = exp2(clamp(encoded.y - etaFactor + transmissionCorrection, -80.0, 80.0));
+    }
     let encodedB : float = clamp(encoded.z, 0.0, 1.0);
     let bEndpoint : float = 1.0 - abs(2.0 * encodedB - 1.0);
     let bEdge : float = 0.5 * primeFullOpenPbrSquare(bEndpoint) * sqrt(bEndpoint);
@@ -118,11 +137,11 @@ public func primeFullOpenPbrMicrofacetDielectricMsCompensation<
     return float3(scale, helperR);
 }
 
-public func primeFullOpenPbrMicrofacetDirectionalAlbedoUnity(microfacet: PrimeFullOpenPbrMicrofacet,
-                                                             cosineTheta: float)
+public func primeFullOpenPbrMicrofacetDirectionalAlbedoUnity<let Isotropic : bool = false>(
+    microfacet: PrimeFullOpenPbrMicrofacet, cosineTheta: float)
     ->float
 {
-    return primeFullOpenPbrMicrofacetDirectionalAlbedoReflection(microfacet, cosineTheta,
-                                                                 float3(1.0), float3(1.0))
+    return primeFullOpenPbrMicrofacetDirectionalAlbedoReflection<Isotropic>(
+               microfacet, cosineTheta, float3(1.0), float3(1.0))
         .x;
 }

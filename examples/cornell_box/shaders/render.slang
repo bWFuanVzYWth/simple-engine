@@ -3,6 +3,7 @@ module render;
 import pt.sampling;
 import pt.bsdf;
 import pt.mis;
+import pt.transport;
 import geometry.ray;
 
 using namespace pt;
@@ -23,14 +24,14 @@ struct Material
 
 struct Params
 {
-    var image : uint4;   // 宽、高、首个样本索引、批次样本数。
-    var options : uint4; // 随机种子、安全深度上限、三角形数、材质数。
-    var camera_origin : float4;
+    var image : uint4;          // 宽、高、首个样本索引、批次样本数。
+    var options : uint4;        // 随机种子、安全深度上限、三角形数、材质数。
+    var camera_origin : float4; // w为输入边长的倒数。
     var camera_forward : float4;
     var camera_right : float4;
     var camera_up : float4;
     var light_corner : float4; // w 为光源材质索引。
-    var light_edge_u : float4;
+    var light_edge_u : float4; // w为主机计算的矩形面积。
     var light_edge_v : float4;
 };
 
@@ -120,7 +121,12 @@ func light_pdf(from: float3, to: float3, normal: float3, area: float)->float
     let delta : float3 = to - from;
     let distance_squared : float = dot(delta, delta);
     let cosine : float = dot(normal, -delta * rsqrt(distance_squared));
-    return cosine > 0.0 ? distance_squared / (area * cosine) : 0.0;
+    return light_pdf_geometry(distance_squared, cosine, area);
+}
+
+func light_pdf_geometry(distance_squared: float, light_cosine: float, area: float)->float
+{
+    return light_cosine > 0 ? distance_squared / (area * light_cosine) : 0;
 }
 
 func direct_light(hit: Hit, material: Material, inout state: uint)->float3
@@ -135,11 +141,11 @@ func direct_light(hit: Hit, material: Material, inout state: uint)->float3
     let first : bool = u >= v;
     let light : TriangleEndpoint = triangle_endpoint(a, first ? b : c, first ? c : d,
                                                      first ? float2(u - v, v) : float2(u, v - u));
-    let cross_edges : float3 = cross(params.light_edge_u.xyz, params.light_edge_v.xyz);
-    let area : float = length(cross_edges);
-    let direction : float3 = normalize(light.position - hit.surface.position);
-    let cosine : float = dot(hit.surface.normal, direction);
-    let pdf : float = light_pdf(hit.surface.position, light.position, light.normal, area);
+    let delta = light.position - hit.surface.position;
+    let squared = dot(delta, delta);
+    let direction = delta * rsqrt(squared);
+    let cosine = saturate(dot(hit.surface.normal, direction));
+    let pdf = light_pdf_geometry(squared, dot(light.normal, -direction), params.light_edge_u.w);
     if (cosine <= 0.0 || pdf <= 0.0)
         return 0.0;
 
@@ -150,7 +156,7 @@ func direct_light(hit: Hit, material: Material, inout state: uint)->float3
         return 0.0;
     let emission : float3 = materials[uint(params.light_corner.w)].emission.xyz;
     return lambertian_eval(material.albedo.xyz) * emission *
-           (cosine * power_weight(pdf, lambertian_pdf(hit.surface.normal, direction)) / pdf);
+           (cosine * power_heuristic_over_pdf(pdf, cosine * (1.0 / pi)));
 }
 
 // NEE + power heuristic MIS，RR 保留尾部期望；达到安全上限时整张图失败。
@@ -160,8 +166,7 @@ func sample_path(pixel: uint, sample_value: uint)->float4
     let params : Params = parameters[0];
     var state : uint = pcg(pcg(pixel ^ pcg(params.options.x)) ^ (sample_value * 0x9e3779b9u));
     let coordinate = uint2(pixel % params.image.x, pixel / params.image.x);
-    let film : float2 = (float2(coordinate) + float2(random(state), random(state))) /
-                        float2(params.image.xy);
+    let film = (float2(coordinate) + float2(random(state), random(state))) * params.camera_origin.w;
     let direction : float3 = normalize(params.camera_forward.xyz +
                                        (2.0 * film.x - 1.0) * params.camera_right.xyz +
                                        (1.0 - 2.0 * film.y) * params.camera_up.xyz);
@@ -184,7 +189,7 @@ func sample_path(pixel: uint, sample_value: uint)->float4
             var weight = 1.0;
             if (depth != 0)
             {
-                let area : float = length(cross(params.light_edge_u.xyz, params.light_edge_v.xyz));
+                let area = params.light_edge_u.w;
                 weight =
                     power_weight(previous_pdf, light_pdf(previous_position, hit.surface.position,
                                                          hit.surface.normal, area));

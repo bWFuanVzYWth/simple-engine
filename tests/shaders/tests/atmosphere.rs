@@ -1,4 +1,4 @@
-//! 球形大气边界与常系数源积分的独立 f64 数学约束；完整八阶段 oracle 在 atmosphere crate。
+//! 球形边界、常系数传输与分段阴影的独立f64数学约束；完整求解oracle在atmosphere crate。
 
 use simple_engine::gpu_test::{Capability, Gpu, Shader};
 
@@ -10,6 +10,10 @@ const SHADER: Shader<'static> = Shader {
 };
 
 fn run(cases: &[[[u32; 4]; 2]]) -> Result<Vec<[u32; 4]>> {
+    run_shader(SHADER, cases)
+}
+
+fn run_shader(shader: Shader<'static>, cases: &[[[u32; 4]; 2]]) -> Result<Vec<[u32; 4]>> {
     let bytes: Vec<_> = cases
         .iter()
         .flatten()
@@ -17,12 +21,8 @@ fn run(cases: &[[[u32; 4]; 2]]) -> Result<Vec<[u32; 4]>> {
         .flat_map(|x| x.to_le_bytes())
         .collect();
     let mut gpu = Gpu::new(Capability::Compute, 0, false)?;
-    let result = gpu.compute(
-        SHADER,
-        &bytes,
-        cases.len() * 16,
-        [(cases.len() as u32).div_ceil(64), 1, 1],
-    );
+    let groups = [(cases.len() as u32).div_ceil(shader.workgroup[0]), 1, 1];
+    let result = gpu.compute(shader, &bytes, cases.len() * 16, groups);
     let cleanup = gpu.finish();
     let bytes = result?;
     cleanup?;
@@ -86,7 +86,11 @@ fn homogeneous_segment_matches_beer_integral_and_vacuum_limit() -> Result {
     let mut cases = Vec::new();
     let mut expected = Vec::new();
     for dt in [0.0_f32, 0.001, 1.0, 120.0] {
-        for sigma in [[0.0_f32, 1e-10, 1e-6, 1e-3], [0.01, 0.1, 1.0, 20.0]] {
+        for sigma in [
+            [0.0_f32, 1e-10, 1e-6, 1e-3],
+            [0.000_999_9, 0.001, 0.001_000_1, 0.01],
+            [0.01, 0.1, 1.0, 20.0],
+        ] {
             cases.push([sigma.map(f32::to_bits), [dt.to_bits(), 0, 0, 0]]);
             expected.push(sigma.map(|s| {
                 if s == 0.0 {
@@ -106,6 +110,115 @@ fn homogeneous_segment_matches_beer_integral_and_vacuum_limit() -> Result {
                 "{actual}/{reference}"
             );
         }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 GPU；透射复用保持Beer定律和真空极限"]
+fn homogeneous_transmittance_matches_beer_law() -> Result {
+    let mut cases = Vec::new();
+    let mut expected = Vec::new();
+    for dt in [0.0_f32, 0.001, 1.0, 120.0] {
+        for sigma in [[0.0_f32, 1e-10, 0.001, 0.1], [0.01, 0.1, 1.0, 20.0]] {
+            cases.push([sigma.map(f32::to_bits), [dt.to_bits(), 2, 0, 0]]);
+            expected.push(sigma.map(|s| (-f64::from(s) * f64::from(dt)).exp()));
+        }
+    }
+    for (row, expected) in run(&cases)?.iter().zip(expected) {
+        for (&bits, reference) in row.iter().zip(expected) {
+            let actual = f64::from(f32::from_bits(bits));
+            assert!((0.0..=1.0).contains(&actual));
+            assert!((actual - reference).abs() <= 2e-6, "{actual}/{reference}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "需要真实 GPU；分段阻挡深度匹配独立射线半空间积分"]
+fn shadow_profiles_match_visible_ray_lengths() -> Result {
+    const PROFILE: &[(f64, f64, f64)] = &[
+        (0.0, 63.5, -0.25),
+        (63.5, 95.25, 0.5),
+        (95.25, 127.0, 1.25),
+        (127.0, 254.0, 0.35),
+        (254.0, 508.0, 0.35),
+        (508.0, 1016.0, 0.35),
+        (1016.0, 2032.0, 0.35),
+    ];
+    let shader = Shader {
+        spirv: include_bytes!(concat!(env!("OUT_DIR"), "/shadow_interval_main.spv")),
+        entry: "shadow_interval_main",
+        workgroup: [1, 1, 1],
+    };
+    let mut cases = Vec::new();
+    let mut expected = Vec::new();
+    for direction in [
+        [1.0_f32, 0.0, 0.0],
+        [1.0, 0.0, 0.005],
+        [1.0, 0.0, -0.005],
+        [0.25, 0.0, 0.968_245_86],
+        [0.0, 0.0, 1.0],
+    ] {
+        let length = direction.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let direction = direction.map(|x| x / length);
+        for depth in [-100.0_f32, -0.2, 50.0] {
+            for (start, end) in [
+                (0.0_f32, 100.0_f32),
+                (10.0, 300.0),
+                (100.0, 1800.0),
+                (2000.0, 2500.0),
+            ] {
+                cases.push([
+                    [direction[0], direction[1], direction[2], depth].map(f32::to_bits),
+                    [start.to_bits(), end.to_bits(), 0, 0],
+                ]);
+                let (start, end) = (f64::from(start), f64::from(end));
+                let visible = |low: f64, high: f64, blocker: f64| {
+                    let low = low.max(start);
+                    let high = high.min(end).min(2048.0);
+                    if high <= low {
+                        return 0.0;
+                    }
+                    let threshold = blocker - 0.02 - f64::from(depth);
+                    let rate = f64::from(direction[2]);
+                    if rate > 0.0 {
+                        (high - low.max(threshold / rate)).clamp(0.0, high - low)
+                    } else if rate < 0.0 {
+                        (high.min(threshold / rate) - low).clamp(0.0, high - low)
+                    } else if threshold <= 0.0 {
+                        high - low
+                    } else {
+                        0.0
+                    }
+                };
+                let lit = if direction[0] == 0.0 {
+                    visible(start, end, PROFILE[0].2)
+                } else {
+                    PROFILE
+                        .iter()
+                        .map(|&(low, high, blocker)| {
+                            visible(
+                                low / f64::from(direction[0]),
+                                high / f64::from(direction[0]),
+                                blocker,
+                            )
+                        })
+                        .sum()
+                };
+                expected.push(lit / (end - start));
+            }
+        }
+    }
+    for (index, (row, reference)) in run_shader(shader, &cases)?.iter().zip(expected).enumerate() {
+        assert_eq!(row[3], index as u32 + 1);
+        let actual = f64::from(f32::from_bits(row[0]));
+        assert!((0.0..=1.0).contains(&actual));
+        assert!(
+            (actual - reference).abs() <= 3e-5,
+            "case {index}: {actual}/{reference}"
+        );
     }
     Ok(())
 }

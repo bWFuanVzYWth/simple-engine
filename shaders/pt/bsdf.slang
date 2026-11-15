@@ -19,14 +19,14 @@ public struct DirectionSample
 /// 调用方须确认入射与出射单位方向均指离开表面，且处于单位法线正半球；本函数不检查方向。
 public func lambertian_eval(albedo: float3)->float3
 {
-    return albedo / pi;
+    return albedo * (1.0 / pi);
 }
 
 /// normal、wi 须为单位向量，wi 指离开表面；返回立体角 PDF，负半球返回零。
 /// 采用此单面 BSDF 的另一出射方向也须位于 normal 正半球，由调用方约束。
 public func lambertian_pdf(normal: float3, wi: float3)->float
 {
-    return max(0.0, dot(normal, wi)) / pi;
+    return saturate(dot(normal, wi)) * (1.0 / pi);
 }
 
 /// normal 须为单位向量，u 属于 [0, 1)²；采样其正半球并返回立体角 PDF。
