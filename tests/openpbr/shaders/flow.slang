@@ -29,20 +29,20 @@ var energy_texture : Texture3D<float4>;
 [[vk::binding(3, 0)]]
 var energy_sampler : SamplerState;
 
-func raw_opaque<C : openpbr_composition::IClosure>(c: Case, energy: openpbr::Energy,
-                                                   out proposal: openpbr_composition::Proposal,
-                                                   out evaluated: openpbr_composition::Value)
+func raw_opaque<C : openpbr::closure::IClosure>(c: Case, energy: openpbr::Energy,
+                                                out proposal: openpbr::closure::Proposal,
+                                                out evaluated: openpbr::closure::LocalEvaluation)
     ->void
 {
-    let frame : PrimeFullOpenPbrOnb = openpbr::specialized_frame<openpbr::CAP_OPAQUE_DIELECTRIC>(
+    let frame : openpbr::kernel::Frame = openpbr::specialized_frame<openpbr::CAP_OPAQUE_DIELECTRIC>(
                     float3(0, 0, 1), c.view.xyz, c.incident, c.incident);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(frame, c.view.xyz);
+    let wi : float3 = openpbr::kernel::to_local(frame, c.view.xyz);
     let state : C.State = C.prepare(energy, c.material, wi, c.incident.x);
     proposal = {};
     if (c.u.w == 6)
-        proposal = openpbr_composition::sample_closure<C>(wi, c.u.xyz, state);
-    evaluated = C.evaluate(
-        wi, c.u.w == 7 ? primeFullOpenPbrOnbToLocal(frame, c.u.xyz) : proposal.wo, state);
+        proposal = openpbr::closure::sample_closure<C>(wi, c.u.xyz, state);
+    evaluated =
+        C.evaluate(wi, c.u.w == 7 ? openpbr::kernel::to_local(frame, c.u.xyz) : proposal.wo, state);
 }
 
 [shader("compute")]
@@ -59,51 +59,51 @@ func main(uint3 id: SV_DispatchThreadID)->void
     // 直接观察组合内核；不能让公开适配器的非有限值拒绝掩盖数值缺陷。
     if (c.u.w == 6 || c.u.w == 7)
     {
-        var proposal : openpbr_composition::Proposal;
-        var evaluated : openpbr_composition::Value;
+        var proposal : openpbr::closure::Proposal;
+        var evaluated : openpbr::closure::LocalEvaluation;
         if ((OPENPBR_FLOW & 48) != 0)
         {
-            static const let Capability : uint = (OPENPBR_FLOW & 32) != 0
+            static const let capability : uint = (OPENPBR_FLOW & 32) != 0
                                                      ? openpbr::CAP_THIN_DIELECTRIC
                                                      : openpbr::CAP_SOLID_DIELECTRIC;
-            let frame : PrimeFullOpenPbrOnb = openpbr::specialized_frame<Capability>(
+            let frame : openpbr::kernel::Frame = openpbr::specialized_frame<capability>(
                             float3(0, 0, 1), c.view.xyz, c.incident, c.transmitted);
-            let wi : float3 = primeFullOpenPbrOnbToLocal(frame, c.view.xyz);
+            let wi : float3 = openpbr::kernel::to_local(frame, c.view.xyz);
             var ior : float = c.transmitted.x / c.incident.x;
             if ((OPENPBR_FLOW & 16) != 0)
             {
                 ior = max(c.incident.x, c.transmitted.x) / min(c.incident.x, c.transmitted.x);
             }
-            let state : openpbr_composition::Transmission.State =
-                openpbr_composition::Transmission.prepare(energy, c.material.base_roughness.w, ior,
-                                                          c.transmitted.yzw * c.material.surface.w,
-                                                          wi);
+            let state : openpbr::closure::Transmission.State =
+                openpbr::closure::Transmission.prepare(energy, c.material.base_roughness.w, ior,
+                                                       c.transmitted.yzw * c.material.surface.w,
+                                                       wi);
             proposal = {};
             if (c.u.w == 6)
-                proposal = openpbr_composition::Transmission.sample(wi, c.u.xyz, state);
-            evaluated = openpbr_composition::Transmission.evaluate(
-                wi, c.u.w == 7 ? primeFullOpenPbrOnbToLocal(frame, c.u.xyz) : proposal.wo, state);
+                proposal = openpbr::closure::Transmission.sample(wi, c.u.xyz, state);
+            evaluated = openpbr::closure::Transmission.evaluate(
+                wi, c.u.w == 7 ? openpbr::kernel::to_local(frame, c.u.xyz) : proposal.wo, state);
         }
         else
         {
-            if ((openpbr_composition::SelectedVariant & 2048) != 0 && (OPENPBR_FLOW & 11) != 0)
+            if ((openpbr::closure::selected_variant & 2048) != 0 && (OPENPBR_FLOW & 11) != 0)
             {
                 if (c.material.surface.y == 1)
-                    raw_opaque<openpbr_composition::Metal>(c, energy, proposal, evaluated);
+                    raw_opaque<openpbr::closure::Metal>(c, energy, proposal, evaluated);
                 else
-                    raw_opaque<openpbr_composition::Dielectric>(c, energy, proposal, evaluated);
+                    raw_opaque<openpbr::closure::Dielectric>(c, energy, proposal, evaluated);
             }
             else
             {
-                raw_opaque<openpbr_composition::Opaque>(c, energy, proposal, evaluated);
+                raw_opaque<openpbr::closure::Opaque>(c, energy, proposal, evaluated);
             }
         }
         let i : uint = id.x * 5;
         output[i] = float4(proposal.wo, proposal.eta);
-        output[i + 1] = float4(proposal.throughput.value, proposal.pdf);
+        output[i + 1] = float4(proposal.response.value, proposal.pdf);
         output[i + 2] =
-            asfloat(uint4(proposal.throughput.flags, evaluated.throughput.flags, id.x + 1, 0));
-        output[i + 3] = float4(evaluated.throughput.value, evaluated.pdf);
+            asfloat(uint4(proposal.response.flags, evaluated.response.flags, id.x + 1, 0));
+        output[i + 3] = float4(evaluated.response.value, evaluated.pdf);
         output[i + 4] = 0;
         return;
     }

@@ -23,10 +23,10 @@ public struct KeyGuideVertex
     public var normal_roughness : float4;
     public var diffuse : float3;
     public var specular : float3;
-    public var canonicalDirection : float3;
-    public var reflectionDirection : float3;
+    public var canonical_direction : float3;
+    public var reflection_direction : float3;
     public var medium : float4;
-    public var previousPosition : float3;
+    public var previous_position : float3;
     public var flags : uint;
 };
 
@@ -44,23 +44,22 @@ public struct KeyGuideCall
 };
 
 /// 材质已按guide操作投影解码；不消费发光、alias、边界颜色filter或任何光照策略。
-public func make_key_guide<let Flow : uint>(hit: Hit, material: SurfaceMaterial,
+public func make_key_guide<let flow : uint>(hit: Hit, material: SurfaceMaterial,
                                             energy: openpbr::Energy, pose: GuidePose,
                                             incoming: float3, incident: float4)
     ->KeyGuideVertex
 {
-    let normal : float3 = shading_normal(hit, material);
-    let albedos : DenoiseGuides =
-                      denoise_surface_flow<Flow>(energy, material, normal, -incoming, incident);
+    let normal = shading_normal(hit, material);
+    let albedos = denoise_surface_flow<flow>(energy, material, normal, -incoming, incident);
     var reflection = true;
     var refracted = false;
     var next : float3 = reflect(incoming, normal);
-    static const let Delta
-        : bool = (Flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) != 0;
-    if (Delta && (Flow & (openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0)
+    static const let delta
+        : bool = (flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) != 0;
+    if (delta && (flow & (openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0)
         next = guide_delta_direction(material, normal, incoming, incident, reflection, refracted);
-    let discrete
-        : bool = openpbr::is_discrete_only_flow<Flow>(material.pbr, incident, material.transmitted);
+    let discrete =
+        openpbr::is_discrete_only_flow<flow>(material.pbr, incident, material.transmitted);
     let medium : float4 = !reflection && (material.pbr.control.x & 2u) == 0 ? material.transmitted
                                                                             : incident;
     let flags
@@ -99,7 +98,7 @@ func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex
     result.endpoint.hit.surface = vertex.point;
     result.endpoint.hit.distance = vertex.distance;
     result.endpoint.material.normal = vertex.normal_roughness.xyz;
-    result.endpoint.pose = { vertex.previousPosition, (vertex.flags & KEY_GUIDE_POSE_KNOWN) != 0,
+    result.endpoint.pose = { vertex.previous_position, (vertex.flags & KEY_GUIDE_POSE_KNOWN) != 0,
                              (vertex.flags & KEY_GUIDE_POSE_FIXED) != 0 };
     result.albedos = { vertex.normal_roughness, vertex.diffuse, vertex.specular };
 }
@@ -107,16 +106,17 @@ func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex
 /// 与trace_guide相同的预算、PSR、候选回退及查询计数，首面材料只解码一次。
 /// firstReflection只选择首面的理想反射数值，不改变后续材质/随机域，不重解首面。
 public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuideVertex,
-                                                    cameraOrigin: float3, cameraDirection: float3,
-                                                    initialMedium: float4, budget: uint,
-                                                    firstReflection: bool, deltaOnly: bool = false)
+                                                    camera_origin: float3, camera_direction: float3,
+                                                    initial_medium: float4, budget: uint,
+                                                    first_reflection: bool,
+                                                    delta_only: bool = false)
     ->KeyGuideEndpoint
 {
     var result : KeyGuideEndpoint = {};
-    result.endpoint.incident = initialMedium;
-    result.endpoint.direction = cameraDirection;
-    result.endpoint.camera_origin = cameraOrigin;
-    result.endpoint.camera_direction = cameraDirection;
+    result.endpoint.incident = initial_medium;
+    result.endpoint.direction = camera_direction;
+    result.endpoint.camera_origin = camera_origin;
+    result.endpoint.camera_direction = camera_direction;
     result.endpoint.psr = psr_initial();
     result.endpoint.queries = 1;
     set_key_guide_vertex(result, first);
@@ -125,11 +125,11 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
     while (true)
     {
         let discrete : bool = (vertex.flags & KEY_GUIDE_DISCRETE) != 0;
-        if (!discrete && (deltaOnly || !(firstReflection && result.endpoint.queries == 1)))
+        if (!discrete && (delta_only || !(first_reflection && result.endpoint.queries == 1)))
         {
             var position : float3;
             var normal : float3;
-            if (psr_surface(result.endpoint.psr, cameraOrigin, cameraDirection,
+            if (psr_surface(result.endpoint.psr, camera_origin, camera_direction,
                             vertex.point.position, vertex.point.normal, vertex.normal_roughness.xyz,
                             position, normal))
             {
@@ -145,11 +145,11 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
             candidate.endpoint.flags |= GUIDE_SURFACE_PROXY | GUIDE_BUDGET_PROXY;
             return candidate;
         }
-        let forced : bool = firstReflection && result.endpoint.queries == 1;
+        let forced : bool = first_reflection && result.endpoint.queries == 1;
         let reflection : bool = forced || (vertex.flags & KEY_GUIDE_REFLECTION) != 0;
         let refracted : bool = !forced && (vertex.flags & KEY_GUIDE_REFRACTED) != 0;
-        let next : float3 = forced ? vertex.reflectionDirection : vertex.canonicalDirection;
-        if (result.endpoint.queries == 1 && !reflection && !firstReflection)
+        let next = forced ? vertex.reflection_direction : vertex.canonical_direction;
+        if (result.endpoint.queries == 1 && !reflection && !first_reflection)
         {
             result.endpoint.interface_specular = vertex.specular;
             result.endpoint.use_interface_specular = true;
@@ -159,7 +159,7 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
                        reflection, refracted, (vertex.flags & KEY_GUIDE_POSE_FIXED) != 0);
         if (refracted)
             result.endpoint.flags |= GUIDE_REFRACTION_PROXY;
-        let origin : float3 = geometry::offset_origin(vertex.point, next);
+        let origin = geometry::offset_origin(vertex.point, next);
         if (!reflection)
             result.endpoint.incident = vertex.medium;
         result.endpoint.direction = next;

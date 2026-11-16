@@ -14,13 +14,13 @@ func source(value: float3, weight: float, mass: float)->PathReservoir
     var result : PathReservoir = empty_reservoir();
     result.integrand = value;
     result.weight = weight;
-    result.M = mass;
+    result.sample_mass = mass;
     return result;
 }
 
-func shifted(value: float3, Jacobian: float)->PrecomputedShiftData
+func shifted(value: float3, jacobian: float)->PrecomputedShiftData
 {
-    return { value, Jacobian, 0 };
+    return { value, jacobian, 0 };
 }
 
 func boundaries()->void
@@ -38,14 +38,16 @@ func boundaries()->void
     var canonical : PathReservoir = source(float3(0), 0, 1);
     var neighbor : PathReservoir = source(float3(0), 0, 2);
     let none : PrecomputedShiftData = shifted(float3(0), 0);
-    colors.init(float3(3, 6, 9), canonical.M);
-    colors.add(cv_from_neighbor(float3(0), canonical, neighbor, none, none, float3(1)), neighbor.M);
+    colors.init(float3(3, 6, 9), canonical.sample_mass);
+    colors.add(cv_from_neighbor(float3(0), canonical, neighbor, none, none, float3(1)),
+               neighbor.sample_mass);
     outputs[3] = float4(colors.resolve(), colors.mass);
 
     canonical = source(float3(1), 1, 1);
     neighbor = source(float3(1), 4, 1);
-    colors.init(float3(1), canonical.M);
-    colors.add(cv_from_neighbor(float3(1), canonical, neighbor, none, none, float3(1)), neighbor.M);
+    colors.init(float3(1), canonical.sample_mass);
+    colors.add(cv_from_neighbor(float3(1), canonical, neighbor, none, none, float3(1)),
+               neighbor.sample_mass);
     outputs[4] = float4(colors.resolve(), colors.mass);
 
     canonical = source(float3(2), 0.5, 1);
@@ -102,11 +104,11 @@ func integral(partial: bool, zeroTarget: bool = false)->void
                                                          forward, reverse, alpha);
             estimate += probability * fromNeighbor;
             var colors : CVAccumulator;
-            colors.init(canonical.integrand * canonical.weight, canonical.M);
-            colors.add(fromNeighbor, neighbor.M);
+            colors.init(canonical.integrand * canonical.weight, canonical.sample_mass);
+            colors.add(fromNeighbor, neighbor.sample_mass);
             combined += probability * colors.resolve();
             // 历史原M=70，cap只改confidence，不缩放已归一化UCW。
-            neighbor.M = 70;
+            neighbor.sample_mass = 70;
             temporal +=
                 probability * cv_temporal(canonical.integrand * canonical.weight, neighborIntegral,
                                           canonical, neighbor, reverse, forward, alpha, 20);
@@ -132,11 +134,11 @@ func chroma_variance()->void
     let forward : PrecomputedShiftData = shifted(history.integrand, 1);
     for (var red: uint = 0; red <= 16; red++)
     {
-        let historyColor : float3 = float3(red, 16 - red, 0) / 8.f;
+        let history_color : float3 = float3(red, 16 - red, 0) / 8.f;
         for (var current: uint = 0; current < 2; current++)
         {
             let initial : float3 = current == 0 ? float3(2, 0, 0) : float3(0, 2, 0);
-            let filtered : float3 = cv_temporal(initial, historyColor, canonical, history, reverse,
+            let filtered : float3 = cv_temporal(initial, history_color, canonical, history, reverse,
                                                 forward, float3(1));
             let probability : float = 0.5 * historyProbability;
             initialMean += probability * initial;

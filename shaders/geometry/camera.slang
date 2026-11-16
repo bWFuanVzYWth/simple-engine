@@ -67,7 +67,7 @@ public func camera_direction(camera: Camera, sample_uv: float2)->float3
 public func camera_scaled_direction(forward: float3, right: float3, up: float3, sample_uv: float2)
     ->float3
 {
-    let screen : float2 = sample_uv * 2.0 - 1.0;
+    let screen = sample_uv * 2.0 - 1.0;
     return normalize(forward + right * screen.x - up * screen.y);
 }
 
@@ -88,12 +88,12 @@ public func camera_project_direction(camera: Camera, direction: float3, extent: 
     ->CameraProjection
 {
     var result : CameraProjection = {};
-    let depth : float = dot(direction, camera.forward.xyz);
+    let depth = dot(direction, camera.forward.xyz);
     let denominator = float2(camera.forward.w, 1) * (depth * camera.position.w);
     if (!(depth > 1e-6) || !isfinite(depth) || any(denominator <= 0) || any(!isfinite(denominator)))
         return result;
-    let screen : float2 = float2(dot(direction, camera.right.xyz), -dot(direction, camera.up.xyz)) /
-                          denominator;
+    let screen =
+        float2(dot(direction, camera.right.xyz), -dot(direction, camera.up.xyz)) / denominator;
     var pixel : float2 = (screen * 0.5 + 0.5) * float2(extent);
     if (any(!isfinite(pixel)))
         return result;

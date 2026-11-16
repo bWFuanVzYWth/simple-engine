@@ -2,7 +2,7 @@ module properties;
 
 import pt.sampling;
 import pt.bsdf;
-import pt.mis;
+import pt.transport;
 import geometry.ray;
 
 [[vk::binding(0, 0)]]
@@ -27,7 +27,7 @@ func properties_main(uint3 id: SV_DispatchThreadID)->void
     let sample : pt::DirectionSample = pt::lambertian_sample(a.xyz, b.xy);
     let cosine : float = dot(a.xyz, sample.direction);
     let throughput : float3 = pt::lambertian_eval(albedo) * cosine / sample.pdf;
-    let weights : float = pt::power_weight(b.z, b.w) + pt::power_weight(b.w, b.z);
+    let weights : float = pt::power_heuristic(b.z, b.w) + pt::power_heuristic(b.w, b.z);
     var flags : uint = 0;
     if (!(random >= 0 && random < 1))
         flags |= 1;
@@ -49,8 +49,8 @@ func known_main(uint3 id: SV_DispatchThreadID)->void
         return;
     let a : float4 = inputs[0];
     let b : float4 = inputs[1];
-    let first : float = pt::power_weight(a.x, a.y);
-    let second : float = pt::power_weight(a.y, a.x);
+    let first : float = pt::power_heuristic(a.x, a.y);
+    let second : float = pt::power_heuristic(a.y, a.x);
     let value : float3 = pt::lambertian_eval(float3(a.zw, b.x));
     let pdf : float = pt::lambertian_pdf(b.yzw, inputs[2].xyz);
     var flags : uint = 0;

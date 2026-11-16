@@ -3,8 +3,14 @@
 #language slang 2026
 module "bsdf/openpbr/service/contract/albedo.slang";
 
-public struct PrimeDenoiseAlbedos
+namespace openpbr
+{
+namespace kernel
+{
+public struct DenoiseAlbedos
 {
     public var diffuse : float3;
     public var specular : float3;
 };
+}
+}

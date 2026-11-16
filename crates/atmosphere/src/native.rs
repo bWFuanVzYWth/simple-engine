@@ -22,6 +22,7 @@ use vulkan::{
 };
 
 #[cfg(all(test, feature = "gpu"))]
+#[path = "native_tests.rs"]
 mod tests;
 
 struct Bank {
@@ -32,12 +33,17 @@ struct Bank {
 }
 impl Bank {
     fn new(context: &mut Context, p: &Parameters) -> Result<Self, Error> {
-        let [h, s, _, _] = p.dims;
-        let low = p.offsets1[1];
+        let [h, s, _, _] = [
+            p.source_height_count,
+            p.sun_state_count,
+            p.optical_height_count,
+            p.optical_angle_count,
+        ];
+        let low = p.low_height_count;
         Ok(Self {
             source: Image::new(
                 context,
-                [s * p.solve[1], low * p.solve[2], 1],
+                [s * p.phase_node_count, low * p.cone_node_count, 1],
                 ImageFormat::Rgba16Float,
             )?,
             mean: Image::new(context, [s, h, 1], ImageFormat::Rgba32Float)?,
@@ -46,9 +52,15 @@ impl Bank {
         })
     }
     fn bytes(p: &Parameters) -> u64 {
-        let [h, s, _, _] = p.dims.map(u64::from);
-        let low = u64::from(p.offsets1[1]);
-        low * s * u64::from(p.solve[1]) * u64::from(p.solve[2]) * 8
+        let [h, s, _, _] = [
+            p.source_height_count,
+            p.sun_state_count,
+            p.optical_height_count,
+            p.optical_angle_count,
+        ]
+        .map(u64::from);
+        let low = u64::from(p.low_height_count);
+        low * s * u64::from(p.phase_node_count) * u64::from(p.cone_node_count) * 8
             + (h - low + 1) * s * 5 * 16
             + h * s * 16
             + s * 16
@@ -179,7 +191,11 @@ impl Atmosphere {
         let p = model.parameters;
         let data = upload(context, bytemuck::cast_slice(&model.data))?;
         let field = Bank::new(context, &p)?;
-        let tau = Image::new(context, [p.dims[3], p.dims[2], 1], ImageFormat::Rgba16Float)?;
+        let tau = Image::new(
+            context,
+            [p.optical_angle_count, p.optical_height_count, 1],
+            ImageFormat::Rgba16Float,
+        )?;
         let sky = Image::new(context, [SKY_SIZE, SKY_SIZE, 1], ImageFormat::Rgba32Float)?;
         let aerial_light = Image::new(context, [AERIAL_SIZE; 3], ImageFormat::Rgba16Float)?;
         let aerial_t = Image::new(context, [AERIAL_SIZE; 3], ImageFormat::Rgba16Float)?;
@@ -226,7 +242,7 @@ impl Atmosphere {
         )?;
         let resident_bytes = Bank::bytes(&p)
             + model.data.len() as u64 * 16
-            + u64::from(p.dims[2]) * u64::from(p.dims[3]) * 8
+            + u64::from(p.optical_height_count) * u64::from(p.optical_angle_count) * 8
             + u64::from(SKY_SIZE).pow(2) * 16
             + u64::from(AERIAL_SIZE).pow(3) * 16
             + (MAPPING_ROWS * 16) as u64
@@ -264,10 +280,10 @@ impl Atmosphere {
         }
         let p = self.base;
         let extra = Bank::new(context, &p)?;
-        let count = 4 * u64::from(p.dims[1]) * u64::from(p.solve[0]);
+        let count = 4 * u64::from(p.sun_state_count) * u64::from(p.incident_direction_count);
         let incoming = Buffer::new(context, count * 16, false)?;
         let directions = Buffer::new(context, count * 16, false)?;
-        let moments = Buffer::new(context, 4 * u64::from(p.dims[1]) * 7 * 16, false)?;
+        let moments = Buffer::new(context, 4 * u64::from(p.sun_state_count) * 7 * 16, false)?;
         let initial = upload(context, bytemuck::bytes_of(&p))?;
         let mut commands = Commands::new(context)?;
         let mut programs = std::array::from_fn(|_| None);
@@ -277,7 +293,11 @@ impl Atmosphere {
             &mut programs,
             Stage::Optical,
             &[uniform(&initial), storage(&self.data), writable(&self.tau)],
-            [p.dims[3].div_ceil(8), p.dims[2].div_ceil(8), 1],
+            [
+                p.optical_angle_count.div_ceil(8),
+                p.optical_height_count.div_ceil(8),
+                1,
+            ],
         )?;
         dispatch(
             context,
@@ -291,7 +311,7 @@ impl Atmosphere {
                 Binding::Sampler(self.sampler),
                 writable(&self.field.ground),
             ],
-            [p.dims[1].div_ceil(64), 1, 1],
+            [p.sun_state_count.div_ceil(64), 1, 1],
         )?;
         let mut uniforms = Vec::new();
         uniforms.try_reserve_exact(84)?;
@@ -300,21 +320,26 @@ impl Atmosphere {
         let mut current = 0;
         for iteration in 1..=8 {
             let next = 1 - current;
-            for first in (0..p.dims[0]).step_by(4) {
+            for first in (0..p.source_height_count).step_by(4) {
                 let mut params = p;
-                params.batch = [first, 4.min(p.dims[0] - first), 0, 0];
-                params.solve[3] = iteration;
+                [
+                    params.batch_height_start,
+                    params.batch_height_count,
+                    params.optical_row_start,
+                    params.optical_row_count,
+                ] = [first, 4.min(p.source_height_count - first), 0, 0];
+                params.scattering_iteration = iteration;
                 let u = upload(context, bytemuck::bytes_of(&params))?;
                 let previous = banks[current];
                 let target = banks[next];
-                let states = params.batch[1] * p.dims[1];
+                let states = params.batch_height_count * p.sun_state_count;
                 dispatch(
                     context,
                     &mut commands,
                     &mut programs,
                     Stage::Directions,
                     &[uniform(&u), storage(&self.data), storage(&directions)],
-                    [p.solve[0].div_ceil(64), states, 1],
+                    [p.incident_direction_count.div_ceil(64), states, 1],
                 )?;
                 if iteration == 1 {
                     dispatch(
@@ -331,7 +356,7 @@ impl Atmosphere {
                             storage(&directions),
                             storage(&incoming),
                         ],
-                        [p.solve[0].div_ceil(64), states, 1],
+                        [p.incident_direction_count.div_ceil(64), states, 1],
                     )?;
                 } else {
                     dispatch(
@@ -351,7 +376,7 @@ impl Atmosphere {
                             storage(&incoming),
                             sampled(&previous.high),
                         ],
-                        [p.solve[0].div_ceil(64), states, 1],
+                        [p.incident_direction_count.div_ceil(64), states, 1],
                     )?;
                 }
                 dispatch(
@@ -384,8 +409,11 @@ impl Atmosphere {
                         storage(&moments),
                     ],
                     [
-                        (p.dims[1] * p.solve[1]).div_ceil(8),
-                        (p.offsets1[1].saturating_sub(first).min(params.batch[1]) * p.solve[2])
+                        (p.sun_state_count * p.phase_node_count).div_ceil(8),
+                        (p.low_height_count
+                            .saturating_sub(first)
+                            .min(params.batch_height_count)
+                            * p.cone_node_count)
                             .div_ceil(8),
                         1,
                     ],
@@ -404,7 +432,7 @@ impl Atmosphere {
                         storage(&incoming),
                         writable(&target.ground),
                     ],
-                    [p.dims[1].div_ceil(64), 1, 1],
+                    [p.sun_state_count.div_ceil(64), 1, 1],
                 )?;
                 uniforms.push(u);
             }
@@ -412,7 +440,7 @@ impl Atmosphere {
         }
         let bytes = Bank::bytes(&p)
             + count * 32
-            + 4 * u64::from(p.dims[1]) * 7 * 16
+            + 4 * u64::from(p.sun_state_count) * 7 * 16
             + uniforms.len() as u64 * 400;
         uniforms.extend([incoming, directions, moments]);
         let recorded = commands.finish(context)?;
@@ -446,7 +474,7 @@ impl Atmosphere {
             return Ok(update);
         }
         let mut sky_parameters = frame.parameters;
-        sky_parameters.sun[0] = 0.0;
+        sky_parameters.sun_azimuth = 0.0;
         let aerial_parameters = frame.view.expect("prepare 已设置视图").aerial_parameters();
         let mut writes = Vec::with_capacity(4);
         if update.sky || previous.sky {

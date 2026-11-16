@@ -32,7 +32,7 @@ func spatial_weight_prepared(offset: float2, center: SpatialSample, sample_value
     if (!sample_value.valid || !all(isfinite(sample_value.color)) ||
         center.foreground != sample_value.foreground)
         return 0;
-    let sky : bool = center.depth == DENOISE_SKY_DEPTH;
+    let sky = center.depth == DENOISE_SKY_DEPTH;
     if (sky != (sample_value.depth == DENOISE_SKY_DEPTH))
         return 0;
     var exponent = -0.25 * dot(offset, offset);
@@ -42,9 +42,9 @@ func spatial_weight_prepared(offset: float2, center: SpatialSample, sample_value
         if (!(center.depth > 0) || !(sample_value.depth > 0) || !isfinite(center.depth) ||
             !isfinite(sample_value.depth))
             return 0;
-        let relative : float = (sample_value.depth - center.depth) * inverse_depth_scale;
-        let normal_length : float = center_normal_squared * dot(sample_value.normal_roughness.xyz,
-                                                                sample_value.normal_roughness.xyz);
+        let relative = (sample_value.depth - center.depth) * inverse_depth_scale;
+        let normal_length = center_normal_squared * dot(sample_value.normal_roughness.xyz,
+                                                        sample_value.normal_roughness.xyz);
         if (!(normal_length > 1e-12) || !isfinite(normal_length))
             return 0;
         exponent -= relative * relative;
@@ -56,9 +56,9 @@ func spatial_weight_prepared(offset: float2, center: SpatialSample, sample_value
         let sixteenth = eighth * eighth;
         angular = sixteenth * sixteenth;
     }
-    let diffuse : float3 = center.diffuse - sample_value.diffuse;
-    let specular : float3 = center.specular - sample_value.specular;
-    let roughness : float = center.normal_roughness.w - sample_value.normal_roughness.w;
+    let diffuse = center.diffuse - sample_value.diffuse;
+    let specular = center.specular - sample_value.specular;
+    let roughness = center.normal_roughness.w - sample_value.normal_roughness.w;
     exponent -= 64 * (dot(diffuse, diffuse) + dot(specular, specular) + roughness * roughness);
     let weight = exp(exponent) * angular;
     return isfinite(weight) ? weight : 0;
@@ -80,7 +80,7 @@ public func spatial_reconstruct<Image>(image: Image, source: float2, extent: uin
     ->float3
     where Image : ISpatialImage
 {
-    let center_pixel : int2 = clamp(int2(floor(source + 0.5)), 0, int2(extent) - 1);
+    let center_pixel = clamp(int2(floor(source + 0.5)), 0, int2(extent) - 1);
     let center : SpatialSample = image.load(uint2(center_pixel));
     valid = center.valid && all(isfinite(center.color));
     if (!valid)
@@ -92,15 +92,14 @@ public func spatial_reconstruct<Image>(image: Image, source: float2, extent: uin
     for (var y: int = -2; y <= 2; ++y)
         for (var x: int = -2; x <= 2; ++x)
         {
-            let pixel : int2 = center_pixel + int2(x, y);
+            let pixel = center_pixel + int2(x, y);
             if (any(pixel < 0) || any(pixel >= int2(extent)))
                 continue;
             var sample : SpatialSample = center;
             if (x != 0 || y != 0)
                 sample = image.load(uint2(pixel));
-            let weight : float =
-                             spatial_weight_prepared(float2(pixel) - source, center, sample,
-                                                     inverse_depth_scale, center_normal_squared);
+            let weight = spatial_weight_prepared(float2(pixel) - source, center, sample,
+                                                 inverse_depth_scale, center_normal_squared);
             if (weight > 0)
             {
                 sum += sample.color * weight;

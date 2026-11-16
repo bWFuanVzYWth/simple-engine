@@ -64,8 +64,8 @@ public func psr_initial()->Psr
 /// 将世界方向映射到相机侧虚拟空间，不含平移。
 public func psr_direction(psr: Psr, direction: float3)->float3
 {
-    let twice : float3 = 2 * cross(psr.rotation.xyz, direction);
-    let rotated : float3 = direction + psr.rotation.w * twice + cross(psr.rotation.xyz, twice);
+    let twice = 2 * cross(psr.rotation.xyz, direction);
+    let rotated = direction + psr.rotation.w * twice + cross(psr.rotation.xyz, twice);
     return psr.odd ? -rotated : rotated;
 }
 
@@ -84,7 +84,7 @@ public func psr_append(psr: Psr, position: float3, normal: float3, reflection: b
     if (reflection)
     {
         psr.translation += psr_direction(psr, 2 * normal * dot(normal, position));
-        let a : float4 = psr.rotation;
+        let a = psr.rotation;
         var rotation = float4(a.w * normal + cross(a.xyz, normal), -dot(a.xyz, normal));
         psr.rotation = normalize(rotation);
         psr.odd = !psr.odd;
@@ -106,13 +106,13 @@ public func psr_surface(psr: Psr, origin: float3, direction: float3, position: f
     virtual_normal = shading_normal;
     if (psr.count != 0)
     {
-        let plane : float3 = psr_point(psr, position);
-        let normal : float3 = psr_direction(psr, geometric_normal);
+        let plane = psr_point(psr, position);
+        let normal = psr_direction(psr, geometric_normal);
         virtual_normal = psr_direction(psr, shading_normal);
-        let denominator : float = dot(normal, direction);
+        let denominator = dot(normal, direction);
         if (!(abs(denominator) > 1e-4))
             return false;
-        let distance : float = dot(normal, plane - origin) / denominator;
+        let distance = dot(normal, plane - origin) / denominator;
         if (!(distance > 0))
             return false;
         virtual_position = origin + direction * distance;
@@ -186,8 +186,8 @@ func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
     var candidate : GuideEndpoint = result;
     while (true)
     {
-        let discrete : bool = openpbr::is_discrete_only(result.material.pbr, result.incident,
-                                                        result.material.transmitted);
+        let discrete = openpbr::is_discrete_only(result.material.pbr, result.incident,
+                                                 result.material.transmitted);
         if (!discrete && !(first_reflection && result.queries == 1))
         {
             var position : float3;
@@ -217,10 +217,9 @@ func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
         }
         if (result.queries == 1 && !reflection && !first_reflection)
         {
-            let interface_guides : DenoiseGuides =
-                                       denoise_surface(scene.energy(), result.material,
-                                                       shading_normal(result.hit, result.material),
-                                                       -result.direction, result.incident);
+            let interface_guides = denoise_surface(scene.energy(), result.material,
+                                                   shading_normal(result.hit, result.material),
+                                                   -result.direction, result.incident);
             result.interface_specular = interface_guides.specular_albedo;
             result.use_interface_specular = true;
         }
@@ -229,7 +228,7 @@ func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
                                 result.pose.fixed);
         if (refracted)
             result.flags |= GUIDE_REFRACTION_PROXY;
-        let origin : float3 = geometry::offset_origin(result.hit.surface, next);
+        let origin = geometry::offset_origin(result.hit.surface, next);
         if (!reflection && (result.material.pbr.control.x & 2u) == 0)
             result.incident = result.material.transmitted;
         result.direction = next;
@@ -271,7 +270,7 @@ public func trace_reflection_guide<Scene>(scene: Scene, first: TransportCall, bu
 /// 终点方向能量，不乘路径吞吐/照明/曝光；首透明面保留接口 specular，diffuse 取终点。
 /// 仅用于非 SKY/INVALID 的表面；法线仍在实际终点空间，PSR 法线由 project_guide 返回。
 public func guide_albedos<Energy>(energy: Energy, endpoint: GuideEndpoint)->DenoiseGuides
-    where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where Energy : openpbr::IEnergyLut
 {
     var guides : DenoiseGuides = denoise_surface(energy, endpoint.material,
                                                  shading_normal(endpoint.hit, endpoint.material),
@@ -319,7 +318,7 @@ public func project_guide(endpoint: GuideEndpoint, current: DenoiseCamera, previ
             result.flags |= GUIDE_INVALID;
             return result;
         }
-        let known : bool = endpoint.pose.known && endpoint.psr.fixed;
+        let known = endpoint.pose.known && endpoint.psr.fixed;
         target = position;
         if (known)
             target += psr_direction(endpoint.psr, endpoint.pose.previous_position -
@@ -346,7 +345,7 @@ public func reflection_distance_motion(current: DenoiseCamera, previous: Denoise
 {
 
     motion = 0;
-    let direction : float3 = denoise_direction(current, sample_uv);
+    let direction = denoise_direction(current, sample_uv);
     if (depth == DENOISE_SKY_DEPTH)
         return denoise_motion(previous, sample_uv, direction, true, extent, motion);
     if (!(depth > 0) || !isfinite(depth) || !isfinite(distance) || distance < 0)
@@ -358,7 +357,7 @@ public func reflection_distance_motion(current: DenoiseCamera, previous: Denoise
         motion = primary_motion;
         return true;
     }
-    let cosine : float = dot(direction, current.forward.xyz);
+    let cosine = dot(direction, current.forward.xyz);
     if (!(cosine > 0))
         return false;
     let point : float3 = current.position.xyz + direction * (depth / cosine + distance);

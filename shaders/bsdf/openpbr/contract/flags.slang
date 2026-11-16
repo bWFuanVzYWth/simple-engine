@@ -3,60 +3,58 @@
 #language slang 2026
 module "bsdf/openpbr/contract/flags.slang";
 
-public static const let PRIME_FULL_OPENPBR_FLAG_NONE = 0u;
-public static const let PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION : uint = 1u << 0u;
-public static const let PRIME_FULL_OPENPBR_FLAG_DIFFUSE_TRANSMISSION : uint = 1u << 1u;
-public static const let PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION : uint = 1u << 2u;
-public static const let PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION : uint = 1u << 3u;
-public static const let PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION : uint = 1u << 4u;
-public static const let PRIME_FULL_OPENPBR_FLAG_DELTA_TRANSMISSION : uint = 1u << 5u;
-
-public static const let PRIME_FULL_OPENPBR_FLAG_DIFFUSE
-    : uint =
-          PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION | PRIME_FULL_OPENPBR_FLAG_DIFFUSE_TRANSMISSION;
-public static const let PRIME_FULL_OPENPBR_FLAG_SPECULAR
-    : uint = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION |
-             PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION;
-public static const let PRIME_FULL_OPENPBR_FLAG_DELTA
-    : uint = PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION | PRIME_FULL_OPENPBR_FLAG_DELTA_TRANSMISSION;
-public static const let PRIME_FULL_OPENPBR_FLAG_REFLECTION
-    : uint = PRIME_FULL_OPENPBR_FLAG_DIFFUSE_REFLECTION |
-             PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION | PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION;
-public static const let PRIME_FULL_OPENPBR_FLAG_TRANSMISSION
-    : uint = PRIME_FULL_OPENPBR_FLAG_DIFFUSE_TRANSMISSION |
-             PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION |
-             PRIME_FULL_OPENPBR_FLAG_DELTA_TRANSMISSION;
-public static const let PRIME_FULL_OPENPBR_FLAG_ALL
-    : uint = PRIME_FULL_OPENPBR_FLAG_REFLECTION | PRIME_FULL_OPENPBR_FLAG_TRANSMISSION;
-
-public static const let PRIME_FULL_OPENPBR_DIFFRACTION_RECTANGULAR = 1u;
-
-public func primeFullOpenPbrIsReflective(flags: uint)->bool
+namespace openpbr
 {
-    return (flags & PRIME_FULL_OPENPBR_FLAG_REFLECTION) != 0u;
+namespace kernel
+{
+public static const let LOBE_NONE = 0u;
+public static const let LOBE_DIFFUSE_REFLECTION : uint = 1u << 0u;
+public static const let LOBE_DIFFUSE_TRANSMISSION : uint = 1u << 1u;
+public static const let LOBE_SPECULAR_REFLECTION : uint = 1u << 2u;
+public static const let LOBE_SPECULAR_TRANSMISSION : uint = 1u << 3u;
+public static const let LOBE_DELTA_REFLECTION : uint = 1u << 4u;
+public static const let LOBE_DELTA_TRANSMISSION : uint = 1u << 5u;
+
+public static const let LOBE_DIFFUSE : uint = LOBE_DIFFUSE_REFLECTION | LOBE_DIFFUSE_TRANSMISSION;
+public static const let LOBE_SPECULAR : uint =
+                                            LOBE_SPECULAR_REFLECTION | LOBE_SPECULAR_TRANSMISSION;
+public static const let LOBE_DELTA : uint = LOBE_DELTA_REFLECTION | LOBE_DELTA_TRANSMISSION;
+public static const let LOBE_REFLECTION
+    : uint = LOBE_DIFFUSE_REFLECTION | LOBE_SPECULAR_REFLECTION | LOBE_DELTA_REFLECTION;
+public static const let LOBE_TRANSMISSION
+    : uint = LOBE_DIFFUSE_TRANSMISSION | LOBE_SPECULAR_TRANSMISSION | LOBE_DELTA_TRANSMISSION;
+public static const let LOBE_ALL : uint = LOBE_REFLECTION | LOBE_TRANSMISSION;
+
+public static const let DIFFRACTION_RECTANGULAR = 1u;
+
+public func is_reflective(flags: uint)->bool
+{
+    return (flags & LOBE_REFLECTION) != 0u;
 }
 
-public func primeFullOpenPbrIsTransmissive(flags: uint)->bool
+public func is_transmissive(flags: uint)->bool
 {
-    return (flags & PRIME_FULL_OPENPBR_FLAG_TRANSMISSION) != 0u;
+    return (flags & LOBE_TRANSMISSION) != 0u;
 }
 
-public func primeFullOpenPbrIsDiffuse(flags: uint)->bool
+public func is_diffuse(flags: uint)->bool
 {
-    return (flags & PRIME_FULL_OPENPBR_FLAG_DIFFUSE) != 0u;
+    return (flags & LOBE_DIFFUSE) != 0u;
 }
 
-public func primeFullOpenPbrIsSpecular(flags: uint)->bool
+public func is_specular(flags: uint)->bool
 {
-    return (flags & PRIME_FULL_OPENPBR_FLAG_SPECULAR) != 0u;
+    return (flags & LOBE_SPECULAR) != 0u;
 }
 
-public func primeFullOpenPbrIsDelta(flags: uint)->bool
+public func is_delta(flags: uint)->bool
 {
-    return (flags & PRIME_FULL_OPENPBR_FLAG_DELTA) != 0u;
+    return (flags & LOBE_DELTA) != 0u;
 }
 
-public func primeFullOpenPbrIsNonDelta(flags: uint)->bool
+public func is_non_delta(flags: uint)->bool
 {
-    return (flags & (PRIME_FULL_OPENPBR_FLAG_DIFFUSE | PRIME_FULL_OPENPBR_FLAG_SPECULAR)) != 0u;
+    return (flags & (LOBE_DIFFUSE | LOBE_SPECULAR)) != 0u;
+}
+}
 }

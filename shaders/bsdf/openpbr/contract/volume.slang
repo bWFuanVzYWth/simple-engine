@@ -3,22 +3,28 @@
 #language slang 2026
 module "bsdf/openpbr/contract/volume.slang";
 
-import "bsdf/openpbr/contract/flags.slang";
+import bsdf.openpbr.contract.flags;
 
-public struct PrimeFullOpenPbrVolume
+namespace openpbr
+{
+namespace kernel
+{
+public struct Volume
 {
     public var extinction : float3;
     public var albedo : float3;
     public var anisotropy : float;
     public var ior : float;
-    public var mediumId : uint;
-    public var iorEncoding : uint;
+    public var medium_id : uint;
+    public var ior_encoding : uint;
 };
 
 // A ray carries exactly one resolved medium. Zero is the explicit vacuum endpoint.
-public func primeFullOpenPbrVacuumVolume()->PrimeFullOpenPbrVolume
+public func vacuum_volume()->Volume
 {
-    var medium : PrimeFullOpenPbrVolume = {};
+    var medium : Volume = {};
     medium.ior = 1.0;
     return medium;
+}
+}
 }

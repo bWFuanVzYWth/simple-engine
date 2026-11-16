@@ -40,12 +40,12 @@ func light_bvh_pair(words: StructuredBuffer<uint4>, base: uint, packets: uint, a
     ->void
 {
     let block : uint = at >> 2u;
-    let within : uint = at & 3u;
-    let block_base : uint = base + 10u * block;
-    let block_count : uint = min(4u, packets - 4u * block);
+    let within = at & 3u;
+    let block_base = base + 10u * block;
+    let block_count = min(4u, packets - 4u * block);
     let a : float4 = asfloat(words[block_base + 2u * within]);
     let b : float4 = asfloat(words[block_base + 2u * within + 1u]);
-    let topology : uint4 = words[block_base + 2u * block_count + (within >> 1u)];
+    let topology = words[block_base + 2u * block_count + (within >> 1u)];
     let children : uint2 = (within & 1u) == 0 ? topology.xy : topology.zw;
     first.center = a.xyz;
     first.power = a.w;
@@ -61,7 +61,7 @@ func light_bvh_metrics(words: StructuredBuffer<uint4>, leaf_base: uint, node: Li
                        point_value: float3)
     ->float2
 {
-    let delta : float3 = node.center - point_value;
+    let delta = node.center - point_value;
     var distance_squared : float = dot(delta, delta);
     if ((node.child & LIGHT_BVH_LEAF) != 0)
     {
@@ -75,23 +75,23 @@ func light_bvh_left_count(words: StructuredBuffer<uint4>, leaf_base: uint, first
                           second: LightBvhNode, point_value: float3, count: uint)
     ->uint
 {
-    let a : float2 = light_bvh_metrics(words, leaf_base, first, point_value);
-    let b : float2 = light_bvh_metrics(words, leaf_base, second, point_value);
+    let a = light_bvh_metrics(words, leaf_base, first, point_value);
+    let b = light_bvh_metrics(words, leaf_base, second, point_value);
     let power = float2(a.y, b.y) / max(a.y, b.y);
-    let scale : float = max(a.x, b.x);
+    let scale = max(a.x, b.x);
     var probability : float;
     if (scale == 0)
         probability = power.x / (power.x + power.y);
     else
     {
-        let score : float2 = power * (float2(b.x, a.x) / scale);
-        let total : float = score.x + score.y;
+        let score = power * (float2(b.x, a.x) / scale);
+        let total = score.x + score.y;
         probability = total > 0 ? score.x / total : -1.0;
     }
     probability = clamp(probability, 1.0e-6, 1.0 - 1.0e-6);
-    precise let scaled : float = float(count) * probability;
+    precise let scaled = float(count) * probability;
     let integral = uint(scaled);
-    let fraction : float = scaled - float(integral);
+    let fraction = scaled - float(integral);
     let left : uint = integral + uint(fraction > 0.5 || (fraction == 0.5 && (integral & 1u) != 0));
     return clamp(left, first.leaves, count - second.leaves);
 }
@@ -115,7 +115,7 @@ public func sample_light_bvh(words: StructuredBuffer<uint4>, base: uint, light_c
         result.pmf = 1;
         return result;
     }
-    let packets : uint = light_count - 1u;
+    let packets = light_count - 1u;
     let leaf_base : uint = base + (((10u * packets + 7u) & ~7u) >> 2u);
     let target = uint(sample_value * float(LIGHT_BVH_SELECTORS));
     var first : uint = 0;
@@ -127,7 +127,7 @@ public func sample_light_bvh(words: StructuredBuffer<uint4>, base: uint, light_c
         var a : LightBvhNode;
         var b : LightBvhNode;
         light_bvh_pair(words, base, packets, at, leaves, a, b);
-        let left : uint = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
+        let left = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
         var child : uint;
         if (target < first + left)
         {
@@ -164,7 +164,7 @@ public func light_bvh_pmf(words: StructuredBuffer<uint4>, base: uint, light_coun
         return 0;
     if (light_count == 1)
         return 1;
-    let packets : uint = light_count - 1u;
+    let packets = light_count - 1u;
     let leaf_base : uint = base + (((10u * packets + 7u) & ~7u) >> 2u);
     let path : uint = words[leaf_base + 2u * light + 1u].w;
     var count : uint = LIGHT_BVH_SELECTORS;
@@ -175,7 +175,7 @@ public func light_bvh_pmf(words: StructuredBuffer<uint4>, base: uint, light_coun
         var a : LightBvhNode;
         var b : LightBvhNode;
         light_bvh_pair(words, base, packets, at, leaves, a, b);
-        let left : uint = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
+        let left = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
         let second : bool = ((path >> depth) & 1u) != 0;
         count = second ? count - left : left;
         at = second ? b.child : a.child;

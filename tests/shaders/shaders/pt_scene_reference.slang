@@ -21,7 +21,7 @@ func connection_medium<let Capability : uint>(hit: Hit, view: float3, direction:
     return incident.yzw;
 }
 
-func direct_sample<let Capability : uint, let Continuous : bool, Scene>(
+func direct_sample<let Capability : uint, let continuous : bool, Scene>(
     scene: Scene, hit: Hit, material: SurfaceMaterial, view: float3, light: LightSample,
     solar: bool, continuation: bool, inout path: PathState)
     ->void
@@ -40,7 +40,7 @@ func direct_sample<let Capability : uint, let Continuous : bool, Scene>(
                                                                          material.transmitted),
                                            light.distance);
     var evaluated : openpbr::Evaluation;
-    if (!Continuous)
+    if (!continuous)
         evaluated = openpbr::evaluate_specialized<Capability>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, light.direction,
             path.medium, material.transmitted);
@@ -76,10 +76,10 @@ func reference_accumulate_emission<Scene>(scene: Scene, hit: Hit, emission: floa
 }
 
 /// 消费当前段和顶点，不查询下一表面；同一函数供 delta 前缀和叶子 callable 使用。
-/// Continuous=true 只适用于已证明的 opaque roughness² 下界／非匹配 solid IOR 窄域。
+/// continuous=true 只适用于已证明的 opaque roughness² 下界／非匹配 solid IOR 窄域。
 /// 运行时任意合法材料应使用默认 false，避免把应用固定参数推广为通用前提。
 public func process_reference_material<let Capability : uint, let Emissive : bool = false,
-                                       let Continuous : bool = false, Scene>(
+                                       let continuous : bool = false, Scene>(
     scene: Scene, inout data: TransportCall, settings: Settings)
     ->void
     where Scene : IScene
@@ -108,10 +108,10 @@ public func process_reference_material<let Capability : uint, let Emissive : boo
                       path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     if (Capability < openpbr::CAP_DELTA_CONDUCTOR)
     {
-        direct_sample<Capability, Continuous>(
+        direct_sample<Capability, continuous>(
             scene, hit, material, view, scene.sample_sun(hit.surface, sampler.sun(path.depth)),
             true, continuation, path);
-        direct_sample<Capability, Continuous>(
+        direct_sample<Capability, continuous>(
             scene, hit, material, view, scene.sample_light(hit.surface, sampler.light(path.depth)),
             false, continuation, path);
     }
@@ -137,7 +137,7 @@ public func process_reference_material<let Capability : uint, let Emissive : boo
         scattered = openpbr::sample_delta_specialized<Capability>(
             material.pbr, shading_normal(hit, material), view, sampler.bsdf(path.depth).z,
             path.medium, material.transmitted);
-    else if (!Continuous)
+    else if (!continuous)
         scattered = openpbr::sample_specialized<Capability>(
             scene.energy(), material.pbr, shading_normal(hit, material), view,
             sampler.bsdf(path.depth), path.medium, material.transmitted);
@@ -164,7 +164,7 @@ public func process_reference_material<let Capability : uint, let Emissive : boo
     let transmission : bool = (scattered.events & openpbr::TRANSMISSION) != 0;
     path.eta_scale = eta_scale_after_scatter(path.eta_scale, scattered.relative_eta, transmission);
     path.medium = scattered.medium;
-    if (Continuous)
+    if (continuous)
         path.previous_pdf = Capability >= openpbr::CAP_DELTA_CONDUCTOR ? 0 : scattered.pdf;
     else
         path.previous_pdf = (scattered.events & openpbr::DISCRETE) != 0 ? 0 : scattered.pdf;

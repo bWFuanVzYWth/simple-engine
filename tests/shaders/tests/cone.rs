@@ -8,10 +8,8 @@ fn tiny_cones_preserve_density_support_and_radial_distribution()
     let mut cases = Vec::new();
     for angle in [1e-6_f32, 1e-4, 0.00465, 0.2, 1.] {
         for axis in [[0., 0., 1.], [0., 0.6, 0.8]] {
-            if angle < 0.004 {
-                if axis[1] != 0. {
-                    continue;
-                }
+            if angle < 0.004 && axis[1] != 0. {
+                continue;
             }
             for i in 0..1024 {
                 let u = (i as f32 + 0.5) / 1024.;

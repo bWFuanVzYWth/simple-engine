@@ -19,33 +19,32 @@ func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: flo
 {
     var filter : TerrainFilter;
     let ndc = float2(2 * uv.x - 1, 1 - 2 * uv.y);
-    let range : AtmEpipolarRange = terrain_range(f);
+    let range = terrain_range(f);
     var fraction : float;
     filter.slices = terrain_slices(ndc, f.projection.xy, range, TERRAIN_SLICES, fraction);
     filter.weights = float2(1. - fraction, fraction);
     for (var k = 0; k < 2; ++k)
     {
         let slice : int = filter.slices[k];
-        let segment : AtmEpipolarSegment =
-                          atmEpipolarSliceSegment(f.projection.xy, range, slice, TERRAIN_SLICES);
-        let x : float = atmEpipolarRadialCoordinate(ndc, segment) * float(TERRAIN_RADIAL) - 0.5;
+        let segment = epipolar_slice_segment(f.projection.xy, range, slice, TERRAIN_SLICES);
+        let x = epipolar_radial_coordinate(ndc, segment) * float(TERRAIN_RADIAL) - 0.5;
         let left = int(floor(x));
-        let lanes : int2 = clamp(int2(left, left + 1), 0, int(TERRAIN_RADIAL) - 1);
-        let base : uint = uint(slice) * TERRAIN_RADIAL;
+        let lanes = clamp(int2(left, left + 1), 0, int(TERRAIN_RADIAL) - 1);
+        let base = uint(slice) * TERRAIN_RADIAL;
         let depth : float2 = asfloat(uint2(first_hits[base + lanes.x], first_hits[base + lanes.y]) &
                                      0x7fffffffu);
-        let relative : float2 = abs(depth - metres) / max(max(depth, metres), 1.0);
+        let relative = abs(depth - metres) / max(max(depth, metres), 1.0);
         // 平面内按双线性权重，深度不连续处用有限支撑，避免洞口像素给前景封闭墙面供光。
         let support : float2 = far_sample ? float2(depth >= TERRAIN_RANGE_M)
                                           : 1. - smoothstep(0.03, 0.06, relative);
         var weights : float2 = float2(1. - frac(x), frac(x)) * support;
-        let sum : float = weights.x + weights.y;
+        let sum = weights.x + weights.y;
         filter.radial[k] =
             (lerp(float(lanes.x), float(lanes.y), weights.y / max(sum, 1e-10)) + 0.5) /
             float(TERRAIN_RADIAL);
         filter.weights[k] *= segment.valid ? sum : 0;
     }
-    let total : float = filter.weights.x + filter.weights.y;
+    let total = filter.weights.x + filter.weights.y;
     filter.weights = total >= 0.01 ? filter.weights / total : float2(0);
     return filter;
 }
@@ -72,8 +71,8 @@ public func composite_clear_aerial_bt709(clear_light: Texture3D<float4>,
 {
     if (metres <= 0 || !surface)
         return background;
-    let air : AerialSample = aerial_sample(clear_light, transmittance, sampler, uv, metres * 0.001,
-                                           max_distance_km);
+    let air =
+        aerial_sample(clear_light, transmittance, sampler, uv, metres * 0.001, max_distance_km);
     return color::rec2020_to_bt709(composite_aerial(air, color::bt709_to_rec2020(background)));
 }
 /// 已启用地形遮挡的空气段合成；frame与volume须来自本次owner所选的同一已录制/提交状态。
@@ -86,9 +85,8 @@ public func composite_shadowed_terrain_bt709(
 {
     if (metres <= 0)
         return background;
-    let beyond : bool = !surface || metres > TERRAIN_RANGE_M;
-    let filter : TerrainFilter =
-                     terrain_filter(frame, first_hits, uv, min(metres, TERRAIN_RANGE_M), beyond);
+    let beyond = !surface || metres > TERRAIN_RANGE_M;
+    let filter = terrain_filter(frame, first_hits, uv, min(metres, TERRAIN_RANGE_M), beyond);
     let layer_count = float(TERRAIN_DEPTH + 1u);
     var boundary : float4 = 0;
     if (beyond)
@@ -96,18 +94,18 @@ public func composite_shadowed_terrain_bt709(
             terrain_sample(volume, sampler, filter, (float(TERRAIN_DEPTH) + 0.5) / layer_count);
     if (!surface)
         return background - color::rec2020_to_bt709(boundary.xyz);
-    let clear : AerialSample = aerial_sample(clear_light, transmittance, sampler, uv,
-                                             metres * 0.001, max_distance_km);
+    let clear =
+        aerial_sample(clear_light, transmittance, sampler, uv, metres * 0.001, max_distance_km);
     // 介质积分在实际距离上插值。零距离为解析的零，最后一个普通深度节点正好到覆盖边界。
-    let squared : float = saturate(metres / TERRAIN_RANGE_M) * float(TERRAIN_DEPTH * TERRAIN_DEPTH);
-    let lower : float = min(floor(sqrt(squared)), float(TERRAIN_DEPTH - 1u));
-    let node : float = lower + (squared - lower * lower) / (2. * lower + 1.);
-    let z : float = (max(node, 1.) - 0.5) / layer_count;
+    let squared = saturate(metres / TERRAIN_RANGE_M) * float(TERRAIN_DEPTH * TERRAIN_DEPTH);
+    let lower = min(floor(sqrt(squared)), float(TERRAIN_DEPTH - 1u));
+    let node = lower + (squared - lower * lower) / (2. * lower + 1.);
+    let z = (max(node, 1.) - 0.5) / layer_count;
     var radiance : float3 = terrain_sample(volume, sampler, filter, z).xyz * saturate(node);
     if (beyond)
     {
-        let near_clear : AerialSample = aerial_sample(clear_light, transmittance, sampler, uv,
-                                                      TERRAIN_RANGE_M * 0.001, max_distance_km);
+        let near_clear = aerial_sample(clear_light, transmittance, sampler, uv,
+                                       TERRAIN_RANGE_M * 0.001, max_distance_km);
         // 五级网格之外按最后有覆盖的区间延续可见度，封闭洞穴不会重新得到无条件的远场晴空散射。
         radiance += max(clear.radiance - near_clear.radiance, 0) * saturate(boundary.w);
     }
@@ -122,7 +120,7 @@ public func composite_terrain_bt709(clear_light: Texture3D<float4>,
                                     max_distance_km: float, surface: bool, background: float3)
     ->float3
 {
-    if (frame.source.state.y == 0)
+    if (frame.source.active == 0)
         return composite_clear_aerial_bt709(clear_light, transmittance, sampler, uv, metres,
                                             max_distance_km, surface, background);
     return composite_shadowed_terrain_bt709(clear_light, transmittance, volume, first_hits, sampler,

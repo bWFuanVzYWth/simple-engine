@@ -1,3 +1,4 @@
+import math.constants;
 // 来源：Sky Tracer 9e9430d；见 crates/atmosphere/data/README.md。
 import atmosphere.parameters;
 import atmosphere.sampling;
@@ -95,120 +96,149 @@ func phase_power(cosine: float)->float
 }
 func phase_coord(cosine: float, power: float)->float
 {
-    let a = p.angular_mapping.x;
-    return a * acos(cosine) * (1.0 / atmosphere::PI) + (1.0 - a) * power;
+    let phase_blend = p.phase_blend_weight;
+    return phase_blend * acos(cosine) * math::frac_1_pi + (1.0 - phase_blend) * power;
 }
-func shape(hi: uint, si: uint, uv: float2)->float4
+func shape(height_index: uint, sun_index: uint, uv: float2)->float4
 {
-    let pixel = float2(float(si * p.solve.y), float(hi * p.solve.z)) +
-                uv * float2(float(p.solve.y - 1u), float(p.solve.z - 1u)) + 0.5;
+    let pixel =
+        float2(float(sun_index * p.phase_node_count), float(height_index * p.cone_node_count)) +
+        uv * float2(float(p.phase_node_count - 1u), float(p.cone_node_count - 1u)) + 0.5;
     return source_read.SampleLevel(linear_sampler, pixel / float2(dimensions(source_read)), 0.0);
 }
-func log_mean(hi: uint, si: uint)->float4
+func log_mean(height_index: uint, sun_index: uint)->float4
 {
-    return mean_read.Load(int3(int2(int(si), int(hi)), 0));
+    return mean_read.Load(int3(int2(int(sun_index), int(height_index)), 0));
 }
-func high_basis(mu: float, mu_s: float, nu: float)->float4
+func high_basis(radial_cosine: float, sun_radial_cosine: float, ray_sun_cosine: float)->float4
 {
-    let y = clamp(mu, -1.0, 1.0);
-    let radial = sqrt(max(1.0 - y * y, 0.0));
+    let clamped_radial_cosine = clamp(radial_cosine, -1.0, 1.0);
+    let tangent_radius = sqrt(max(1.0 - clamped_radial_cosine * clamped_radial_cosine, 0.0));
 
-    let z = clamp((nu - y * mu_s) / sqrt(max(1.0 - mu_s * mu_s, 1e-20)), -radial, radial);
-    return float4(1.0, y * y, z * z, y * z);
+    let tangent_component = clamp((ray_sun_cosine - clamped_radial_cosine * sun_radial_cosine) /
+                                      sqrt(max(1.0 - sun_radial_cosine * sun_radial_cosine, 1e-20)),
+                                  -tangent_radius, tangent_radius);
+    return float4(1.0, clamped_radial_cosine * clamped_radial_cosine,
+                  tangent_component * tangent_component, clamped_radial_cosine * tangent_component);
 }
-func high_shape(hi: uint, si: uint, b: float4)->float4
+func high_shape(height_index: uint, sun_index: uint, basis: float4)->float4
 {
-    let pixel = int2(int(si * 5u), int(hi + 1u - p.offsets1.y));
+    let pixel = int2(int(sun_index * 5u), int(height_index + 1u - p.low_height_count));
     var numerator = high_read.Load(int3(pixel, 0));
-    numerator = fma(high_read.Load(int3(pixel + int2(1, 0), 0)), b.y, numerator);
-    numerator = fma(high_read.Load(int3(pixel + int2(2, 0), 0)), b.z, numerator);
-    numerator = fma(high_read.Load(int3(pixel + int2(3, 0), 0)), b.w, numerator);
-    let denominator = dot(high_read.Load(int3(pixel + int2(4, 0), 0)), b);
+    numerator = fma(high_read.Load(int3(pixel + int2(1, 0), 0)), basis.y, numerator);
+    numerator = fma(high_read.Load(int3(pixel + int2(2, 0), 0)), basis.z, numerator);
+    numerator = fma(high_read.Load(int3(pixel + int2(3, 0), 0)), basis.w, numerator);
+    let denominator = dot(high_read.Load(int3(pixel + int2(4, 0), 0)), basis);
     return numerator / max(denominator, 1e-20);
 }
-struct IndirectAngle
+struct IndirectRayGeometry
 {
-    var cosine : float;
-    var radial_factor : float;
-    var phase : float;
+    var ray_sun_cosine : float;
+    var ray_sun_sine_squared : float;
+    var phase_coordinate : float;
 };
-func use_high_shape(h: float)->bool
+func use_high_shape(height_km: float)->bool
 {
-    return h >= 35.0 && p.offsets1.y < p.dims.x;
+    return height_km >= 35.0 && p.low_height_count < p.source_height_count;
 }
-func indirect(h: float, mu: float, mu_s: float, angle: IndirectAngle, rayleigh: float4,
-              sigma: float4)
+func indirect(height_km: float, radial_cosine: float, sun_radial_cosine: float,
+              angle: IndirectRayGeometry, rayleigh_scattering: float4,
+              normalization_scattering: float4)
     ->float4
 {
-    var lo = 0u;
-    var hi = p.dims.x - 1u;
-    while (hi - lo > 1u)
+    var lower_height_index = 0u;
+    var upper_height_index = p.source_height_count - 1u;
+    while (upper_height_index - lower_height_index > 1u)
     {
-        let mid = (lo + hi) / 2u;
-        if (data[mid].x <= h)
+        let middle_height_index = (lower_height_index + upper_height_index) / 2u;
+        if (data[middle_height_index].x <= height_km)
         {
-            lo = mid;
+            lower_height_index = middle_height_index;
         }
         else
         {
-            hi = mid;
+            upper_height_index = middle_height_index;
         }
     }
-    let h0 = data[lo].x;
-    let h1 = data[hi].x;
-    let th = clamp((h - h0) / (h1 - h0), 0.0, 1.0);
-    let elevation = asin(clamp(mu_s, -1.0, 1.0));
-    let s0 = solar_layer(lo, elevation) * float(p.dims.y - 1u);
-    let s1 = solar_layer(hi, elevation) * float(p.dims.y - 1u);
-    let i0 = min(uint(s0), p.dims.y - 2u);
-    let i1 = min(uint(s1), p.dims.y - 2u);
-    let t0 = s0 - float(i0);
-    let t1 = s1 - float(i1);
-    let brightness = exp(lerp(lerp(log_mean(lo, i0), log_mean(lo, i0 + 1u), t0),
-                              lerp(log_mean(hi, i1), log_mean(hi, i1 + 1u), t1), th));
-    if (use_high_shape(h))
+    let lower_height_km = data[lower_height_index].x;
+    let upper_height_km = data[upper_height_index].x;
+    let height_fraction =
+        clamp((height_km - lower_height_km) / (upper_height_km - lower_height_km), 0.0, 1.0);
+    let elevation = asin(clamp(sun_radial_cosine, -1.0, 1.0));
+    let lower_sun_coordinate =
+        solar_layer(lower_height_index, elevation) * float(p.sun_state_count - 1u);
+    let upper_sun_coordinate =
+        solar_layer(upper_height_index, elevation) * float(p.sun_state_count - 1u);
+    let lower_sun_index = min(uint(lower_sun_coordinate), p.sun_state_count - 2u);
+    let upper_sun_index = min(uint(upper_sun_coordinate), p.sun_state_count - 2u);
+    let lower_sun_fraction = lower_sun_coordinate - float(lower_sun_index);
+    let upper_sun_fraction = upper_sun_coordinate - float(upper_sun_index);
+    let brightness =
+        exp(lerp(lerp(log_mean(lower_height_index, lower_sun_index),
+                      log_mean(lower_height_index, lower_sun_index + 1u), lower_sun_fraction),
+                 lerp(log_mean(upper_height_index, upper_sun_index),
+                      log_mean(upper_height_index, upper_sun_index + 1u), upper_sun_fraction),
+                 height_fraction));
+    if (use_high_shape(height_km))
     {
-        let b = high_basis(mu, mu_s, angle.cosine);
-        let v = lerp(lerp(high_shape(lo, i0, b), high_shape(lo, i0 + 1u, b), t0),
-                     lerp(high_shape(hi, i1, b), high_shape(hi, i1 + 1u, b), t1), th);
-        return max(v * brightness * rayleigh, float4(0.0));
+        let basis = high_basis(radial_cosine, sun_radial_cosine, angle.ray_sun_cosine);
+        let source_shape = lerp(
+            lerp(high_shape(lower_height_index, lower_sun_index, basis),
+                 high_shape(lower_height_index, lower_sun_index + 1u, basis), lower_sun_fraction),
+            lerp(high_shape(upper_height_index, upper_sun_index, basis),
+                 high_shape(upper_height_index, upper_sun_index + 1u, basis), upper_sun_fraction),
+            height_fraction);
+        return max(source_shape * brightness * rayleigh_scattering, float4(0.0));
     }
-    let cp = clamp((mu - mu_s * angle.cosine) /
-                       sqrt(max((1.0 - mu_s * mu_s) * angle.radial_factor, 1e-20)),
-                   -1.0, 1.0);
-    let t = (1.0 - cp) * 0.5;
-    let warped = t + p.angular_mapping.y * t * (1.0 - t) * (2.0 * t - 1.0);
-    let uv = float2(angle.phase, warped);
-    let v = lerp(lerp(shape(lo, i0, uv), shape(lo, i0 + 1u, uv), t0),
-                 lerp(shape(hi, i1, uv), shape(hi, i1 + 1u, uv), t1), th);
-    return max(v * brightness * sigma, float4(0.0));
+    let cone_cosine = clamp(
+        (radial_cosine - sun_radial_cosine * angle.ray_sun_cosine) /
+            sqrt(max((1.0 - sun_radial_cosine * sun_radial_cosine) * angle.ray_sun_sine_squared,
+                     1e-20)),
+        -1.0, 1.0);
+    let cone_coordinate = (1.0 - cone_cosine) * 0.5;
+    let warped = cone_coordinate + p.cone_warp * cone_coordinate * (1.0 - cone_coordinate) *
+                                       (2.0 * cone_coordinate - 1.0);
+    let angular_coordinate = float2(angle.phase_coordinate, warped);
+    let source_shape =
+        lerp(lerp(shape(lower_height_index, lower_sun_index, angular_coordinate),
+                  shape(lower_height_index, lower_sun_index + 1u, angular_coordinate),
+                  lower_sun_fraction),
+             lerp(shape(upper_height_index, upper_sun_index, angular_coordinate),
+                  shape(upper_height_index, upper_sun_index + 1u, angular_coordinate),
+                  upper_sun_fraction),
+             height_fraction);
+    return max(source_shape * brightness * normalization_scattering, float4(0.0));
 }
-func ground_light(mu_s: float)->float4
+func ground_light(sun_radial_cosine: float)->float4
 {
-    let x = solar_layer(0u, asin(clamp(mu_s, -1.0, 1.0))) * float(p.dims.y - 1u);
-    let i = min(uint(x), p.dims.y - 2u);
-    return lerp(ground_read.Load(int3(int2(int(i), 0), 0)),
-                ground_read.Load(int3(int2(int(i + 1u), 0), 0)), x - float(i));
+    let sun_coordinate =
+        solar_layer(0u, asin(clamp(sun_radial_cosine, -1.0, 1.0))) * float(p.sun_state_count - 1u);
+    let sun_index = min(uint(sun_coordinate), p.sun_state_count - 2u);
+    return lerp(ground_read.Load(int3(int2(int(sun_index), 0), 0)),
+                ground_read.Load(int3(int2(int(sun_index + 1u), 0), 0)),
+                sun_coordinate - float(sun_index));
 }
 func write_optical_depth(id: uint3)->void
 {
-    if (id.x >= p.dims.w || id.y >= p.dims.z)
+    if (id.x >= p.optical_angle_count || id.y >= p.optical_height_count)
     {
         return;
     }
-    let h = data[p.mapping.z + id.y].x;
-    let v = float(id.x) / float(p.dims.w - 1u);
-    let x = v * v * v;
-    let mu = horizon(p, h) + (1.0 - horizon(p, h)) * x;
-    let length = boundary(p, h, mu, false);
-    let dt = length / float(p.extra.w);
-    let radial = radial_ray(p, h, mu);
-    var tau = float4(0.0);
-    for (var j = 0u; j < p.extra.w; j++)
+    let height_km = data[p.optical_node_offset + id.y].x;
+    let angular_coordinate = float(id.x) / float(p.optical_angle_count - 1u);
+    let angular_fraction = angular_coordinate * angular_coordinate * angular_coordinate;
+    let radial_cosine = horizon(p, height_km) + (1.0 - horizon(p, height_km)) * angular_fraction;
+    let path_length_km = boundary(p, height_km, radial_cosine, false);
+    let step_length_km = path_length_km / float(p.optical_integration_steps);
+    let radial = radial_ray(p, height_km, radial_cosine);
+    var optical_depth = float4(0.0);
+    for (var j = 0u; j < p.optical_integration_steps; j++)
     {
-        tau += medium_extinction(medium_stencil(height_at(radial, (float(j) + 0.5) * dt))) * dt;
+        optical_depth += extinction_at_interval(medium_profile_interval(
+                             height_at(radial, (float(j) + 0.5) * step_length_km))) *
+                         step_length_km;
     }
-    tau_write[int2(id.xy)] = min(tau, float4(80.0));
+    tau_write[int2(id.xy)] = min(optical_depth, float4(80.0));
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -221,32 +251,32 @@ func optical_depth(uint3 id: SV_DispatchThreadID)->void
 [numthreads(8, 8, 1)]
 func optical_depth_rows(uint3 id: SV_DispatchThreadID)->void
 {
-    if (id.y >= p.batch.w)
+    if (id.y >= p.optical_row_count)
     {
         return;
     }
-    write_optical_depth(uint3(id.x, id.y + p.batch.z, 0u));
+    write_optical_depth(uint3(id.x, id.y + p.optical_row_start, 0u));
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
 func prepare_directions(uint3 id: SV_DispatchThreadID)->void
 {
-    if (id.x >= p.solve.x || id.y >= p.batch.y * p.dims.y)
+    if (id.x >= p.incident_direction_count || id.y >= p.batch_height_count * p.sun_state_count)
     {
         return;
     }
-    let state = data[p.extra.x + p.batch.x * p.dims.y + id.y];
+    let state = data[p.sun_state_offset + p.batch_height_start * p.sun_state_count + id.y];
     let h = state.x;
     let mu_s = state.y;
     let sun = float3(0.0, mu_s, state.z);
-    let n = p.solve.x / 3u;
+    let n = p.incident_direction_count / 3u;
     var v : float3 = (float3)0;
     var w : float = (float)0;
     let sample_index = select(id.x < n, id.x, n + id.x % n);
-    let q = data[p.extra.y + sample_index];
+    let q = data[p.integration_angle_offset + sample_index];
     if (q.w == 0.0)
     {
-        directions[id.y * p.solve.x + id.x] = float4(0.0);
+        directions[id.y * p.incident_direction_count + id.x] = float4(0.0);
         return;
     }
     if (id.x < n)
@@ -277,29 +307,30 @@ func prepare_directions(uint3 id: SV_DispatchThreadID)->void
         w = q.w * (high - low) * 3.0 * square;
     }
     let d = 0.0004 + max(1.0 - dot(v, sun), 0.0);
-    let sw = p.importance.x / (p.importance.x + d * d) *
-             lerp(1.0, p.importance.z, smoothstep(12.0, 35.0, h));
+    let sw = p.solar_importance_width / (p.solar_importance_width + d * d) *
+             lerp(1.0, p.high_sun_weight, smoothstep(12.0, 35.0, h));
     w *= select(id.x < n, sw, 1.0 - sw);
 
-    directions[id.y * p.solve.x + id.x] = float4(v, w);
+    directions[id.y * p.incident_direction_count + id.x] = float4(v, w);
 }
-func trace_incident_core<let MultipleScattering : bool>(id: uint3)->void
+func trace_incident_core<let multiple_scattering : bool>(id: uint3)->void
 {
-    if (id.x >= p.solve.x || id.y >= p.batch.y * p.dims.y)
+    if (id.x >= p.incident_direction_count || id.y >= p.batch_height_count * p.sun_state_count)
     {
         return;
     }
-    let state_index = p.batch.x * p.dims.y + id.y;
-    let state = data[p.extra.x + state_index];
-    let q = directions[id.y * p.solve.x + id.x];
+    let state_index = p.batch_height_start * p.sun_state_count + id.y;
+    let state = data[p.sun_state_offset + state_index];
+    let q = directions[id.y * p.incident_direction_count + id.x];
     if (q.w == 0.0)
     {
-        incoming[id.y * p.solve.x + id.x] = float4(0.0);
+        incoming[id.y * p.incident_direction_count + id.x] = float4(0.0);
         return;
     }
     let sun = float3(0.0, state.y, state.z);
-    let index = id.y * p.solve.x + id.x;
-    let result = integrate_core<MultipleScattering, true>(q.xyz, sun, state.x, 0.0, p.size_steps.z);
+    let index = id.y * p.incident_direction_count + id.x;
+    let result =
+        integrate_core<multiple_scattering, true>(q.xyz, sun, state.x, 0.0, p.integration_steps);
     let light = result.light;
     incoming[index] = light;
 }
@@ -320,17 +351,17 @@ func trace_incident_multiple(uint3 id: SV_DispatchThreadID)->void
 [numthreads(64, 1, 1)]
 func incident_moments(uint3 id: SV_DispatchThreadID)->void
 {
-    if (id.x >= p.batch.y * p.dims.y)
+    if (id.x >= p.batch_height_count * p.sun_state_count)
     {
         return;
     }
-    let state_index = p.batch.x * p.dims.y + id.x;
+    let state_index = p.batch_height_start * p.sun_state_count + id.x;
     var m : float4[7] = { (float4)0, (float4)0, (float4)0, (float4)0,
                           (float4)0, (float4)0, (float4)0 };
-    for (var j = 0u; j < p.solve.x; j++)
+    for (var j = 0u; j < p.incident_direction_count; j++)
     {
-        let q = directions[id.x * p.solve.x + j];
-        let l = incoming[id.x * p.solve.x + j] * q.w;
+        let q = directions[id.x * p.incident_direction_count + j];
+        let l = incoming[id.x * p.incident_direction_count + j] * q.w;
         let square = q.xyz * q.xyz;
         let cross = q.y * q.z;
         m[0] += l;
@@ -345,9 +376,9 @@ func incident_moments(uint3 id: SV_DispatchThreadID)->void
     {
         moments[id.x * 7u + k] = m[k];
     }
-    let hi = state_index / p.dims.y;
-    let scale = max(m[0] * (1.0 / (4.0 * atmosphere::PI)), float4(1e-30));
-    if (hi + 1u >= p.offsets1.y)
+    let hi = state_index / p.sun_state_count;
+    let scale = max(m[0] * math::frac_1_4_pi, float4(1e-30));
+    if (hi + 1u >= p.low_height_count)
     {
         let inverse_scale = 1.0 / scale;
         let packed : float4[5] = { (m[0] + m[1]) * inverse_scale, (m[2] - m[1]) * inverse_scale,
@@ -356,35 +387,35 @@ func incident_moments(uint3 id: SV_DispatchThreadID)->void
                                           2.0 * m[6].x) };
         for (var k = 0u; k < 5u; k++)
         {
-            high_write[int2(int((id.x % p.dims.y) * 5u + k), int(hi + 1u - p.offsets1.y))] =
-                packed[k];
+            high_write[int2(int((id.x % p.sun_state_count) * 5u + k),
+                            int(hi + 1u - p.low_height_count))] = packed[k];
         }
     }
-    mean_write[int2(int(state_index % p.dims.y), int(hi))] = log(scale);
+    mean_write[int2(int(state_index % p.sun_state_count), int(hi))] = log(scale);
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
 func scattering_source(uint3 id: SV_DispatchThreadID)->void
 {
-    let pixel = id.xy + uint2(0u, p.batch.x * p.solve.z);
-    if (any(pixel >= dimensions(source_write)) || id.y >= p.batch.y * p.solve.z)
+    let pixel = id.xy + uint2(0u, p.batch_height_start * p.cone_node_count);
+    if (any(pixel >= dimensions(source_write)) || id.y >= p.batch_height_count * p.cone_node_count)
     {
         return;
     }
-    let hi = pixel.y / p.solve.z;
-    let si = id.x / p.solve.y;
-    let state_index = hi * p.dims.y + si;
-    let local_state = (hi - p.batch.x) * p.dims.y + si;
-    let state = data[p.extra.x + state_index];
+    let hi = pixel.y / p.cone_node_count;
+    let si = id.x / p.phase_node_count;
+    let state_index = hi * p.sun_state_count + si;
+    let local_state = (hi - p.batch_height_start) * p.sun_state_count + si;
+    let state = data[p.sun_state_offset + state_index];
     let h = state.x;
     let mu_s = state.y;
-    let nu = data[p.extra.z + id.x % p.solve.y].x;
-    let cone = data[p.mapping.w + id.y % p.solve.z];
+    let nu = data[p.phase_node_offset + id.x % p.phase_node_count].x;
+    let cone = data[p.cone_node_offset + id.y % p.cone_node_count];
     let sun = float3(0.0, mu_s, state.z);
     let tangent = float3(0.0, sun.z, -sun.y);
     let v =
         sun * nu + sqrt(max(1.0 - nu * nu, 0.0)) * (tangent * cone.x + float3(cone.y, 0.0, 0.0));
-    let coeff = p.offsets0.x + hi * 6u;
+    let coeff = p.coefficient_offset + hi * 6u;
     let mi = local_state * 7u;
     let square = v * v;
     let cross = 2.0 * v.y * v.z;
@@ -404,15 +435,15 @@ func scattering_source(uint3 id: SV_DispatchThreadID)->void
         {
             species_enabled[species] = any(data[coeff + species + 1u] != float4(0.0));
         }
-        for (var j = 0u; j < p.solve.x; j++)
+        for (var j = 0u; j < p.incident_direction_count; j++)
         {
-            let q = directions[local_state * p.solve.x + j];
-            let l = incoming[local_state * p.solve.x + j];
+            let q = directions[local_state * p.incident_direction_count + j];
+            let l = incoming[local_state * p.incident_direction_count + j];
             let a = q.y * v.y + q.z * v.z;
             let b = q.x * v.x;
 
-            let positive = phase_stencil(clamp(a + b, -1.0, 1.0));
-            let negative = phase_stencil(clamp(a - b, -1.0, 1.0));
+            let positive = phase_interval(clamp(a + b, -1.0, 1.0));
+            let negative = phase_interval(clamp(a - b, -1.0, 1.0));
             for (var species = 0u; species < 4u; species++)
             {
                 if (!species_enabled[species])
@@ -429,32 +460,32 @@ func scattering_source(uint3 id: SV_DispatchThreadID)->void
 
         for (var species = 0u; species < 4u; species++)
         {
-            source += data[coeff + species + 1u] * data[p.offsets1.x + species] * sums[species] /
-                      max(norms[species], float4(1e-20));
+            source += data[coeff + species + 1u] * data[p.phase_mass_offset + species] *
+                      sums[species] / max(norms[species], float4(1e-20));
         }
     }
     let sigma = data[coeff + 5u];
     let mean = exp(log_mean(hi, si));
     source_write[int2(pixel)] = max(source / max(mean * sigma, float4(1e-30)), float4(0.0));
 }
-func ground_irradiance_core<let IncludeIncoming : bool>(id: uint3)->void
+func ground_irradiance_core<let include_incoming : bool>(id: uint3)->void
 {
-    if (id.x >= p.dims.y || p.batch.x != 0u)
+    if (id.x >= p.sun_state_count || p.batch_height_start != 0u)
     {
         return;
     }
-    let mu_s = data[p.extra.x + id.x].y;
-    var irradiance =
-        sun_transmittance(p, tau_read, linear_sampler, 0.0, mu_s) * max(mu_s, 0.0) * p.solar;
-    if (IncludeIncoming)
+    let mu_s = data[p.sun_state_offset + id.x].y;
+    var irradiance = sun_transmittance(p, tau_read, linear_sampler, 0.0, mu_s) * max(mu_s, 0.0) *
+                     p.solar_irradiance_spectrum;
+    if (include_incoming)
     {
-        for (var j = 0u; j < p.solve.x; j++)
+        for (var j = 0u; j < p.incident_direction_count; j++)
         {
-            let q = directions[id.x * p.solve.x + j];
-            irradiance += incoming[id.x * p.solve.x + j] * (q.w * max(q.y, 0.0));
+            let q = directions[id.x * p.incident_direction_count + j];
+            irradiance += incoming[id.x * p.incident_direction_count + j] * (q.w * max(q.y, 0.0));
         }
     }
-    ground_write[int2(int(id.x), 0)] = irradiance * (p.medium.y / atmosphere::PI);
+    ground_write[int2(int(id.x), 0)] = irradiance * (p.ground_albedo / math::pi);
 }
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -471,9 +502,9 @@ func ground_multiple(uint3 id: SV_DispatchThreadID)->void
 
 func solar_layer(layer: uint, e: float)->float
 {
-    let offset = p.mapping.y + 4u * layer;
+    let offset = p.solar_node_offset + 4u * layer;
     let base = data[offset];
-    let d = max(atmosphere::PI * 0.5 - e, 0.0);
+    let d = max(math::frac_pi_2 - e, 0.0);
     var y = base.x * e + base.y - base.z * sqrt(d / (d + 0.0872664626));
     for (var j = 1u; j <= 3u; j++)
     {
@@ -483,79 +514,84 @@ func solar_layer(layer: uint, e: float)->float
     }
     return clamp(y, 0.0, 1.0);
 }
-struct Medium
+struct ScatteringSource
 {
-    var direct : float4;
-    var rayleigh : float4;
-    var sigma : float4;
+    var solar_phase_weighted : float4;
+    var rayleigh_scattering : float4;
+    var normalization_scattering : float4;
 };
-struct MediumStencil
+struct MediumProfileInterval
 {
-    var low : uint;
-    var high : uint;
+    var lower_offset : uint;
+    var upper_offset : uint;
     var fraction : float;
 };
-func medium_stencil(h: float)->MediumStencil
+func medium_profile_interval(height_km: float)->MediumProfileInterval
 {
-    var lo = 0u;
-    var hi = p.offsets1.z - 1u;
-    while (hi - lo > 1u)
+    var lower_index = 0u;
+    var upper_index = p.profile_height_count - 1u;
+    while (upper_index - lower_index > 1u)
     {
-        let mid = (lo + hi) / 2u;
-        if (data[p.offsets0.z + 7u * mid].x <= h)
+        let middle_index = (lower_index + upper_index) / 2u;
+        if (data[p.profile_offset + 7u * middle_index].x <= height_km)
         {
-            lo = mid;
+            lower_index = middle_index;
         }
         else
         {
-            hi = mid;
+            upper_index = middle_index;
         }
     }
-    let a = p.offsets0.z + lo * 7u;
-    let b = p.offsets0.z + hi * 7u;
-    let t = clamp((h - data[a].x) / (data[b].x - data[a].x), 0.0, 1.0);
-    return { a, b, t };
+    let lower_offset = p.profile_offset + lower_index * 7u;
+    let upper_offset = p.profile_offset + upper_index * 7u;
+    let height_fraction =
+        clamp((height_km - data[lower_offset].x) / (data[upper_offset].x - data[lower_offset].x),
+              0.0, 1.0);
+    return { lower_offset, upper_offset, height_fraction };
 }
-func medium_extinction(stencil: MediumStencil)->float4
+func extinction_at_interval(stencil: MediumProfileInterval)->float4
 {
-    return lerp(data[stencil.low + 1u], data[stencil.high + 1u], stencil.fraction);
+    return lerp(data[stencil.lower_offset + 1u], data[stencil.upper_offset + 1u], stencil.fraction);
 }
-func medium<let MultipleScattering : bool>(h: float, stencil: MediumStencil, phase: float4[5])
-    ->Medium
+func scattering_source_coefficients<let multiple_scattering : bool>(height_km: float,
+                                                                    stencil: MediumProfileInterval,
+                                                                    phase: float4[5])
+    ->ScatteringSource
 {
-    var result : Medium;
-    result.rayleigh = lerp(data[stencil.low + 2u], data[stencil.high + 2u], stencil.fraction);
-    result.direct = result.rayleigh * phase[0];
-    result.sigma = result.rayleigh;
-    let total_scattering = MultipleScattering && !use_high_shape(h);
+    var result : ScatteringSource;
+    result.rayleigh_scattering =
+        lerp(data[stencil.lower_offset + 2u], data[stencil.upper_offset + 2u], stencil.fraction);
+    result.solar_phase_weighted = result.rayleigh_scattering * phase[0];
+    result.normalization_scattering = result.rayleigh_scattering;
+    let total_scattering = multiple_scattering && !use_high_shape(height_km);
     for (var j = 1u; j < 5u; j++)
     {
-        let scattering =
-            lerp(data[stencil.low + 2u + j], data[stencil.high + 2u + j], stencil.fraction);
-        result.direct += scattering * phase[j];
+        let scattering = lerp(data[stencil.lower_offset + 2u + j],
+                              data[stencil.upper_offset + 2u + j], stencil.fraction);
+        result.solar_phase_weighted += scattering * phase[j];
         if (total_scattering)
-            result.sigma += scattering;
+            result.normalization_scattering += scattering;
     }
     return result;
 }
-struct PhaseStencil
+struct PhaseInterval
 {
-    var index : uint;
+    var lower_node : uint;
     var fraction : float;
 };
-func phase_stencil(mu: float)->PhaseStencil
+func phase_interval(scattering_cosine: float)->PhaseInterval
 {
-    return phase_stencil_from_power(phase_power(mu));
+    return phase_interval_from_power(phase_power(scattering_cosine));
 }
-func phase_stencil_from_power(power: float)->PhaseStencil
+func phase_interval_from_power(phase_power_coordinate: float)->PhaseInterval
 {
-    let x = clamp(power * 1024.0 - 0.5, 0.0, 1023.0);
+    let x = clamp(phase_power_coordinate * 1024.0 - 0.5, 0.0, 1023.0);
     let i = min(uint(x), 1022u);
-    return PhaseStencil(i, x - float(i));
+    return PhaseInterval(i, x - float(i));
 }
-func tabulated_phase(stencil: PhaseStencil, species: uint)->float4
+func tabulated_phase(stencil: PhaseInterval, species: uint)->float4
 {
-    let offset = p.offsets0.w + species * 1024u + stencil.index;
+    let offset = p.phase_offset + species * 1024u + stencil.lower_node;
     return lerp(data[offset], data[offset + 1u], stencil.fraction);
 }
 struct Transport
@@ -565,7 +601,7 @@ struct Transport
 };
 // 四波长共同积分核；include_ground 仅控制末端理想行星表面的边界辐射。
 // Aerial 组合显式场景表面，因此传 false；求解器与 SkyView 保留源边界条件 true。
-func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
+func integrate_core<let multiple_scattering : bool, let include_ground : bool>(
     ray: float3, sun: float3, initial_height: float, segment: float, steps: uint)
     ->Transport
 {
@@ -578,11 +614,12 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     let nu = dot(ray, sun);
     var entry = 0.0;
     var up = float3(0.0, 1.0, 0.0);
-    if (h > p.medium.x)
+    if (h > p.atmosphere_height_km)
     {
-        let radius = p.sun.w + h;
+        let radius = p.planet_radius_km + h;
         let b = radius * mu;
-        let c = (h - p.medium.x) * (radius + p.sun.w + p.medium.x);
+        let c =
+            (h - p.atmosphere_height_km) * (radius + p.planet_radius_km + p.atmosphere_height_km);
         let disc = b * b - c;
         if (b >= 0.0 || disc <= 0.0)
         {
@@ -594,7 +631,7 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
             return result;
         }
         up = normalize(up * radius + ray * entry);
-        h = p.medium.x;
+        h = p.atmosphere_height_km;
         mu = dot(ray, up);
         mu_s = dot(sun, up);
     }
@@ -614,7 +651,7 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     let middle = clamp(-b, 0.0, length);
     let hmin = height_at(radial, middle);
     let hend = height_at(radial, length);
-    let scale = max(p.importance.y, 1e-10);
+    let scale = max(p.path_height_scale_km, 1e-10);
     let before = log(1.0 + max(h - hmin, 0.0) / scale);
     let after = log(1.0 + max(hend - hmin, 0.0) / scale);
     var split = uint(round(float(count) * before / max(before + after, 1e-20)));
@@ -636,10 +673,10 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
     var solar_phase : float4[5] = { (float4)0, (float4)0, (float4)0, (float4)0, (float4)0 };
     let cosine = clamp(nu, -1.0, 1.0);
     let power = phase_power(cosine);
-    let stencil = phase_stencil_from_power(power);
-    let angle : IndirectAngle = { nu, 1.0 - nu * nu,
-                                  MultipleScattering ? phase_coord(cosine, power) : 0.0 };
-    solar_phase[0] = float4((3.0 / (16.0 * atmosphere::PI)) * (1.0 + cosine * cosine));
+    let stencil = phase_interval_from_power(power);
+    let angle : IndirectRayGeometry = { nu, 1.0 - nu * nu,
+                                        multiple_scattering ? phase_coord(cosine, power) : 0.0 };
+    solar_phase[0] = float4((3.0 / (16.0 * math::pi)) * (1.0 + cosine * cosine));
     for (var k = 0u; k < 4u; k++)
     {
         solar_phase[k + 1u] = tabulated_phase(stencil, k);
@@ -663,7 +700,7 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
                     lh = before * (1.0 - float(i) * inverse_split);
                 }
                 let hh = hmin + scale * (exp(lh) - 1.0);
-                let c = (h - hh) * (2.0 * p.sun.w + h + hh);
+                let c = (h - hh) * (2.0 * p.planet_radius_km + h + hh);
                 let root = sqrt(max(b * b - c, 0.0));
                 if (incoming)
                 {
@@ -684,25 +721,27 @@ func integrate_core<let MultipleScattering : bool, let IncludeGround : bool>(
         let d = (edge + previous) * 0.5;
         previous = edge;
         let hp = height_at(radial, d);
-        let inverse_radius = 1.0 / (p.sun.w + hp);
+        let inverse_radius = 1.0 / (p.planet_radius_km + hp);
         let local_mu = (b + ray_squared * d) * inverse_radius;
         let local_mu_s = (sun_radial_dot + nu * d) * inverse_radius;
-        let stencil = medium_stencil(hp);
-        let extinction = medium_extinction(stencil);
-        let c = medium<MultipleScattering>(hp, stencil, solar_phase);
-        let direct =
-            c.direct * sun_transmittance(p, tau_read, linear_sampler, hp, local_mu_s) * p.solar;
+        let stencil = medium_profile_interval(hp);
+        let extinction = extinction_at_interval(stencil);
+        let c = scattering_source_coefficients<multiple_scattering>(hp, stencil, solar_phase);
+        let direct = c.solar_phase_weighted *
+                     sun_transmittance(p, tau_read, linear_sampler, hp, local_mu_s) *
+                     p.solar_irradiance_spectrum;
         var source = direct;
 
-        if (MultipleScattering)
-            source += indirect(hp, local_mu, local_mu_s, angle, c.rayleigh, c.sigma);
+        if (multiple_scattering)
+            source += indirect(hp, local_mu, local_mu_s, angle, c.rayleigh_scattering,
+                               c.normalization_scattering);
         let segment = segment_transport(extinction, dt);
         result.light += result.transmittance * source * segment.integral;
         result.transmittance *= segment.transmittance;
     }
-    if (IncludeGround && hit && length >= full_length)
+    if (include_ground && hit && length >= full_length)
     {
-        let end_mu_s = (sun_radial_dot + nu * length) / p.sun.w;
+        let end_mu_s = (sun_radial_dot + nu * length) / p.planet_radius_km;
         result.light += result.transmittance * ground_light(end_mu_s);
     }
     return result;
@@ -716,7 +755,7 @@ func integrate_at(ray: float3, sun: float3, initial_height: float, segment: floa
 
 func integrate(ray: float3, sun: float3)->Transport
 {
-    return integrate_at(ray, sun, p.view.w, p.medium.z, p.size_steps.z);
+    return integrate_at(ray, sun, p.observer_height_km, p.segment_length_km, p.integration_steps);
 }
 func world_sun()->float3
 {
@@ -724,8 +763,8 @@ func world_sun()->float3
     var azimuth_cosine : float;
     var elevation_sine : float;
     var elevation_cosine : float;
-    sincos(p.sun.x, azimuth_sine, azimuth_cosine);
-    sincos(p.sun.y, elevation_sine, elevation_cosine);
+    sincos(p.sun_azimuth, azimuth_sine, azimuth_cosine);
+    sincos(p.sun_elevation, elevation_sine, elevation_cosine);
     return float3(azimuth_sine * elevation_cosine, elevation_sine,
                   azimuth_cosine * elevation_cosine);
 }
@@ -733,39 +772,39 @@ func world_sun()->float3
 [numthreads(8, 8, 1)]
 func build_sky(uint3 id: SV_DispatchThreadID)->void
 {
-    if (any(id.xy >= p.sky.xy))
+    if (any(id.xy >= uint2(p.sky_width, p.sky_height)))
     {
         return;
     }
-    let lower_rows = p.sky.z;
+    let lower_rows = p.lower_sky_rows;
     var chart = 0u;
     var start = 0u;
     var rows = lower_rows;
-    if (id.y >= p.sky.w)
+    if (id.y >= p.sky_rows)
     {
         chart = 2u;
-        start = p.sky.w;
-        rows = p.sky.y - p.sky.w;
+        start = p.sky_rows;
+        rows = p.sky_height - p.sky_rows;
     }
     else if (id.y >= lower_rows)
     {
         chart = 1u;
         start = lower_rows;
-        rows = p.sky.w - lower_rows;
+        rows = p.sky_rows - lower_rows;
     }
-    if (chart == 1u && p.view.w >= p.medium.x)
+    if (chart == 1u && p.observer_height_km >= p.atmosphere_height_km)
     {
         sky_write[int2(id.xy)] = float4(log(float3(1e-30)), 0.0);
         return;
     }
     let hit = chart == 2u;
-    let u = float(id.x) / float(p.sky.x - 1u);
+    let u = float(id.x) / float(p.sky_width - 1u);
     let square = u * u;
     let a = square * square;
     let cp = 1.0 - 2.0 * a;
 
     var mu = sky_mapping[12u + id.y].x;
-    let hor = horizon(p, p.view.w);
+    let hor = horizon(p, p.observer_height_km);
     if (hit)
     {
         mu = min(mu, hor - 1e-7);
@@ -776,12 +815,12 @@ func build_sky(uint3 id: SV_DispatchThreadID)->void
     }
     let r = sqrt(max(1.0 - mu * mu, 0.0));
     let ray = float3(r * 2.0 * sqrt(max(a * (1.0 - a), 0.0)), mu, r * cp);
-    let sun = float3(0.0, sin(p.sun.y), cos(p.sun.y));
+    let sun = float3(0.0, sin(p.sun_elevation), cos(p.sun_elevation));
     let result = integrate(ray, sun);
     var rgb = float3(0.0);
     for (var k = 0u; k < 4u; k++)
     {
-        rgb += result.light[k] * p.rgb[k].xyz;
+        rgb += result.light[k] * p.spectral_to_rec2020[k].xyz;
     }
     sky_write[int2(id.xy)] = float4(log(max(rgb, float3(1e-30))), 0.0);
 }
@@ -790,7 +829,7 @@ func build_sky(uint3 id: SV_DispatchThreadID)->void
 [numthreads(4, 4, 4)]
 func build_aerial(uint3 id: SV_DispatchThreadID)->void
 {
-    let dims : uint3 = dimensions(aerial_light);
+    let dims = dimensions(aerial_light);
     if (any(id >= dims))
         return;
     let uv : float2 = (float2(id.xy) + .5) / float2(dims.xy);
@@ -798,15 +837,15 @@ func build_aerial(uint3 id: SV_DispatchThreadID)->void
         : float3 =
               normalize(mul(aerial_view.matrix, float4(uv.x * 2. - 1., 1. - uv.y * 2., 0, 1)).xyz);
     let z : float = (float(id.z) + .5) / float(dims.z);
-    let result : Transport = integrate_core<true, false>(
-                     ray, world_sun(), p.view.w, aerial_view.settings.x * z * z, p.size_steps.z);
+    let result = integrate_core<true, false>(ray, world_sun(), p.observer_height_km,
+                                             aerial_view.settings.x * z * z, p.integration_steps);
     var light : float3 = 0;
     var clear : float3 = 0;
     var filtered : float3 = 0;
     for (var k: uint = 0; k < 4; k++)
     {
-        let solar_rgb = p.solar[k] * p.rgb[k].xyz;
-        light += result.light[k] * p.rgb[k].xyz;
+        let solar_rgb = p.solar_irradiance_spectrum[k] * p.spectral_to_rec2020[k].xyz;
+        light += result.light[k] * p.spectral_to_rec2020[k].xyz;
         clear += solar_rgb;
         filtered += result.transmittance[k] * solar_rgb;
     }

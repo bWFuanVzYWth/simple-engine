@@ -9,49 +9,49 @@ public struct InitialPacket
 {
     public var direct : InitialDirect;
     public var emission : float3;
-    public var emissionPdf : float;
+    public var emission_pdf : float;
     public var weight : float;
 
-    public static func inputHit(medium: float4, request: InitialRequest)->InitialPacket
+    public static func input_hit(medium: float4, request: InitialRequest)->InitialPacket
     {
         var p : InitialPacket = {};
-        p.direct.direction = request.previousPosition;
+        p.direct.direction = request.previous_position;
         p.direct.radiance = request.throughput;
         p.direct.reflected = medium.xyz;
         p.direct.pdf = request.weight;
-        p.direct.bsdfPdf = request.previousMisPdf;
-        p.direct.geometryFactor = medium.w;
-        p.direct.lightType = request.bounceSeed;
+        p.direct.bsdf_pdf = request.previous_mis_pdf;
+        p.direct.geometry_factor = medium.w;
+        p.direct.light_type = request.bounce_seed;
         p.weight = float(request.flags);
         return p;
     }
 
     public static func input(s: Surface, request: InitialRequest, attributes: uint4)->InitialPacket
     {
-        var p : InitialPacket = inputHit(s.incident, request);
-        p.direct.attenuatedRadiance = s.point.position;
+        var p : InitialPacket = input_hit(s.incident, request);
+        p.direct.attenuated_radiance = s.point.position;
         p.direct.hit.data = attributes;
         p.emission = s.wo;
-        p.emissionPdf = s.point.offset;
-        p.weight = float(request.flags | (uint(s.frontFacing) << 6u));
+        p.emission_pdf = s.point.offset;
+        p.weight = float(request.flags | (uint(s.front_facing) << 6u));
         return p;
     }
 
     public func request()->InitialRequest
     {
-        return { direct.lightType, uint(weight) & 63u, direct.direction,
-                 direct.radiance,  direct.pdf,         direct.bsdfPdf };
+        return { direct.light_type, uint(weight) & 63u, direct.direction,
+                 direct.radiance,   direct.pdf,         direct.bsdf_pdf };
     }
 
     public func surface(normal: float3, token: uint2)->Surface
     {
         var s : Surface = {};
-        s.incident = float4(direct.reflected, direct.geometryFactor);
-        s.point = { direct.attenuatedRadiance, normal, emissionPdf };
+        s.incident = float4(direct.reflected, direct.geometry_factor);
+        s.point = { direct.attenuated_radiance, normal, emission_pdf };
         s.wo = emission;
         s.identity = direct.hit.data;
         s.hit.data = uint4(token, s.identity.zw);
-        s.frontFacing = (uint(weight) & 64u) != 0;
+        s.front_facing = (uint(weight) & 64u) != 0;
         return s;
     }
 
@@ -60,7 +60,7 @@ public struct InitialPacket
     {
         direct = v.direct;
         emission = v.emission;
-        emissionPdf = v.emissionPdf;
+        emission_pdf = v.emission_pdf;
         weight = v.weight;
     }
 
@@ -69,7 +69,7 @@ public struct InitialPacket
         var v : InitialVertex = {};
         v.direct = direct;
         v.emission = emission;
-        v.emissionPdf = emissionPdf;
+        v.emission_pdf = emission_pdf;
         v.weight = weight;
         return v;
     }
@@ -120,8 +120,8 @@ public struct InitialSampleCall
         v.sample.weight = response;
         v.sample.medium = medium;
         v.sample.pdf = pdf;
-        v.sample.componentPdf = pdf;
-        v.sample.relativeEta = 1;
+        v.sample.component_pdf = pdf;
+        v.sample.relative_eta = 1;
         v.sample.delta = (flags & 1u) != 0;
         v.sample.transmission = (flags & 2u) != 0;
         return v;

@@ -28,7 +28,7 @@ public struct DenoiseGuides
 public func denoise_surface<Energy>(energy: Energy, material: SurfaceMaterial, normal: float3,
                                     view: float3, incident: float4)
     ->DenoiseGuides
-    where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where Energy : openpbr::IEnergyLut
 {
     let albedos : openpbr::DenoiseAlbedos = openpbr::denoise_albedos(
                       energy, material.pbr, normal, view, incident, material.transmitted);
@@ -41,13 +41,13 @@ public func denoise_surface<Energy>(energy: Energy, material: SurfaceMaterial, n
 }
 
 /// 相同辅助量的Flow专用入口；键由资源发布者证明，保留完整FP32方向能量。
-public func denoise_surface_flow<let Flow : uint, Energy>(energy: Energy, material: SurfaceMaterial,
+public func denoise_surface_flow<let flow : uint, Energy>(energy: Energy, material: SurfaceMaterial,
                                                           normal: float3, view: float3,
                                                           incident: float4)
     ->DenoiseGuides
-    where Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where Energy : openpbr::IEnergyLut
 {
-    let albedos : openpbr::DenoiseAlbedos = openpbr::denoise_albedos_flow<Flow>(
+    let albedos : openpbr::DenoiseAlbedos = openpbr::denoise_albedos_flow<flow>(
                       energy, material.pbr, normal, view, incident, material.transmitted);
     return { float4(dot(normal, view) < 0 ? -normal : normal, material.pbr.base_roughness.w),
              albedos.diffuse, albedos.specular };
@@ -79,7 +79,7 @@ public func denoise_motion(previous: DenoiseCamera, sample_uv: float2, target: f
                         geometry::camera_project_direction(previous, relative, extent);
     if (!projected.valid)
         return false;
-    let result : float2 = projected.pixel - sample_uv * float2(extent);
+    let result = projected.pixel - sample_uv * float2(extent);
     if (any(!isfinite(result)))
         return false;
     pixels = result;

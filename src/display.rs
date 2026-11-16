@@ -146,16 +146,13 @@ impl PrimeDrtSettings {
             (1.055 * headroom64.powf(1.0 / 2.4) - 0.055) as f32
         };
         Ok(PrimeDrtParameters {
-            values: [
-                self.exposure_multiplier,
-                curve_peak,
-                encoded_peak,
-                self.hue_compensation,
-                self.saturation_compensation,
-                self.compression_start,
-                0.0,
-                0.0,
-            ],
+            exposure_multiplier: self.exposure_multiplier,
+            curve_peak,
+            encoded_output_peak: encoded_peak,
+            hue_compensation: self.hue_compensation,
+            saturation_compensation: self.saturation_compensation,
+            compression_start: self.compression_start,
+            padding: [0.0; 2],
         })
     }
 }
@@ -169,7 +166,13 @@ impl Default for PrimeDrtSettings {
 /// 已推导且不借用设置的参数；没有图像或后端所有权。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrimeDrtParameters {
-    values: [f32; 8],
+    exposure_multiplier: f32,
+    curve_peak: f32,
+    encoded_output_peak: f32,
+    hue_compensation: f32,
+    saturation_compensation: f32,
+    compression_start: f32,
+    padding: [f32; 2],
 }
 
 impl PrimeDrtParameters {
@@ -180,7 +183,7 @@ impl PrimeDrtParameters {
         if !exposure_multiplier.is_finite() || exposure_multiplier <= 0.0 {
             return Err(Error::Exposure);
         }
-        self.values[0] = exposure_multiplier;
+        self.exposure_multiplier = exposure_multiplier;
         Ok(self)
     }
 
@@ -189,7 +192,16 @@ impl PrimeDrtParameters {
     /// 顺序为曝光倍率、曲线渐近峰值、sRGB 编码输出峰值、色相补偿、饱和补偿、压缩起点、
     /// 两个保留零。此方法只规定数组内容；Rust 类型本身不作为 GPU ABI 使用。
     pub const fn to_array(self) -> [f32; 8] {
-        self.values
+        [
+            self.exposure_multiplier,
+            self.curve_peak,
+            self.encoded_output_peak,
+            self.hue_compensation,
+            self.saturation_compensation,
+            self.compression_start,
+            self.padding[0],
+            self.padding[1],
+        ]
     }
 }
 

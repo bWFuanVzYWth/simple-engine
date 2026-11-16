@@ -9,10 +9,10 @@ pub enum ProducerError {
     #[error(transparent)]
     Spawn(#[from] std::io::Error),
     /// 前一任务尚未领取。
-    #[error("地形生产者尚有在途任务")]
+    #[error("CPU 生产者尚有在途任务")]
     Busy,
     /// 线程结束，正在处理的数据不再可用。
-    #[error("地形 CPU 生产线程已经退出")]
+    #[error("CPU 生产线程已经退出")]
     Stopped,
 }
 

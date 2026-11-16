@@ -32,11 +32,11 @@ func main(uint3 id: SV_DispatchThreadID)->void
     if (id.x >= count)
         return;
     let c : Case = inputs[id.x];
-    let m : PrimeFullOpenPbrMicrofacet = { float2(c.material.base_roughness.w *
-                                                  c.material.base_roughness.w) };
+    let m : openpbr::kernel::Microfacet = { float2(c.material.base_roughness.w *
+                                                   c.material.base_roughness.w) };
     outputs[5 * id.x] =
-        float4(c.u.w == 0 ? primeFullOpenPbrMicrofacetG2t(m, c.view.xyz, c.u.xyz) : 0,
-               primeFullOpenPbrReflectionFactor(m, c.view.xyz, c.u.xyz), 0, 0);
+        float4(c.u.w == 0 ? openpbr::kernel::ggx_transmission_masking(m, c.view.xyz, c.u.xyz) : 0,
+               openpbr::kernel::reflection_factor(m, c.view.xyz, c.u.xyz), 0, 0);
     outputs[5 * id.x + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
 }
 
@@ -50,12 +50,12 @@ func math_main(uint3 id: SV_DispatchThreadID)->void
     if (id.x >= count)
         return;
     let c = inputs[id.x];
-    let m = PrimeFullOpenPbrMicrofacet(
+    let m = openpbr::kernel::Microfacet(
         float2(c.material.base_roughness.w * c.material.base_roughness.w));
-    let distribution = primeFullOpenPbrMicrofacetD<true>(m, c.u.xyz);
-    outputs[5 * id.x] =
-        float4(distribution, primeFullOpenPbrReflectionPdf(m, c.view.xyz, true, distribution),
-               primeFullOpenPbrDielectricUnpolarized(c.incident.x / c.transmitted.x, c.view.z), 0);
+    let distribution = openpbr::kernel::ggx_distribution<true>(m, c.u.xyz);
+    outputs[5 * id.x] = float4(
+        distribution, openpbr::kernel::ggx_reflection_pdf(m, c.view.xyz, true, distribution),
+        openpbr::kernel::dielectric_reflectance(c.incident.x / c.transmitted.x, c.view.z), 0);
     outputs[5 * id.x + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
 }
 
@@ -70,21 +70,19 @@ func purpose_main(uint3 id: SV_DispatchThreadID)->void
         return;
     let c = inputs[id.x];
     let roughness = c.material.base_roughness.w;
-    let m = PrimeFullOpenPbrMicrofacet(float2(roughness * roughness));
+    let m = openpbr::kernel::Microfacet(float2(roughness * roughness));
     let energy = openpbr::Energy(energy_texture, energy_sampler);
     let ior = c.incident.x / c.transmitted.x;
-    outputs[5 * id.x] =
-        float4(primeFullOpenPbrMicrofacetDielectricMsCompensation(energy, m, c.view.z, ior), 0);
-    outputs[5 * id.x + 1] =
-        float4(primeFullOpenPbrMicrofacetDielectricMsCompensation<false, true, true, true>(
-                   energy, m, c.view.z, ior, roughness),
-               0);
-    let smooth = PrimeFullOpenPbrMicrofacet(float2(0));
-    outputs[5 * id.x + 3] = float4(
-        primeFullOpenPbrMicrofacetDielectricMsCompensation<true>(energy, smooth, c.view.z, ior).z,
-        primeFullOpenPbrMicrofacetDielectricMsCompensation<true, false, false, true>(
-            energy, smooth, c.view.z, ior, roughness)
-            .z,
-        0, 0);
+    outputs[5 * id.x] = float4(openpbr::kernel::dielectric_energy(energy, m, c.view.z, ior), 0);
+    outputs[5 * id.x + 1] = float4(openpbr::kernel::dielectric_energy<false, true, true, true>(
+                                       energy, m, c.view.z, ior, roughness),
+                                   0);
+    let smooth = openpbr::kernel::Microfacet(float2(0));
+    outputs[5 * id.x + 3] =
+        float4(openpbr::kernel::dielectric_energy<true>(energy, smooth, c.view.z, ior).z,
+               openpbr::kernel::dielectric_energy<true, false, false, true>(
+                   energy, smooth, c.view.z, ior, roughness)
+                   .z,
+               0, 0);
     outputs[5 * id.x + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
 }

@@ -8,26 +8,26 @@
 module specialized;
 
 import bsdf.openpbr.api;
-import "bsdf/openpbr/pt.slang";
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/opaque/state.slang";
-import "bsdf/openpbr/opaque/lobes.slang";
-import "bsdf/openpbr/opaque/evaluate.slang";
-import "bsdf/openpbr/opaque/discrete.slang";
-import "bsdf/openpbr/dielectric/contract.slang";
-import "bsdf/openpbr/dielectric/state.slang";
-import "bsdf/openpbr/dielectric/evaluate.slang";
-import "bsdf/openpbr/dielectric/refract.slang";
-import "bsdf/openpbr/math/frame.slang";
-import "bsdf/openpbr/math/microfacet_energy.slang";
-import "bsdf/openpbr/math/fresnel.slang";
-import "bsdf/openpbr/math/delta.slang";
-import "bsdf/openpbr/math/spectrum.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/service/contract/sample.slang";
-import "bsdf/openpbr/service/support/conversion.slang";
-import "bsdf/openpbr/service/support/sanitization.slang";
+import bsdf.openpbr.pt;
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.opaque.state;
+import bsdf.openpbr.opaque.lobes;
+import bsdf.openpbr.opaque.evaluate;
+import bsdf.openpbr.opaque.discrete;
+import bsdf.openpbr.dielectric.contract;
+import bsdf.openpbr.dielectric.state;
+import bsdf.openpbr.dielectric.evaluate;
+import bsdf.openpbr.dielectric.refract;
+import bsdf.openpbr.math.frame;
+import bsdf.openpbr.math.microfacet_energy;
+import bsdf.openpbr.math.fresnel;
+import bsdf.openpbr.math.delta;
+import bsdf.openpbr.math.spectrum;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.service.contract.sample;
+import bsdf.openpbr.service.support.conversion;
+import bsdf.openpbr.service.support.sanitization;
 
 namespace openpbr
 {
@@ -59,487 +59,469 @@ public static const let CAP_DELTA_SOLID_DIELECTRIC = 6u;
 /// 纯 delta thin：须满足 api.is_discrete_only 的缩放／clamp 阈值；保留薄片吸收，不更新 medium。
 public static const let CAP_DELTA_THIN_DIELECTRIC = 7u;
 
-internal func require_capability<let Capability : uint>()->void
+internal func require_capability<let capability : uint>()->void
 {
-    static_assert(Capability <= CAP_DELTA_THIN_DIELECTRIC, "unknown OpenPBR capability");
+    static_assert(capability <= CAP_DELTA_THIN_DIELECTRIC, "unknown OpenPBR capability");
 }
 
-internal func specialized_dielectric<let Capability : uint>()->bool
+internal func specialized_dielectric<let capability : uint>()->bool
 {
-    return Capability == CAP_SOLID_DIELECTRIC || Capability == CAP_THIN_DIELECTRIC ||
-           Capability == CAP_DELTA_SOLID_DIELECTRIC || Capability == CAP_DELTA_THIN_DIELECTRIC;
+    return capability == CAP_SOLID_DIELECTRIC || capability == CAP_THIN_DIELECTRIC ||
+           capability == CAP_DELTA_SOLID_DIELECTRIC || capability == CAP_DELTA_THIN_DIELECTRIC;
 }
 
-internal func specialized_thin<let Capability : uint>()->bool
+internal func specialized_thin<let capability : uint>()->bool
 {
-    return Capability == CAP_THIN_DIELECTRIC || Capability == CAP_DELTA_THIN_DIELECTRIC;
+    return capability == CAP_THIN_DIELECTRIC || capability == CAP_DELTA_THIN_DIELECTRIC;
 }
 
-public func specialized_frame<let Capability : uint>(normal: float3, view: float3, incident: float4,
+public func specialized_frame<let capability : uint>(normal: float3, view: float3, incident: float4,
                                                      transmitted: float4)
-    ->PrimeFullOpenPbrOnb
+    ->kernel::Frame
 {
     var normal = normal;
     normal = dot(normal, view) < 0.0 ? -normal : normal;
-    var onb : PrimeFullOpenPbrOnb = primeFullOpenPbrOnbFromNormal(normal);
-    if (specialized_dielectric<Capability>())
+    var frame : kernel::Frame = kernel::frame_from_normal(normal);
+    if (specialized_dielectric<capability>())
     {
-        let exiting : bool = !specialized_thin<Capability>() && incident.x > transmitted.x;
-        if ((dot(onb.normal, view) >= 0.0) == exiting)
+        let exiting : bool = !specialized_thin<capability>() && incident.x > transmitted.x;
+        if ((dot(frame.normal, view) >= 0.0) == exiting)
         {
-            onb.normal = -onb.normal;
-            onb.bitangent = -onb.bitangent;
+            frame.normal = -frame.normal;
+            frame.bitangent = -frame.bitangent;
         }
     }
-    return onb;
+    return frame;
 }
 
-internal func specialized_ior<let Capability : uint>(incident: float4, transmitted: float4)->float
+internal func specialized_ior<let capability : uint>(incident: float4, transmitted: float4)->float
 {
-    let exiting : bool = !specialized_thin<Capability>() && incident.x > transmitted.x;
+    let exiting : bool = !specialized_thin<capability>() && incident.x > transmitted.x;
     return (exiting ? incident.x : transmitted.x) / (exiting ? transmitted.x : incident.x);
 }
 
-public func specialized_opaque<let Capability : uint, let Continuous : bool, Provider>(
-    energy: Provider, material: Material, wi: float3, incident: float4)
-    ->PrimeFullCompactOpaqueState
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+public func specialized_opaque<let capability : uint, let continuous : bool, EnergyLut>(
+    energy: EnergyLut, material: Material, wi: float3, incident: float4)
+    ->kernel::OpaqueState
+    where EnergyLut : IEnergyLut
 {
     // 编译期端点直接进入原状态构造，未经过 fractional-metal 通用分支。
-    return primeFullPtOpaqueStateImpl<Continuous>(
+    return kernel::opaque_state_impl<continuous>(
         energy, material.base_roughness.xyz, material.base_roughness.w,
         material.surface.x / incident.x,
-        Capability == CAP_OPAQUE_SUBSURFACE ? material.surface.z : 0.0, Capability == CAP_CONDUCTOR,
+        capability == CAP_OPAQUE_SUBSURFACE ? material.surface.z : 0.0, capability == CAP_CONDUCTOR,
         saturate(material.base_roughness.xyz), float3(1.0), wi);
 }
 
-internal func specialized_transmission<let Capability : uint, Provider>(
-    energy: Provider, material: Material, wi: float3, incident: float4, transmitted: float4)
-    ->PrimeFullCompactTransmissionState
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+internal func specialized_transmission<let capability : uint, EnergyLut>(
+    energy: EnergyLut, material: Material, wi: float3, incident: float4, transmitted: float4)
+    ->kernel::TransmissionState
+    where EnergyLut : IEnergyLut
 {
-    return primeFullPtTransmissionState(
-        energy, material.base_roughness.w, specialized_ior<Capability>(incident, transmitted),
-        specialized_thin<Capability>(), transmitted.yzw * material.surface.w, wi);
+    return kernel::transmission_state(
+        energy, material.base_roughness.w, specialized_ior<capability>(incident, transmitted),
+        specialized_thin<capability>(), transmitted.yzw * material.surface.w, wi);
 }
 
-public func specialized_opaque_evaluate<let Capability : uint, let Continuous : bool>(
-    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState)
-    ->PrimeFullCompactOpaqueEvaluation
+public func specialized_opaque_evaluate<let capability : uint, let continuous : bool>(
+    wi: float3, wo: float3, state: kernel::OpaqueState)
+    ->kernel::LocalEvaluation
 {
-    if (Capability == CAP_CONDUCTOR)
-        return primeFullCompactConductorEvaluateImpl<Continuous>(wi, wo, state,
-                                                                 PRIME_FULL_OPENPBR_FLAG_ALL);
-    return primeFullCompactOpaqueLayerEvaluateImpl<Continuous>(wi, wo, state);
+    if (capability == CAP_CONDUCTOR)
+        return kernel::conductor_evaluate_impl<continuous>(wi, wo, state, kernel::LOBE_ALL);
+    return kernel::opaque_layer_evaluate_impl<continuous>(wi, wo, state);
 }
 
-public func specialized_opaque_sample<let Capability : uint, let Continuous : bool>(
-    wi: float3, u: float3, state: PrimeFullCompactOpaqueState)
-    ->PrimeFullOpenPbrSample
+public func specialized_opaque_sample<let capability : uint, let continuous : bool>(
+    wi: float3, u: float3, state: kernel::OpaqueState)
+    ->kernel::Proposal
 {
-    if (Capability == CAP_CONDUCTOR)
-        return primeFullCompactConductorSampleImpl<Continuous>(wi, u, state,
-                                                               PRIME_FULL_OPENPBR_FLAG_ALL);
-    var sampled : PrimeFullOpenPbrSample =
-                      primeFullCompactOpaqueLayerSampleImpl<Continuous>(wi, u, state, false);
-    if (primeFullOpenPbrHasSample(sampled) &&
-        (Continuous || !primeFullOpenPbrIsDelta(sampled.throughput.flags)))
+    if (capability == CAP_CONDUCTOR)
+        return kernel::conductor_sample_impl<continuous>(wi, u, state, kernel::LOBE_ALL);
+    var sampled : kernel::Proposal =
+                      kernel::opaque_layer_sample_impl<continuous>(wi, u, state, false);
+    if (kernel::has_sample(sampled) && (continuous || !kernel::is_delta(sampled.response.flags)))
     {
         let evaluated
-            : PrimeFullCompactOpaqueEvaluation =
-                  specialized_opaque_evaluate<Capability, Continuous>(wi, sampled.wo, state);
-        sampled.throughput.value = evaluated.throughput.value;
+            : kernel::LocalEvaluation =
+                  specialized_opaque_evaluate<capability, continuous>(wi, sampled.wo, state);
+        sampled.response.value = evaluated.response.value;
         sampled.pdf = evaluated.pdf;
     }
     return sampled;
 }
 
-internal func specialized_delta<let Capability : uint>(material: Material, wi: float3, u: float3,
+internal func specialized_delta<let capability : uint>(material: Material, wi: float3, u: float3,
                                                        incident: float4, transmitted: float4)
-    ->PrimeFullOpenPbrSample
+    ->kernel::Proposal
 {
-    if (Capability == CAP_DELTA_CONDUCTOR)
+    if (capability == CAP_DELTA_CONDUCTOR)
     {
-        var state : PrimeFullCompactOpaqueDiscreteState = {};
-        state.conductorFresnel.f0 = saturate(material.base_roughness.xyz);
-        state.conductorFresnel.f82 = float3(1.0);
-        state.conductorFresnel.f90 = float3(1.0);
-        state.conductorFresnel.weight = 1.0;
-        state.conductorFresnel.energyF0 = saturate(material.base_roughness.xyz);
-        return primeFullCompactConductorDiscreteSample(wi, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+        var state : kernel::OpaqueDiscreteState = {};
+        state.conductor_fresnel.f0 = saturate(material.base_roughness.xyz);
+        state.conductor_fresnel.f82 = float3(1.0);
+        state.conductor_fresnel.f90 = float3(1.0);
+        state.conductor_fresnel.weight = 1.0;
+        state.conductor_fresnel.energy_f0 = saturate(material.base_roughness.xyz);
+        return kernel::conductor_discrete_sample(wi, state, kernel::LOBE_ALL);
     }
-    var fresnel : PrimeFullOpenPbrSpecularFresnel;
-    fresnel.ior = specialized_ior<Capability>(incident, transmitted);
-    fresnel.energyIor = primeFullOpenPbrIorAdjustment(fresnel.ior, 1.0);
+    var fresnel : kernel::SpecularFresnel;
+    fresnel.ior = specialized_ior<capability>(incident, transmitted);
+    fresnel.energy_ior = kernel::ior_adjustment(fresnel.ior, 1.0);
     fresnel.color = float3(1.0);
-    if (Capability == CAP_DELTA_THIN_DIELECTRIC)
-        return primeFullThinWallDeltaSample(wi, u.z, fresnel, float3(1.0),
-                                            transmitted.yzw * material.surface.w,
-                                            PRIME_FULL_OPENPBR_FLAG_ALL);
-    return primeFullRefractiveDeltaSample(wi, u.z, fresnel, PRIME_FULL_OPENPBR_FLAG_ALL);
+    if (capability == CAP_DELTA_THIN_DIELECTRIC)
+        return kernel::thin_wall_delta_sample(
+            wi, u.z, fresnel, float3(1.0), transmitted.yzw * material.surface.w, kernel::LOBE_ALL);
+    return kernel::refractive_delta_sample(wi, u.z, fresnel, kernel::LOBE_ALL);
 }
 
 /// 转换窄核输出；UnitEta／KnownEvents 是调用方对成功 proposal 的额外证明，零旗标表示未知。
-public func specialized_result<let Capability : uint, let Continuous : bool,
-                               let UnitEta : bool = false, let KnownEvents : uint = 0>(
-    sampled: PrimeFullOpenPbrSample, onb: PrimeFullOpenPbrOnb, view: float3, incident: float4,
+public func specialized_result<let capability : uint, let continuous : bool,
+                               let unit_eta : bool = false, let known_events : uint = 0>(
+    sampled: kernel::Proposal, frame: kernel::Frame, view: float3, incident: float4,
     transmitted: float4)
     ->Sample
 {
     var result : Sample = {};
     result.relative_eta = 1.0;
     result.medium = incident;
-    if (!primeFullOpenPbrHasSample(sampled))
+    if (!kernel::has_sample(sampled))
         return result;
-    var checked : BsdfSample = primeInvalidBsdfSample();
-    checked.direction = primeFullOpenPbrOnbToWorld(onb, sampled.wo);
-    if (!Continuous && (sampled.throughput.flags & PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION) != 0u)
-        checked.direction = normalize(reflect(-view, onb.normal));
-    checked.response = sampled.throughput.value;
+    var checked : kernel::SurfaceSample = kernel::invalid_surface_sample();
+    checked.direction = kernel::to_world(frame, sampled.wo);
+    if (!continuous && (sampled.response.flags & kernel::LOBE_DELTA_REFLECTION) != 0u)
+        checked.direction = normalize(reflect(-view, frame.normal));
+    checked.response = sampled.response.value;
     checked.pdf = sampled.pdf;
-    checked.relativeEta = sampled.eta;
-    if (KnownEvents != 0u)
-        checked.eventFlags = KnownEvents;
-    else if (Continuous)
+    checked.relative_eta = sampled.eta;
+    if (known_events != 0u)
+        checked.event_flags = known_events;
+    else if (continuous)
     {
-        if (Capability == CAP_SOLID_DIELECTRIC)
-            checked.eventFlags =
-                PRIME_BSDF_EVENT_GLOSSY |
-                (sampled.throughput.flags == PRIME_FULL_OPENPBR_FLAG_SPECULAR_TRANSMISSION
-                     ? PRIME_BSDF_EVENT_TRANSMISSION
-                     : PRIME_BSDF_EVENT_REFLECTION);
-        else if (Capability == CAP_CONDUCTOR)
-            checked.eventFlags = PRIME_BSDF_EVENT_GLOSSY | PRIME_BSDF_EVENT_REFLECTION;
+        if (capability == CAP_SOLID_DIELECTRIC)
+            checked.event_flags =
+                kernel::EVENT_GLOSSY | (sampled.response.flags == kernel::LOBE_SPECULAR_TRANSMISSION
+                                            ? kernel::EVENT_TRANSMISSION
+                                            : kernel::EVENT_REFLECTION);
+        else if (capability == CAP_CONDUCTOR)
+            checked.event_flags = kernel::EVENT_GLOSSY | kernel::EVENT_REFLECTION;
         else
-            checked.eventFlags =
-                primeFullOpenPbrToBsdfContinuousEventFlags(sampled.throughput.flags);
+            checked.event_flags = kernel::to_bsdf_continuous_event_flags(sampled.response.flags);
     }
     else
-        checked.eventFlags = primeFullOpenPbrToBsdfEventFlags(sampled.throughput.flags);
-    if (Continuous)
-        checked = primeSanitizeBsdfSampleWithEvents < UnitEta ||
-                  (Capability != CAP_SOLID_DIELECTRIC && Capability != CAP_DELTA_SOLID_DIELECTRIC) >
+        checked.event_flags = kernel::to_bsdf_event_flags(sampled.response.flags);
+    if (continuous)
+        checked = kernel::sanitize_surface_sample_with_events < unit_eta ||
+                  (capability != CAP_SOLID_DIELECTRIC && capability != CAP_DELTA_SOLID_DIELECTRIC) >
                       (checked);
     else
-        checked = primeSanitizeBsdfSample < UnitEta ||
-                  (Capability != CAP_SOLID_DIELECTRIC && Capability != CAP_DELTA_SOLID_DIELECTRIC) >
+        checked = kernel::sanitize_surface_sample < unit_eta ||
+                  (capability != CAP_SOLID_DIELECTRIC && capability != CAP_DELTA_SOLID_DIELECTRIC) >
                       (checked);
     result.direction = checked.direction;
     result.response = checked.response;
     result.pdf = checked.pdf;
-    result.relative_eta = checked.relativeEta;
-    result.events = checked.eventFlags;
-    if (specialized_dielectric<Capability>() && !specialized_thin<Capability>() &&
+    result.relative_eta = checked.relative_eta;
+    result.events = checked.event_flags;
+    if (specialized_dielectric<capability>() && !specialized_thin<capability>() &&
         (result.events & TRANSMISSION) != 0u)
         result.medium = transmitted;
     return result;
 }
 
-/// Nonzero=true 保证 throughput flags 非零；数值 sanitize 仍保留。
-public func specialized_evaluation<let Nonzero : bool = false>(response: PrimeFullOpenPbrThroughput,
+/// Nonzero=true 保证 response flags 非零；数值 sanitize 仍保留。
+public func specialized_evaluation<let nonzero : bool = false>(response: kernel::Response,
                                                                pdf: float)
     ->Evaluation
 {
-    var checked : BsdfEvaluation = primeInvalidBsdfEvaluation();
-    if (Nonzero)
+    var checked : kernel::SurfaceEvaluation = kernel::invalid_surface_evaluation();
+    if (nonzero)
     {
         checked.response = response.value;
         checked.pdf = pdf;
     }
-    else if (response.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
+    else if (response.flags != kernel::LOBE_NONE)
     {
         checked.response = response.value;
         checked.pdf = pdf;
     }
-    checked = primeSanitizeBsdfEvaluation(checked);
+    checked = kernel::sanitize_surface_evaluation(checked);
     return { checked.response, checked.pdf };
 }
 
-internal func specialized_evaluate_prepared<let Capability : uint>(
-    wi: float3, wo: float3, state: PrimeFullCompactOpaqueState)
+internal func specialized_evaluate_prepared<let capability : uint>(wi: float3, wo: float3,
+                                                                   state: kernel::OpaqueState)
     ->Evaluation
 {
-    if (wo.z < 0.0 && (Capability == CAP_OPAQUE_DIELECTRIC || Capability == CAP_CONDUCTOR))
+    if (wo.z < 0.0 && (capability == CAP_OPAQUE_DIELECTRIC || capability == CAP_CONDUCTOR))
         return { float3(0.0), 0.0 };
-    let evaluated : PrimeFullCompactOpaqueEvaluation =
-                        specialized_opaque_evaluate<Capability, false>(wi, wo, state);
-    return specialized_evaluation(evaluated.throughput, evaluated.pdf);
+    let evaluated : kernel::LocalEvaluation =
+                        specialized_opaque_evaluate<capability, false>(wi, wo, state);
+    return specialized_evaluation(evaluated.response, evaluated.pdf);
 }
 
-internal func specialized_evaluate_prepared<let Capability : uint>(
-    wi: float3, wo: float3, state: PrimeFullCompactTransmissionState)
+internal func specialized_evaluate_prepared<let capability : uint>(wi: float3, wo: float3,
+                                                                   state: kernel::TransmissionState)
     ->Evaluation
 {
-    let evaluated
-        : PrimeFullCompactTransmissionEvaluation =
-              primeFullCompactTransmissionEvaluate(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
-    return specialized_evaluation(evaluated.throughput, evaluated.pdf);
+    let evaluated : kernel::TransmissionEvaluation =
+                        kernel::transmission_evaluate(wi, wo, state, kernel::LOBE_ALL);
+    return specialized_evaluation(evaluated.response, evaluated.pdf);
 }
 
-internal func specialized_sample_prepared<let Capability : uint>(wi: float3, u: float3,
-                                                                 state: PrimeFullCompactOpaqueState)
-    ->PrimeFullOpenPbrSample
+internal func specialized_sample_prepared<let capability : uint>(wi: float3, u: float3,
+                                                                 state: kernel::OpaqueState)
+    ->kernel::Proposal
 {
-    return specialized_opaque_sample<Capability, false>(wi, u, state);
+    return specialized_opaque_sample<capability, false>(wi, u, state);
 }
 
-internal func specialized_sample_prepared<let Capability : uint>(
-    wi: float3, u: float3, state: PrimeFullCompactTransmissionState)
-    ->PrimeFullOpenPbrSample
+internal func specialized_sample_prepared<let capability : uint>(wi: float3, u: float3,
+                                                                 state: kernel::TransmissionState)
+    ->kernel::Proposal
 {
-    return primeFullCompactTransmissionSampleRaw(
-        wi, u, primeFullCompactTransmissionClosureState(state), PRIME_FULL_OPENPBR_FLAG_ALL);
+    return kernel::transmission_sample_raw(wi, u, kernel::transmission_closure_state(state),
+                                           kernel::LOBE_ALL);
 }
 
 /// 编译期类别的连续支持域；纯 delta 恒 false，其他类别保持保守拒绝语义。
-/// Capability 必须是本模块八个 CAP_* 常量之一，未知值导致编译错误；Material 须匹配该类别。
-public func may_evaluate_specialized<let Capability : uint>(material: Material, normal: float3,
+/// capability 必须是本模块八个 CAP_* 常量之一，未知值导致编译错误；Material 须匹配该类别。
+public func may_evaluate_specialized<let capability : uint>(material: Material, normal: float3,
                                                             view: float3, direction: float3,
                                                             incident: float4, transmitted: float4)
     ->bool
 {
-    require_capability<Capability>();
-    if (Capability >= CAP_DELTA_CONDUCTOR)
+    require_capability<capability>();
+    if (capability >= CAP_DELTA_CONDUCTOR)
         return false;
-    if (Capability == CAP_OPAQUE_SUBSURFACE || specialized_dielectric<Capability>())
+    if (capability == CAP_OPAQUE_SUBSURFACE || specialized_dielectric<capability>())
         return true;
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    return !(dot(onb.normal, direction) < 0.0);
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    return !(dot(frame.normal, direction) < 0.0);
 }
 
 /// 与 evaluate 相同的连续响应／marginal PDF，按编译期类别裁剪其他闭包。
 /// 纯 delta 恒返回零且不消费 energy；非 delta 类别仍保留合法的光滑／IOR 相等边界。
-/// 例如 evaluate_specialized<CAP_SOLID_DIELECTRIC>(energy, material, ...)，Provider 由实参推断。
-public func evaluate_specialized<let Capability : uint, Provider>(
-    energy: Provider, material: Material, normal: float3, view: float3, direction: float3,
+/// 例如 evaluate_specialized<CAP_SOLID_DIELECTRIC>(energy, material, ...)，EnergyLut 由实参推断。
+public func evaluate_specialized<let capability : uint, EnergyLut>(
+    energy: EnergyLut, material: Material, normal: float3, view: float3, direction: float3,
     incident: float4, transmitted: float4)
     ->Evaluation
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    require_capability<Capability>();
-    if (Capability >= CAP_DELTA_CONDUCTOR)
+    require_capability<capability>();
+    if (capability >= CAP_DELTA_CONDUCTOR)
         return { float3(0.0), 0.0 };
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    let wo : float3 = primeFullOpenPbrOnbToLocal(onb, direction);
-    if (wo.z < 0.0 && (Capability == CAP_OPAQUE_DIELECTRIC || Capability == CAP_CONDUCTOR))
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    let wo : float3 = kernel::to_local(frame, direction);
+    if (wo.z < 0.0 && (capability == CAP_OPAQUE_DIELECTRIC || capability == CAP_CONDUCTOR))
         return { float3(0.0), 0.0 };
-    if (specialized_dielectric<Capability>())
+    if (specialized_dielectric<capability>())
     {
         let state
-            : PrimeFullCompactTransmissionState =
-                  specialized_transmission<Capability>(energy, material, wi, incident, transmitted);
-        return specialized_evaluate_prepared<Capability>(wi, wo, state);
+            : kernel::TransmissionState =
+                  specialized_transmission<capability>(energy, material, wi, incident, transmitted);
+        return specialized_evaluate_prepared<capability>(wi, wo, state);
     }
-    return specialized_evaluate_prepared<Capability>(
-        wi, wo, specialized_opaque<Capability, false>(energy, material, wi, incident));
+    return specialized_evaluate_prepared<capability>(
+        wi, wo, specialized_opaque<capability, false>(energy, material, wi, incident));
 }
 
-/// 已分类 opaque 的连续响应与完整 marginal PDF；Capability 仅接受0、1、2。
+/// 已分类 opaque 的连续响应与完整 marginal PDF；capability 仅接受0、1、2。
 /// 材料须满足对应 CAP_OPAQUE_DIELECTRIC／CAP_OPAQUE_SUBSURFACE／CAP_CONDUCTOR，
 /// 调用方另外保证 float32 roughness²>=1e-4；IOR 相等仍合法，不检查或回退光滑边界。
 /// 保留 diffuse／薄层 SSS、Fresnel、能量补偿和无效方向；通用入口仍支持光滑材料。
-public func evaluate_opaque_continuous<let Capability : uint, Provider>(
-    energy: Provider, material: Material, normal: float3, view: float3, direction: float3,
+public func evaluate_opaque_continuous<let capability : uint, EnergyLut>(
+    energy: EnergyLut, material: Material, normal: float3, view: float3, direction: float3,
     incident: float4, transmitted: float4)
     ->Evaluation
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    static_assert(Capability <= CAP_CONDUCTOR, "continuous opaque capability must be 0, 1 or 2");
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    let wo : float3 = primeFullOpenPbrOnbToLocal(onb, direction);
-    if (wo.z < 0.0 && Capability != CAP_OPAQUE_SUBSURFACE)
+    static_assert(capability <= CAP_CONDUCTOR, "continuous opaque capability must be 0, 1 or 2");
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    let wo : float3 = kernel::to_local(frame, direction);
+    if (wo.z < 0.0 && capability != CAP_OPAQUE_SUBSURFACE)
         return { float3(0.0), 0.0 };
-    let state : PrimeFullCompactOpaqueState =
-                    specialized_opaque<Capability, true>(energy, material, wi, incident);
-    let evaluated : PrimeFullCompactOpaqueEvaluation =
-                        specialized_opaque_evaluate<Capability, true>(wi, wo, state);
-    return specialized_evaluation(evaluated.throughput, evaluated.pdf);
+    let state : kernel::OpaqueState =
+                    specialized_opaque<capability, true>(energy, material, wi, incident);
+    let evaluated : kernel::LocalEvaluation =
+                        specialized_opaque_evaluate<capability, true>(wi, wo, state);
+    return specialized_evaluation(evaluated.response, evaluated.pdf);
 }
 
 /// evaluate_opaque_continuous 同一前置条件下的采样；保留原方向／随机映射和完整 marginal PDF。
 /// diffuse、SSS 透射及 glossy 标签分别保留，不产生 delta；无效 proposal 与 sanitize 契约不变。
-public func sample_opaque_continuous<let Capability : uint, Provider>(energy: Provider,
-                                                                      material: Material,
-                                                                      normal: float3, view: float3,
-                                                                      u: float3, incident: float4,
-                                                                      transmitted: float4)
+public func sample_opaque_continuous<let capability : uint, EnergyLut>(energy: EnergyLut,
+                                                                       material: Material,
+                                                                       normal: float3, view: float3,
+                                                                       u: float3, incident: float4,
+                                                                       transmitted: float4)
     ->Sample
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    static_assert(Capability <= CAP_CONDUCTOR, "continuous opaque capability must be 0, 1 or 2");
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    let state : PrimeFullCompactOpaqueState =
-                    specialized_opaque<Capability, true>(energy, material, wi, incident);
-    let sampled : PrimeFullOpenPbrSample =
-                      specialized_opaque_sample<Capability, true>(wi, u, state);
-    return specialized_result<Capability, true>(sampled, onb, view, incident, transmitted);
+    static_assert(capability <= CAP_CONDUCTOR, "continuous opaque capability must be 0, 1 or 2");
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    let state : kernel::OpaqueState =
+                    specialized_opaque<capability, true>(energy, material, wi, incident);
+    let sampled : kernel::Proposal = specialized_opaque_sample<capability, true>(wi, u, state);
+    return specialized_result<capability, true>(sampled, frame, view, incident, transmitted);
 }
 
 /// 连续 solid 的完整响应／marginal PDF；Material 必须满足 CAP_SOLID_DIELECTRIC。
 /// 调用方另外保证 float32 roughness²>=1e-4，且 specialized_ior 的实际除法结果不等于1；
 /// 只比较输入 IOR 不相等不足以代替该保证。不检查、修复或回退光滑／匹配边界。
 /// 保留原能量补偿、局部无效方向及数值契约；通用 evaluate_specialized 不受此限制。
-public func evaluate_solid_continuous<Provider>(energy: Provider, material: Material,
-                                                normal: float3, view: float3, direction: float3,
-                                                incident: float4, transmitted: float4)
+public func evaluate_solid_continuous<EnergyLut>(energy: EnergyLut, material: Material,
+                                                 normal: float3, view: float3, direction: float3,
+                                                 incident: float4, transmitted: float4)
     ->Evaluation
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<CAP_SOLID_DIELECTRIC>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    let wo : float3 = primeFullOpenPbrOnbToLocal(onb, direction);
-    let state : PrimeFullCompactTransmissionState = specialized_transmission<CAP_SOLID_DIELECTRIC>(
+    let frame : kernel::Frame =
+                    specialized_frame<CAP_SOLID_DIELECTRIC>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    let wo : float3 = kernel::to_local(frame, direction);
+    let state : kernel::TransmissionState = specialized_transmission<CAP_SOLID_DIELECTRIC>(
                     energy, material, wi, incident, transmitted);
-    let evaluated : PrimeFullCompactTransmissionEvaluation =
-                        primeFullCompactTransmissionEvaluateSolidContinuous(
-                            wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
-    return specialized_evaluation(evaluated.throughput, evaluated.pdf);
+    let evaluated
+        : kernel::TransmissionEvaluation =
+              kernel::transmission_evaluate_solid_continuous(wi, wo, state, kernel::LOBE_ALL);
+    return specialized_evaluation(evaluated.response, evaluated.pdf);
 }
 
 /// evaluate_solid_continuous 同一前置条件下的连续 solid 采样；不产生离散事件。
 /// 方向、随机映射、完整 PDF、微面 TIR、能量补偿、eta／medium 及无效 proposal 与
 /// sample_specialized<CAP_SOLID_DIELECTRIC> 相同；沿路径段 Beer 仍由调用方消费。
-public func sample_solid_continuous<Provider>(energy: Provider, material: Material, normal: float3,
-                                              view: float3, u: float3, incident: float4,
-                                              transmitted: float4)
+public func sample_solid_continuous<EnergyLut>(energy: EnergyLut, material: Material,
+                                               normal: float3, view: float3, u: float3,
+                                               incident: float4, transmitted: float4)
     ->Sample
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<CAP_SOLID_DIELECTRIC>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    let state : PrimeFullCompactTransmissionState = specialized_transmission<CAP_SOLID_DIELECTRIC>(
+    let frame : kernel::Frame =
+                    specialized_frame<CAP_SOLID_DIELECTRIC>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    let state : kernel::TransmissionState = specialized_transmission<CAP_SOLID_DIELECTRIC>(
                     energy, material, wi, incident, transmitted);
-    let sampled
-        : PrimeFullOpenPbrSample = primeFullCompactTransmissionSampleRawSolidContinuous(
-              wi, u, primeFullCompactTransmissionClosureState(state), PRIME_FULL_OPENPBR_FLAG_ALL);
-    return specialized_result<CAP_SOLID_DIELECTRIC, true>(sampled, onb, view, incident,
+    let sampled : kernel::Proposal = kernel::transmission_sample_raw_solid_continuous(
+                      wi, u, kernel::transmission_closure_state(state), kernel::LOBE_ALL);
+    return specialized_result<CAP_SOLID_DIELECTRIC, true>(sampled, frame, view, incident,
                                                           transmitted);
 }
 
 /// 纯 delta 类别的窄采样入口；不接收 Energy 或准备连续闭包状态。
-/// Capability 仅接受 CAP_DELTA_CONDUCTOR、CAP_DELTA_SOLID_DIELECTRIC、CAP_DELTA_THIN_DIELECTRIC，
+/// capability 仅接受 CAP_DELTA_CONDUCTOR、CAP_DELTA_SOLID_DIELECTRIC、CAP_DELTA_THIN_DIELECTRIC，
 /// 调用方保证整个材料闭包满足对应类别；非 delta 类别编译失败，不作运行时分类或回退。
 /// u 属于 [0,1)，对应 sample_specialized 的 u.z；conductor 不消费该随机数。
 /// 其余输入、概率质量、事件、方向、eta、medium 和无效 proposal 语义与 sample_specialized 相同。
-public func sample_delta_specialized<let Capability : uint>(material: Material, normal: float3,
+public func sample_delta_specialized<let capability : uint>(material: Material, normal: float3,
                                                             view: float3, u: float,
                                                             incident: float4, transmitted: float4)
     ->Sample
 {
-    static_assert(Capability >= CAP_DELTA_CONDUCTOR && Capability <= CAP_DELTA_THIN_DIELECTRIC,
+    static_assert(capability >= CAP_DELTA_CONDUCTOR && capability <= CAP_DELTA_THIN_DIELECTRIC,
                   "sample_delta_specialized requires a delta capability");
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    return specialized_result<Capability, false>(
-        specialized_delta<Capability>(material, wi, float3(0.0, 0.0, u), incident, transmitted),
-        onb, view, incident, transmitted);
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    return specialized_result<capability, false>(
+        specialized_delta<capability>(material, wi, float3(0.0, 0.0, u), incident, transmitted),
+        frame, view, incident, transmitted);
 }
 
 /// 与 sample 相同的随机映射、完整 marginal PDF、event、eta 与 medium 转移。
 /// 类别是编译期参数；纯 delta 直接调用原 delta 内核，不构造连续能量状态或读取能量纹理。
 /// 随机数、局部无效 proposal 归零及沿路径段 Beer 的责任与 api 完全相同。
-public func sample_specialized<let Capability : uint, Provider>(energy: Provider,
-                                                                material: Material, normal: float3,
-                                                                view: float3, u: float3,
-                                                                incident: float4,
-                                                                transmitted: float4)
+public func sample_specialized<let capability : uint, EnergyLut>(energy: EnergyLut,
+                                                                 material: Material, normal: float3,
+                                                                 view: float3, u: float3,
+                                                                 incident: float4,
+                                                                 transmitted: float4)
     ->Sample
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    require_capability<Capability>();
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    var sampled : PrimeFullOpenPbrSample;
-    if (Capability >= CAP_DELTA_CONDUCTOR)
-        sampled = specialized_delta<Capability>(material, wi, u, incident, transmitted);
-    else if (specialized_dielectric<Capability>())
+    require_capability<capability>();
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    var sampled : kernel::Proposal;
+    if (capability >= CAP_DELTA_CONDUCTOR)
+        sampled = specialized_delta<capability>(material, wi, u, incident, transmitted);
+    else if (specialized_dielectric<capability>())
     {
         let state
-            : PrimeFullCompactTransmissionState =
-                  specialized_transmission<Capability>(energy, material, wi, incident, transmitted);
-        sampled = specialized_sample_prepared<Capability>(wi, u, state);
+            : kernel::TransmissionState =
+                  specialized_transmission<capability>(energy, material, wi, incident, transmitted);
+        sampled = specialized_sample_prepared<capability>(wi, u, state);
     }
     else
-        sampled = specialized_sample_prepared<Capability>(
-            wi, u, specialized_opaque<Capability, false>(energy, material, wi, incident));
-    return specialized_result<Capability, false>(sampled, onb, view, incident, transmitted);
+        sampled = specialized_sample_prepared<capability>(
+            wi, u, specialized_opaque<capability, false>(energy, material, wi, incident));
+    return specialized_result<capability, false>(sampled, frame, view, incident, transmitted);
 }
 
 /// 同一命中只构造一次 ONB、local wi 与所选闭包状态，不将完整 prepared state 交给调用方。
 /// evaluation_mask 的低两位分别启用 first／second；未启用的方向无需有效，高位不参与评估。
 /// continuation=false 时不采样，scattered 保持 events=0、relative_eta=1 和 incident medium。
 /// 纯 delta 忽略两个连续方向，直接沿用原 delta 核且不消费 energy；状态只在本次调用内有效。
-public func shade_specialized<let Capability : uint, Provider>(energy: Provider, material: Material,
-                                                               normal: float3, view: float3,
-                                                               first: float3, second: float3,
-                                                               evaluation_mask: uint, u: float3,
-                                                               continuation: bool, incident: float4,
-                                                               transmitted: float4)
+public func shade_specialized<let capability : uint, EnergyLut>(
+    energy: EnergyLut, material: Material, normal: float3, view: float3, first: float3,
+    second: float3, evaluation_mask: uint, u: float3, continuation: bool, incident: float4,
+    transmitted: float4)
     ->Batch
-    where Provider : IPrimeFullOpenPbrTransmissionGgxEnergy
+    where EnergyLut : IEnergyLut
 {
-    require_capability<Capability>();
+    require_capability<capability>();
     var result : Batch = {};
     result.scattered.relative_eta = 1.0;
     result.scattered.medium = incident;
-    if (Capability >= CAP_DELTA_CONDUCTOR)
+    if (capability >= CAP_DELTA_CONDUCTOR)
     {
         if (continuation)
         {
-            let onb : PrimeFullOpenPbrOnb =
-                          specialized_frame<Capability>(normal, view, incident, transmitted);
-            let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-            result.scattered = specialized_result<Capability, false>(
-                specialized_delta<Capability>(material, wi, u, incident, transmitted), onb, view,
+            let frame : kernel::Frame =
+                            specialized_frame<capability>(normal, view, incident, transmitted);
+            let wi : float3 = kernel::to_local(frame, view);
+            result.scattered = specialized_result<capability, false>(
+                specialized_delta<capability>(material, wi, u, incident, transmitted), frame, view,
                 incident, transmitted);
         }
         return result;
     }
     if ((evaluation_mask & 3u) == 0u && !continuation)
         return result;
-    let onb : PrimeFullOpenPbrOnb =
-                  specialized_frame<Capability>(normal, view, incident, transmitted);
-    let wi : float3 = primeFullOpenPbrOnbToLocal(onb, view);
-    if (specialized_dielectric<Capability>())
+    let frame : kernel::Frame = specialized_frame<capability>(normal, view, incident, transmitted);
+    let wi : float3 = kernel::to_local(frame, view);
+    if (specialized_dielectric<capability>())
     {
         let state
-            : PrimeFullCompactTransmissionState =
-                  specialized_transmission<Capability>(energy, material, wi, incident, transmitted);
+            : kernel::TransmissionState =
+                  specialized_transmission<capability>(energy, material, wi, incident, transmitted);
         if ((evaluation_mask & 1u) != 0u)
-            result.first = specialized_evaluate_prepared<Capability>(
-                wi, primeFullOpenPbrOnbToLocal(onb, first), state);
+            result.first = specialized_evaluate_prepared<capability>(
+                wi, kernel::to_local(frame, first), state);
         if ((evaluation_mask & 2u) != 0u)
-            result.second = specialized_evaluate_prepared<Capability>(
-                wi, primeFullOpenPbrOnbToLocal(onb, second), state);
+            result.second = specialized_evaluate_prepared<capability>(
+                wi, kernel::to_local(frame, second), state);
         if (continuation)
-            result.scattered = specialized_result<Capability, false>(
-                specialized_sample_prepared<Capability>(wi, u, state), onb, view, incident,
+            result.scattered = specialized_result<capability, false>(
+                specialized_sample_prepared<capability>(wi, u, state), frame, view, incident,
                 transmitted);
     }
     else
     {
-        let state : PrimeFullCompactOpaqueState =
-                        specialized_opaque<Capability, false>(energy, material, wi, incident);
+        let state : kernel::OpaqueState =
+                        specialized_opaque<capability, false>(energy, material, wi, incident);
         if ((evaluation_mask & 1u) != 0u)
-            result.first = specialized_evaluate_prepared<Capability>(
-                wi, primeFullOpenPbrOnbToLocal(onb, first), state);
+            result.first = specialized_evaluate_prepared<capability>(
+                wi, kernel::to_local(frame, first), state);
         if ((evaluation_mask & 2u) != 0u)
-            result.second = specialized_evaluate_prepared<Capability>(
-                wi, primeFullOpenPbrOnbToLocal(onb, second), state);
+            result.second = specialized_evaluate_prepared<capability>(
+                wi, kernel::to_local(frame, second), state);
         if (continuation)
-            result.scattered = specialized_result<Capability, false>(
-                specialized_sample_prepared<Capability>(wi, u, state), onb, view, incident,
+            result.scattered = specialized_result<capability, false>(
+                specialized_sample_prepared<capability>(wi, u, state), frame, view, incident,
                 transmitted);
     }
     return result;

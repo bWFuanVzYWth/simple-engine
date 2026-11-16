@@ -3,12 +3,17 @@
 #language slang 2026
 module "bsdf/openpbr/math/microfacet_measure.slang";
 
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.math.spectrum;
 
-public func primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet: PrimeFullOpenPbrMicrofacet)
-    ->bool
+namespace openpbr
 {
-    return primeFullOpenPbrReduceMax(microfacet.alpha) < 1.0e-4;
+namespace kernel
+{
+public func microfacet_effectively_smooth(microfacet: Microfacet)->bool
+{
+    return reduce_max(microfacet.alpha) < 1.0e-4;
+}
+}
 }

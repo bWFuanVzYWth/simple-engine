@@ -56,23 +56,51 @@ impl TerrainModel {
     }
 }
 
+/// 与Slang TerrainInput同布局的160B上传记录；填充显式为零，不参与缓存键。
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TerrainInput {
+    camera_position: [f32; 3],
+    observer_height_km: f32,
+    forward: [f32; 3],
+    forward_padding: f32,
+    right: [f32; 3],
+    right_padding: f32,
+    up: [f32; 3],
+    up_padding: f32,
+    sun_direction: [f32; 3],
+    sun_padding: f32,
+    radiance_scale: [f32; 3],
+    scale_padding: f32,
+    refresh_clock: u32,
+    active: u32,
+    view_version: u32,
+    refresh_bits: u32,
+    basis_u: [f32; 3],
+    sun_depth_offset: f32,
+    basis_v: [f32; 3],
+    wrapped_shadow_plane_depth: f32,
+    wrapped_grid: [f32; 2],
+    grid_tile: [u32; 2],
+}
+
 /// 所有者借出的本次上传参数；缓存决策保留到同一所有者录制。
 pub struct TerrainUpdate {
-    input: [[u32; 4]; 10],
-    key: Key,
+    input: TerrainInput,
+    key: TerrainKey,
     full: bool,
-    remaining: u8,
+    refreshes_remaining: u8,
 }
 impl TerrainUpdate {
     /// 每份输入的字节数。
-    pub const INPUT_BYTES: usize = std::mem::size_of::<[[u32; 4]; 10]>();
+    pub const INPUT_BYTES: usize = std::mem::size_of::<TerrainInput>();
     /// 写到创建所有者时指定的只读 storage buffer，提交先于 record。
     pub fn bytes(&self) -> &[u8] {
         bytemuck::bytes_of(&self.input)
     }
 }
 #[derive(Clone, Copy, PartialEq)]
-struct Key {
+struct TerrainKey {
     view: View,
     origin: [f32; 3],
     world: [f64; 3],
@@ -91,7 +119,7 @@ pub struct TerrainLight {
     prepare: ComputePipeline,
     demand: ComputePipeline,
     integrate: ComputePipeline,
-    history: History,
+    history: TerrainHistory,
     planned: Option<TerrainUpdate>,
 }
 fn program(
@@ -175,7 +203,7 @@ impl TerrainLight {
             prepare,
             demand,
             integrate,
-            history: History::new(),
+            history: TerrainHistory::new(),
             planned: None,
         })
     }
@@ -214,7 +242,7 @@ impl TerrainLight {
     /// 显式全局事件。返回此前是否有已提交的体积光，下次实际提交的空气视图重建整个缓存。
     pub fn reset_history(&mut self) -> bool {
         let valid = !self.history.cold;
-        self.history = History::new();
+        self.history = TerrainHistory::new();
         self.planned = None;
         valid
     }
@@ -277,7 +305,7 @@ impl TerrainLight {
     /// 取消尚未提交的更新。下一次 prepare 仍以上次实际提交为准。
     pub fn cancel(&mut self) {
         self.planned = None;
-        self.history.pending = None;
+        self.history.recorded_view = None;
     }
     /// 本次post应选择地形遮挡叶子时返回true，否则选择晴空Aerial叶子。
     ///
@@ -316,42 +344,42 @@ impl TerrainLight {
     }
 }
 
-struct History {
-    last: Option<Key>,
-    pending: Option<(Key, u8)>,
+struct TerrainHistory {
+    submitted_view: Option<TerrainKey>,
+    recorded_view: Option<(TerrainKey, u8)>,
     cold: bool,
     refresh_requested: bool,
-    remaining: u8,
+    refreshes_remaining: u8,
 }
-impl History {
+impl TerrainHistory {
     const fn new() -> Self {
         Self {
-            last: None,
-            pending: None,
+            submitted_view: None,
+            recorded_view: None,
             cold: true,
             refresh_requested: false,
-            remaining: 0,
+            refreshes_remaining: 0,
         }
     }
     const fn shadowed(&self, planned: Option<&TerrainUpdate>) -> bool {
         if let Some(update) = planned {
             return update.key.active;
         }
-        if let Some((key, _)) = self.pending {
+        if let Some((key, _)) = self.recorded_view {
             return key.active;
         }
-        match self.last {
+        match self.submitted_view {
             Some(key) => key.active,
             None => false,
         }
     }
     fn recorded(&mut self, update: &TerrainUpdate) {
-        self.pending = Some((update.key, update.remaining));
+        self.recorded_view = Some((update.key, update.refreshes_remaining));
     }
     fn submitted(&mut self) {
-        if let Some((key, remaining)) = self.pending.take() {
-            self.last = Some(key);
-            self.remaining = remaining;
+        if let Some((key, refreshes_remaining)) = self.recorded_view.take() {
+            self.submitted_view = Some(key);
+            self.refreshes_remaining = refreshes_remaining;
             if key.active {
                 self.cold = false;
                 self.refresh_requested = false;
@@ -370,31 +398,32 @@ impl History {
             return Err(Error::View("体积光相机坐标非有限"));
         }
         let active = active && view.radiance_scale.iter().any(|&x| x > 0.);
-        self.pending = None;
-        if !active && self.last.is_some_and(|k| !k.active) {
+        self.recorded_view = None;
+        if !active && self.submitted_view.is_some_and(|k| !k.active) {
             return Ok(None);
         }
         let full = active && self.cold;
         let view_changed = self
-            .last
+            .submitted_view
             .is_none_or(|k| k.view != view || k.world != world || k.active != active);
-        let changed =
-            view_changed || self.refresh_requested || self.last.is_none_or(|k| k.origin != origin);
-        if active && !full && !changed && self.remaining == 0 {
+        let changed = view_changed
+            || self.refresh_requested
+            || self.submitted_view.is_none_or(|k| k.origin != origin);
+        if active && !full && !changed && self.refreshes_remaining == 0 {
             return Ok(None);
         }
-        let remaining = if full || !active {
+        let refreshes_remaining = if full || !active {
             0
         } else if changed {
             2 * PHASES - 1
         } else {
-            self.remaining - 1
+            self.refreshes_remaining - 1
         };
         let clock = self
-            .last
+            .submitted_view
             .map_or(0, |k| k.clock.wrapping_add(1) & 0x7fffffff);
         let version = self
-            .last
+            .submitted_view
             .map_or(1, |k| k.view_version.wrapping_add(u32::from(view_changed)));
         let sun = view.sun_direction;
         let [x, y, z] = sun.map(f64::from);
@@ -419,32 +448,32 @@ impl History {
         }
         // 先以 f64 减去最大的环形周期，GPU 的 DDA 始终在小坐标中步进。整数格标签跨 anchor 保持稳定。
         let tile = uv.map(|a| (a / 4096.).floor().rem_euclid(4294967296.) as u32);
-        let row = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w].map(f32::to_bits);
-        let state = [
-            clock,
-            u32::from(active),
-            version,
-            (clock & 7) | (u32::from(full) << 3),
-        ];
         Ok(Some(TerrainUpdate {
-            input: [
-                row(origin, view.altitude_km),
-                row(view.forward, 0.),
-                row(view.right, 0.),
-                row(view.up, 0.),
-                row(sun, 0.),
-                row(view.radiance_scale, 0.),
-                state,
-                row(u.map(|a| a as f32), (plane - depth) as f32),
-                row(v.map(|a| a as f32), plane.rem_euclid(32768.) as f32),
-                [
-                    (uv[0].rem_euclid(4096.) as f32).to_bits(),
-                    (uv[1].rem_euclid(4096.) as f32).to_bits(),
-                    tile[0],
-                    tile[1],
-                ],
-            ],
-            key: Key {
+            input: TerrainInput {
+                camera_position: origin,
+                observer_height_km: view.altitude_km,
+                forward: view.forward,
+                forward_padding: 0.,
+                right: view.right,
+                right_padding: 0.,
+                up: view.up,
+                up_padding: 0.,
+                sun_direction: sun,
+                sun_padding: 0.,
+                radiance_scale: view.radiance_scale,
+                scale_padding: 0.,
+                refresh_clock: clock,
+                active: u32::from(active),
+                view_version: version,
+                refresh_bits: (clock & 7) | (u32::from(full) << 3),
+                basis_u: u.map(|a| a as f32),
+                sun_depth_offset: (plane - depth) as f32,
+                basis_v: v.map(|a| a as f32),
+                wrapped_shadow_plane_depth: plane.rem_euclid(32768.) as f32,
+                wrapped_grid: uv.map(|a| a.rem_euclid(4096.) as f32),
+                grid_tile: tile,
+            },
+            key: TerrainKey {
                 view,
                 origin,
                 world,
@@ -453,7 +482,7 @@ impl History {
                 view_version: version,
             },
             full,
-            remaining,
+            refreshes_remaining,
         }))
     }
 }
@@ -463,7 +492,7 @@ mod tests {
     use super::*;
     #[test]
     fn prepared_mode_uses_normalized_terrain_activity() -> Result<(), Error> {
-        let mut history = History::new();
+        let mut history = TerrainHistory::new();
         let update = history
             .prepare(
                 View {
@@ -480,7 +509,7 @@ mod tests {
     }
     #[test]
     fn recorded_mode_is_selected_before_submission() -> Result<(), Error> {
-        let mut history = History::new();
+        let mut history = TerrainHistory::new();
         let view = View::default();
         let first = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
         history.recorded(&first);
@@ -492,20 +521,20 @@ mod tests {
     }
     #[test]
     fn cancelled_mode_returns_to_submitted_selection() -> Result<(), Error> {
-        let mut history = History::new();
+        let mut history = TerrainHistory::new();
         let view = View::default();
         let first = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
         history.recorded(&first);
         history.submitted();
         let clear = history.prepare(view, [0.; 3], [0.; 3], false)?.unwrap();
         history.recorded(&clear);
-        history.pending = None;
+        history.recorded_view = None;
         assert!(history.shadowed(None));
         Ok(())
     }
     #[test]
     fn ordinary_changes_keep_history_and_refresh_every_slice() -> Result<(), Error> {
-        let mut history = History::new();
+        let mut history = TerrainHistory::new();
         let mut view = View::default();
         let start = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
         assert!(start.full);
@@ -533,7 +562,7 @@ mod tests {
     }
     #[test]
     fn cancelled_upload_retries_the_same_phase() -> Result<(), Error> {
-        let mut h = History::new();
+        let mut h = TerrainHistory::new();
         let view = View::default();
         let first = h.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
         h.recorded(&first);
@@ -541,15 +570,15 @@ mod tests {
         h.refresh_requested = true;
         let dropped = h.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
         h.recorded(&dropped);
-        h.pending = None;
+        h.recorded_view = None;
         let retry = h.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
-        assert_eq!(dropped.input, retry.input);
+        assert_eq!(dropped.bytes(), retry.bytes());
         Ok(())
     }
 
     #[test]
     fn rebasing_the_tlas_keeps_world_shadow_columns() -> Result<(), Error> {
-        let mut history = History::new();
+        let mut history = TerrainHistory::new();
         let view = View::default();
         let world = [30_000_000.25, 96.5, -29_999_995.75];
         let first = history.prepare(view, [0.; 3], world, true)?.unwrap();
@@ -558,7 +587,7 @@ mod tests {
         let rebased = history
             .prepare(view, [64., 0., -64.], world, true)?
             .unwrap();
-        assert_eq!(first.input[7..], rebased.input[7..]);
+        assert_eq!(&first.bytes()[7 * 16..], &rebased.bytes()[7 * 16..]);
         assert_eq!(first.key.view_version, rebased.key.view_version);
         assert!(!rebased.full);
         Ok(())

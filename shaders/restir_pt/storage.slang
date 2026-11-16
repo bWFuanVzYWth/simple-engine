@@ -41,24 +41,24 @@ public static const let PRECOMPUTED_STRIDE : uint = 20;
 func unpack_reservoir(a: uint4, b: uint4, c: uint4, d: uint4, e: uint4)->PathReservoir
 {
     var result : PathReservoir;
-    result.M = asfloat(a.x);
+    result.sample_mass = asfloat(a.x);
     result.weight = asfloat(a.y);
     result.integrand = asfloat(uint3(a.zw, b.x));
-    result.pathFlags.flags = b.y;
-    result.initRandomSeed = b.z;
-    result.rcNextVertexBounceSeed = b.w;
-    result.lightPdf = asfloat(c.x);
-    result.reconnectionHit.data = uint4(c.yzw, d.x);
-    result.reconnectionJacobian = asfloat(d.y);
-    result.reconnectionIncidentRadiance = asfloat(uint3(d.zw, e.x));
-    result.reconnectionWi = asfloat(e.yzw);
+    result.path_flags.flags = b.y;
+    result.init_random_seed = b.z;
+    result.rc_next_vertex_bounce_seed = b.w;
+    result.light_pdf = asfloat(c.x);
+    result.reconnection_hit.data = uint4(c.yzw, d.x);
+    result.reconnection_jacobian = asfloat(d.y);
+    result.reconnection_incident_radiance = asfloat(uint3(d.zw, e.x));
+    result.reconnection_wi = asfloat(e.yzw);
     return result;
 }
 
 /// 从ByteAddressBuffer读取一份80B状态；保留全部float位模式。
 public func load_reservoir(buffer: ByteAddressBuffer, index: uint)->PathReservoir
 {
-    let offset : uint = index * RESERVOIR_STRIDE;
+    let offset = index * RESERVOIR_STRIDE;
     return unpack_reservoir(buffer.Load4(offset), buffer.Load4(offset + 16u),
                             buffer.Load4(offset + 32u), buffer.Load4(offset + 48u),
                             buffer.Load4(offset + 64u));
@@ -67,7 +67,7 @@ public func load_reservoir(buffer: ByteAddressBuffer, index: uint)->PathReservoi
 /// 从RWByteAddressBuffer读取一份80B状态；保留全部float位模式。
 public func load_reservoir(buffer: RWByteAddressBuffer, index: uint)->PathReservoir
 {
-    let offset : uint = index * RESERVOIR_STRIDE;
+    let offset = index * RESERVOIR_STRIDE;
     return unpack_reservoir(buffer.Load4(offset), buffer.Load4(offset + 16u),
                             buffer.Load4(offset + 32u), buffer.Load4(offset + 48u),
                             buffer.Load4(offset + 64u));
@@ -76,25 +76,26 @@ public func load_reservoir(buffer: RWByteAddressBuffer, index: uint)->PathReserv
 /// 写入五组连续uint4；ABI仍是无填充的80B，不把热冷划分变成两份全屏分配。
 public func store_reservoir(buffer: RWByteAddressBuffer, index: uint, value: PathReservoir)->void
 {
-    let offset : uint = index * RESERVOIR_STRIDE;
-    buffer.Store4(offset, uint4(asuint(value.M), asuint(value.weight), asuint(value.integrand.xy)));
-    buffer.Store4(offset + 16u, uint4(asuint(value.integrand.z), value.pathFlags.flags,
-                                      value.initRandomSeed, value.rcNextVertexBounceSeed));
-    buffer.Store4(offset + 32u, uint4(asuint(value.lightPdf), value.reconnectionHit.data.xyz));
+    let offset = index * RESERVOIR_STRIDE;
+    buffer.Store4(
+        offset, uint4(asuint(value.sample_mass), asuint(value.weight), asuint(value.integrand.xy)));
+    buffer.Store4(offset + 16u, uint4(asuint(value.integrand.z), value.path_flags.flags,
+                                      value.init_random_seed, value.rc_next_vertex_bounce_seed));
+    buffer.Store4(offset + 32u, uint4(asuint(value.light_pdf), value.reconnection_hit.data.xyz));
     buffer.Store4(offset + 48u,
-                  uint4(value.reconnectionHit.data.w, asuint(value.reconnectionJacobian),
-                        asuint(value.reconnectionIncidentRadiance.xy)));
-    buffer.Store4(offset + 64u, uint4(asuint(value.reconnectionIncidentRadiance.z),
-                                      asuint(value.reconnectionWi)));
+                  uint4(value.reconnection_hit.data.w, asuint(value.reconnection_jacobian),
+                        asuint(value.reconnection_incident_radiance.xy)));
+    buffer.Store4(offset + 64u, uint4(asuint(value.reconnection_incident_radiance.z),
+                                      asuint(value.reconnection_wi)));
 }
 
 /// MIS/CV只读取前20B；其余字段规范为零，最终赢家确定后才能恢复冷身份。
 public func load_merge_source(buffer: RWByteAddressBuffer, index: uint)->PathReservoir
 {
-    let offset : uint = RESERVOIR_STRIDE * index;
-    let words : uint4 = buffer.Load4(offset);
+    let offset = RESERVOIR_STRIDE * index;
+    let words = buffer.Load4(offset);
     var result : PathReservoir = {};
-    result.M = asfloat(words.x);
+    result.sample_mass = asfloat(words.x);
     result.weight = asfloat(words.y);
     result.integrand = asfloat(uint3(words.zw, buffer.Load(offset + 16u)));
     return result;
@@ -103,30 +104,30 @@ public func load_merge_source(buffer: RWByteAddressBuffer, index: uint)->PathRes
 /// prefix重放仅消费UCW、flags与初始种子；完整源在重放结束后重读。
 public func load_replay_source(buffer: RWByteAddressBuffer, index: uint)->PathReservoir
 {
-    let offset : uint = RESERVOIR_STRIDE * index;
+    let offset = RESERVOIR_STRIDE * index;
     var source : PathReservoir = {};
     source.weight = asfloat(buffer.Load(offset + 4u));
-    let identity : uint2 = buffer.Load2(offset + 20u);
-    source.pathFlags.flags = identity.x;
-    source.initRandomSeed = identity.y;
+    let identity = buffer.Load2(offset + 20u);
+    source.path_flags.flags = identity.x;
+    source.init_random_seed = identity.y;
     return source;
 }
 
 func unpack_reconnection(a: uint4, b: uint4, c: uint3, medium: uint4)->ReconnectionData
 {
     var result : ReconnectionData;
-    result.rcPrevHit.data = a;
-    result.pathThroughput = asfloat(b.xyz);
-    result.rcPrevWo = asfloat(uint3(b.w, c.xy));
-    result.rcFootprintFactor = asfloat(c.z);
-    result.rcPrevIncident = asfloat(medium);
+    result.rc_prev_hit.data = a;
+    result.path_throughput = asfloat(b.xyz);
+    result.rc_prev_wo = asfloat(uint3(b.w, c.xy));
+    result.rc_footprint_factor = asfloat(c.z);
+    result.rc_prev_incident = asfloat(medium);
     return result;
 }
 
 /// 从ByteAddressBuffer读取一份60B状态；介质紧接原有44B几何和throughput。
 public func load_reconnection(buffer: ByteAddressBuffer, index: uint)->ReconnectionData
 {
-    let offset : uint = index * RECONNECTION_STRIDE;
+    let offset = index * RECONNECTION_STRIDE;
     return unpack_reconnection(buffer.Load4(offset), buffer.Load4(offset + 16u),
                                buffer.Load3(offset + 32u), buffer.Load4(offset + 44u));
 }
@@ -134,7 +135,7 @@ public func load_reconnection(buffer: ByteAddressBuffer, index: uint)->Reconnect
 /// 从RWByteAddressBuffer读取一份60B状态；保留全部float位模式。
 public func load_reconnection(buffer: RWByteAddressBuffer, index: uint)->ReconnectionData
 {
-    let offset : uint = index * RECONNECTION_STRIDE;
+    let offset = index * RECONNECTION_STRIDE;
     return unpack_reconnection(buffer.Load4(offset), buffer.Load4(offset + 16u),
                                buffer.Load3(offset + 32u), buffer.Load4(offset + 44u));
 }
@@ -143,11 +144,12 @@ public func load_reconnection(buffer: RWByteAddressBuffer, index: uint)->Reconne
 public func store_reconnection(buffer: RWByteAddressBuffer, index: uint, value: ReconnectionData)
     ->void
 {
-    let offset : uint = index * RECONNECTION_STRIDE;
-    buffer.Store4(offset, value.rcPrevHit.data);
-    buffer.Store4(offset + 16u, uint4(asuint(value.pathThroughput), asuint(value.rcPrevWo.x)));
-    buffer.Store3(offset + 32u, uint3(asuint(value.rcPrevWo.yz), asuint(value.rcFootprintFactor)));
-    buffer.Store4(offset + 44u, asuint(value.rcPrevIncident));
+    let offset = index * RECONNECTION_STRIDE;
+    buffer.Store4(offset, value.rc_prev_hit.data);
+    buffer.Store4(offset + 16u, uint4(asuint(value.path_throughput), asuint(value.rc_prev_wo.x)));
+    buffer.Store3(offset + 32u,
+                  uint3(asuint(value.rc_prev_wo.yz), asuint(value.rc_footprint_factor)));
+    buffer.Store4(offset + 44u, asuint(value.rc_prev_incident));
 }
 
 func unpack_precomputed(a: uint4, b: uint)->PrecomputedShiftData
@@ -158,14 +160,14 @@ func unpack_precomputed(a: uint4, b: uint)->PrecomputedShiftData
 /// 从ByteAddressBuffer读取一份20B状态；前16B一次读取。
 public func load_precomputed(buffer: ByteAddressBuffer, index: uint)->PrecomputedShiftData
 {
-    let offset : uint = index * PRECOMPUTED_STRIDE;
+    let offset = index * PRECOMPUTED_STRIDE;
     return unpack_precomputed(buffer.Load4(offset), buffer.Load(offset + 16u));
 }
 
 /// 从RWByteAddressBuffer读取一份20B状态；保留全部float位模式。
 public func load_precomputed(buffer: RWByteAddressBuffer, index: uint)->PrecomputedShiftData
 {
-    let offset : uint = index * PRECOMPUTED_STRIDE;
+    let offset = index * PRECOMPUTED_STRIDE;
     return unpack_precomputed(buffer.Load4(offset), buffer.Load(offset + 16u));
 }
 
@@ -173,9 +175,9 @@ public func load_precomputed(buffer: RWByteAddressBuffer, index: uint)->Precompu
 public func store_precomputed(buffer: RWByteAddressBuffer, index: uint, value: PrecomputedShiftData)
     ->void
 {
-    let offset : uint = index * PRECOMPUTED_STRIDE;
-    buffer.Store4(offset, uint4(asuint(value.pathThroughput), asuint(value.Jacobian)));
-    buffer.Store(offset + 16u, asuint(value.reconnectionJacobian));
+    let offset = index * PRECOMPUTED_STRIDE;
+    buffer.Store4(offset, uint4(asuint(value.path_throughput), asuint(value.jacobian)));
+    buffer.Store(offset + 16u, asuint(value.reconnection_jacobian));
 }
 
 /// 颜色拥有独立的12B工作集，与相应reservoir使用同一padded Morton地址。

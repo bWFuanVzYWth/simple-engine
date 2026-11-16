@@ -4,11 +4,11 @@ use super::*;
 fn uniform_solar_disk_integrates_to_normal_irradiance() {
     let mut p = Model::new().unwrap().parameters;
     // 较大半角能区分投影立体角与未投影立体角，不只测试太阳的小角近似。
-    p.sun[2] = 0.5;
+    p.sun_angular_radius = 0.5;
     let radiance = p.sun_radiance_rgb();
     let irradiance = p.solar_irradiance_rgb();
     let steps = 4096;
-    let step = f64::from(p.sun[2]) / f64::from(steps);
+    let step = f64::from(p.sun_angular_radius) / f64::from(steps);
     let integral: f64 = (0..steps)
         .map(|i| {
             let angle = (f64::from(i) + 0.5) * step;
@@ -44,7 +44,7 @@ fn cancelled_record_rebuilds_the_same_view() {
 fn physical_profile_has_ordered_heights_and_nonnegative_coefficients() {
     let model = Model::new().unwrap();
     let p = model.parameters;
-    let profile = &model.data[p.offsets0[2] as usize..][..p.offsets1[2] as usize * 7];
+    let profile = &model.data[p.profile_offset as usize..][..p.profile_height_count as usize * 7];
     let heights: Vec<_> = profile
         .as_chunks::<7>()
         .0

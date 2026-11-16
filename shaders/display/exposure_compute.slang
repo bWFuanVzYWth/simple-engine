@@ -70,7 +70,7 @@ func histogram_group<Input : IExposureInput>(input: Input, group: uint3, lane: u
             let value : float4 = input.load(pixel, p.extent);
             if (value.w < 0)
                 continue;
-            let bin : int = display::exposure_bin(value.xyz, p.linear709 != 0);
+            let bin = display::exposure_bin(value.xyz, p.linear709 != 0);
             if (bin < 0)
                 continue;
             InterlockedAdd(bins[bin], 1u);
@@ -110,9 +110,9 @@ func histogram_texture_main([[vk::binding(1, 0)]] uniform linear_input: Texture2
 [numthreads(1, 1, 1)]
 func update_main()->void
 {
-    let p : ExposureParameters = parameters[0];
+    let p = parameters[0];
     var state : display::ExposureState = exposure_state[0];
-    let valid : uint = histogram[256];
+    let valid = histogram[256];
     let instant : bool = p.reset != 0 || p.instant != 0 || state.initialized == 0;
     if (valid == 0)
     {
@@ -125,7 +125,7 @@ func update_main()->void
         return;
     }
     let begin : uint = valid / 200;
-    let end : uint = valid - begin;
+    let end = valid - begin;
     var cursor : uint = 0;
     var retained : uint = 0;
     var weighted_bins : float = 0;
@@ -134,8 +134,8 @@ func update_main()->void
     for (var bin: uint = 0; bin < 256; ++bin)
     {
         let next : uint = cursor + histogram[bin];
-        let low : uint = max(cursor, begin);
-        let high : uint = min(next, end);
+        let low = max(cursor, begin);
+        let high = min(next, end);
         if (high > low)
         {
             if (retained == 0)

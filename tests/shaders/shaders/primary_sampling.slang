@@ -14,9 +14,9 @@ var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
 var outputs : RWStructuredBuffer<float4>;
 
-public struct Energy : IPrimeFullOpenPbrTransmissionGgxEnergy
+public struct Energy : openpbr::IEnergyLut
 {
-    public func sampleLevel(uvw: float3)->float4
+    public func lookup(uvw: float3)->float4
     {
         return float4(0.2, 0.3, 0.4, 0.5);
     }
@@ -59,7 +59,7 @@ func primary_selection_main(uint3 id: SV_DispatchThreadID)->void
                                : sampler.bsdf(0).z;
     let samples = 1u + (id.x & 1u);
     let lane = samples == 2u ? (id.x >> 1u) & 1u : 0u;
-    outputs[id.x * 5] = float4(openpbr_primary::selection(random, samples, lane), random,
+    outputs[id.x * 5] = float4(openpbr::primary::selection(random, samples, lane), random,
                                float(samples), float(lane));
 }
 
@@ -98,7 +98,7 @@ func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void
                     pt::triple_product(
                         expected.second.response, float3(2.1, 0.4, 0.5),
                         pt::power_heuristic_over_pdf(0.37, continuation ? expected.second.pdf : 0));
-    let expectedSequence = mask == 3u ? 6u : mask;
+    let expected_sequence = mask == 3u ? 6u : mask;
     outputs[id.x * 5] = float4(actual.direction - expected.scattered.direction,
                                actual.relative_eta - expected.scattered.relative_eta);
     outputs[id.x * 5 + 1] =
@@ -106,7 +106,7 @@ func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void
     outputs[id.x * 5 + 2] = actual.medium - expected.scattered.medium;
     outputs[id.x * 5 + 3] =
         float4(consumer.radiance, float(actual.events != expected.scattered.events));
-    outputs[id.x * 5 + 4] = float4(radiance, float(consumer.sequence != expectedSequence));
+    outputs[id.x * 5 + 4] = float4(radiance, float(consumer.sequence != expected_sequence));
 }
 
 [numthreads(64, 1, 1)]
@@ -143,17 +143,17 @@ func primary_sampling_main(uint3 id: SV_DispatchThreadID)->void
                   .first;
     let physical : openpbr::Evaluation = openpbr::evaluate_flow<OPENPBR_FLOW>(
                        Energy(), m, normal, view, one.direction, incident, transmitted);
-    let responseError : float = length(proposed.response - physical.response) /
-                                max(1.0, length(physical.response));
-    let pdfError : float = one.events != 0 && (one.events & openpbr::DISCRETE) == 0
-                               ? abs(proposed.pdf - one.pdf) / max(1.0, one.pdf)
-                               : 0;
+    let response_error : float = length(proposed.response - physical.response) /
+                                 max(1.0, length(physical.response));
+    let pdf_error : float = one.events != 0 && (one.events & openpbr::DISCRETE) == 0
+                                ? abs(proposed.pdf - one.pdf) / max(1.0, one.pdf)
+                                : 0;
     // 连续MIS的互补性同时消费新提案PDF；不混入delta质量。
     let mis : float = proposed.pdf > 0 ? pt::power_heuristic(proposed.pdf, 0.37) +
                                              pt::power_heuristic(0.37, proposed.pdf)
                                        : 1;
-    outputs[id.x * 5] = float4(weight(one), responseError);
-    outputs[id.x * 5 + 1] = float4((weight(a) + weight(b)) * 0.5, pdfError);
+    outputs[id.x * 5] = float4(weight(one), response_error);
+    outputs[id.x * 5 + 1] = float4((weight(a) + weight(b)) * 0.5, pdf_error);
     outputs[id.x * 5 + 2] = float4(weight(reference), abs(mis - 1));
     outputs[id.x * 5 + 3] = float4(float(a.events), float(b.events), a.pdf, b.pdf);
     outputs[id.x * 5 + 4] = float4(a.direction - b.direction, float(one.events));

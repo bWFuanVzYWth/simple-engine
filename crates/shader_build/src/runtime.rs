@@ -3,12 +3,18 @@
 //! 调用方先向[`RuntimeBatch`]登记所有独立入口，再指定并行度一次编译。
 //! 每批扫描一次受控输入，缓存只依赖Slang报告的import/include闭包及搜索目录清单；
 //! 不导入的已有文件内容变化不会使该入口失效，新增同名模块仍会失效。
-//! 缓存校验工具链、参数、依赖及实际产物字节，失败不返回部分批次。
+//! 缓存校验工具链、参数、依赖及main/完整审计字节，失败不返回部分批次。
+//! 普通release的同次sidecar在缓存恢复/编译时严格配对，之后只保留路径与摘要；
+//! [`Artifact::read_audit`]明确按需IO，主码自身不依赖缓存文件寿命。
 //! 调用方保持源码在批次期间不变，整代应用资源成功后再发布；缓存不代替应用ABI审查。
 //! 不读取Cargo OUT_DIR、jobserver或并行度环境变量，也不输出Cargo指令。
 
-use super::{Compiler, Error, Recipe, Target, batch, debug_argument, files, read, validate_recipe};
+use super::{
+    Compiler, Error, Recipe, batch, canonical_path, collect_input_files, command_path,
+    compiler_arguments, read_file, validate_recipe,
+};
 use std::{
+    borrow::Cow,
     fs,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -20,6 +26,7 @@ static SERIAL: AtomicU64 = AtomicU64::new(0);
 /// 一次受控编译的实际输出；所有者包含字节，不依赖后续缓存文件的寿命。
 pub struct Artifact {
     bytes: Vec<u8>,
+    audit: Option<batch::AuditFile>,
     fingerprint: String,
     path: PathBuf,
     cache_hit: bool,
@@ -29,6 +36,24 @@ impl Artifact {
     /// Slang 直接生成的最终字节；native SPIR-V 不经过其他编译器或插桩。
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// 按需读取完整审计字节并核验内容身份；inline产物借用自身，不做IO。
+    ///
+    /// paired副本已在编译/缓存恢复时与main严格配对；本所有者只保留其路径及摘要，
+    /// 不为未使用审计的运行时常驻完整debug副本。主码始终由本对象拥有、不依赖缓存寿命。
+    /// # Errors
+    /// paired副本的缓存/uncached文件被清理、改写或无法读取时返回错误。
+    /// 成功读取的副本由返回的Cow独占所有；调用者审查后可立即释放。
+    pub fn read_audit(&self) -> Result<Cow<'_, [u8]>, Error> {
+        let Some(audit) = &self.audit else {
+            return Ok(Cow::Borrowed(&self.bytes));
+        };
+        let bytes = read_file(&audit.path)?;
+        if blake3::hash(&bytes).to_hex().as_str() != audit.digest {
+            return Err(Error::AuditPair("审计副本内容身份已改变".into()));
+        }
+        Ok(Cow::Owned(bytes))
     }
 
     /// 编译器、参数、实际依赖及产物的BLAKE3身份，不是跨工具链ABI。
@@ -110,14 +135,14 @@ impl RuntimeCompiler {
             path: cache.to_owned(),
             source,
         })?;
-        let cache = canonical(cache)?;
+        let cache = canonical_path(cache)?;
         let includes = includes
             .iter()
-            .map(|path| canonical(path))
+            .map(|path| canonical_path(path))
             .collect::<Result<Vec<_>, _>>()?;
         let sources = source_roots
             .iter()
-            .map(|path| canonical(path))
+            .map(|path| canonical_path(path))
             .collect::<Result<Vec<_>, _>>()?;
         for root in includes.iter().chain(&sources) {
             if cache.starts_with(root) {
@@ -179,38 +204,12 @@ impl RuntimeBatch<'_> {
     /// 路径、验证选项或输出参数不受支持时返回[`Error`]，既有登记保持有效。
     pub fn queue(&mut self, recipe: &Recipe<'_>) -> Result<RuntimeTicket, Error> {
         validate_recipe(recipe)?;
-        let source = canonical(Path::new(recipe.source))?;
-        let mut arguments = vec![
+        let source = canonical_path(Path::new(recipe.source))?;
+        let arguments = compiler_arguments(
+            recipe,
             command_path(&source),
-            "-std".into(),
-            "2026".into(),
-            "-O3".into(),
-            debug_argument(recipe.target).into(),
-        ];
-        for include in &self.compiler.includes {
-            arguments.extend(["-I".into(), command_path(include)]);
-        }
-        match recipe.target {
-            Target::Spirv(profile) => arguments.extend([
-                "-target".into(),
-                "spirv".into(),
-                "-profile".into(),
-                profile.into(),
-                "-emit-spirv-directly".into(),
-                "-fvk-use-entrypoint-name".into(),
-            ]),
-            Target::Wgsl => arguments.extend(["-target".into(), "wgsl".into()]),
-        }
-        arguments.extend([
-            "-entry".into(),
-            recipe.entry.into(),
-            "-stage".into(),
-            recipe.stage.into(),
-        ]);
-        arguments.extend(recipe.args.iter().map(|argument| (*argument).to_owned()));
-        if matches!(recipe.target, Target::Wgsl) {
-            arguments.push("-g0".into());
-        }
+            self.compiler.includes.iter().map(|path| command_path(path)),
+        );
         let index = self.tasks.len();
         let fallback = self.compiler.cache.join(format!(
             "uncached-{}-{}-{index}",
@@ -231,7 +230,7 @@ impl RuntimeBatch<'_> {
     /// # Errors
     /// 源码/缓存IO、编译或线程失败保留[`Error`]来源；成功缓存可供下次重试复用。
     pub fn compile(self, workers: NonZeroUsize) -> Result<CompiledBatch, Error> {
-        let tracked = files(self.compiler.sources.clone())?;
+        let tracked = collect_input_files(self.compiler.sources.clone())?;
         let output = batch::compile_runtime(
             &self.compiler.compiler,
             &self.compiler.cache,
@@ -243,14 +242,15 @@ impl RuntimeBatch<'_> {
             .compiled
             .into_iter()
             .map(|compiled| {
-                Ok(Some(Artifact {
-                    bytes: read(&compiled.path)?,
+                Some(Artifact {
+                    bytes: compiled.bytes,
+                    audit: compiled.audit,
                     fingerprint: compiled.fingerprint,
                     path: compiled.path,
                     cache_hit: compiled.cache_hit,
-                }))
+                })
             })
-            .collect::<Result<Vec<_>, Error>>()?;
+            .collect();
         Ok(CompiledBatch {
             identity: self.identity,
             artifacts,
@@ -284,27 +284,6 @@ impl CompiledBatch {
             .and_then(Option::take)
             .ok_or_else(|| Error::Configuration("shader产物已消费或不存在".into()))
     }
-}
-
-fn canonical(path: &Path) -> Result<PathBuf, Error> {
-    fs::canonicalize(path).map_err(|source| Error::Io {
-        path: path.to_owned(),
-        source,
-    })
-}
-
-fn command_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    // Slang 的 include 拼接不接受 Windows verbatim 前缀；文件身份仍使用 canonical 路径。
-    if cfg!(windows) {
-        if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
-            return format!("\\\\{unc}");
-        }
-        if let Some(absolute) = text.strip_prefix("\\\\?\\") {
-            return absolute.to_owned();
-        }
-    }
-    text.into_owned()
 }
 
 #[cfg(test)]

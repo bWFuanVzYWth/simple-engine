@@ -43,7 +43,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
     if (c.u.w == 1.0)
     {
         let i : uint = id.x * 5;
-        output[i] = energy.sampleLevel(c.view.xyz);
+        output[i] = energy.lookup(c.view.xyz);
         output[i + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
         return;
     }

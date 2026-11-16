@@ -35,13 +35,13 @@ struct EvaluationSum : openpbr::IFlowEvaluationConsumer
     }
 };
 
-func shade_case<let Shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::Batch
+func shade_case<let shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::Batch
 {
-    if (Shared == 1)
+    if (shared == 1)
         return openpbr::shade_flow<OPENPBR_FLOW>(energy, c.material, float3(0, 0, 1), c.view.xyz,
                                                  float3(0.6, 0, 0.8), float3(0.6, 0, -0.8), 3u,
                                                  c.u.xyz, true, c.incident, c.transmitted);
-    if (Shared == 2)
+    if (shared == 2)
     {
         var consumer : EvaluationSum = {};
         var shaded : openpbr::Batch = {};

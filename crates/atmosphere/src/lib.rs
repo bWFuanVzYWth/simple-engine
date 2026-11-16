@@ -201,23 +201,65 @@ impl Memory {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Parameters {
-    size_steps: [u32; 4],
-    view: [f32; 4],
-    sun: [f32; 4],
-    dims: [u32; 4],
-    offsets0: [u32; 4],
-    offsets1: [u32; 4],
-    medium: [f32; 4],
-    solar: [f32; 4],
-    rgb: [[f32; 4]; 4],
-    solve: [u32; 4],
-    extra: [u32; 4],
-    mapping: [u32; 4],
-    sky: [u32; 4],
-    optical_segments: [[f32; 4]; 6],
-    angular_mapping: [f32; 4],
-    importance: [f32; 4],
-    batch: [u32; 4],
+    output_width: u32,
+    output_height: u32,
+    integration_steps: u32,
+    multiple_scattering_marker: u32,
+    view_yaw: f32,
+    view_pitch: f32,
+    vertical_fov: f32,
+    observer_height_km: f32,
+    sun_azimuth: f32,
+    sun_elevation: f32,
+    sun_angular_radius: f32,
+    planet_radius_km: f32,
+    source_height_count: u32,
+    sun_state_count: u32,
+    optical_height_count: u32,
+    optical_angle_count: u32,
+    coefficient_offset: u32,
+    reserved_coefficient_offset: u32,
+    profile_offset: u32,
+    phase_offset: u32,
+    phase_mass_offset: u32,
+    low_height_count: u32,
+    profile_height_count: u32,
+    reserved_profile_offset: u32,
+    atmosphere_height_km: f32,
+    ground_albedo: f32,
+    segment_length_km: f32,
+    horizon_power: f32,
+    solar_irradiance_spectrum: [f32; 4],
+    spectral_to_rec2020: [[f32; 4]; 4],
+    incident_direction_count: u32,
+    phase_node_count: u32,
+    cone_node_count: u32,
+    scattering_iteration: u32,
+    sun_state_offset: u32,
+    integration_angle_offset: u32,
+    phase_node_offset: u32,
+    optical_integration_steps: u32,
+    mapping_version: u32,
+    solar_node_offset: u32,
+    optical_node_offset: u32,
+    cone_node_offset: u32,
+    sky_width: u32,
+    sky_height: u32,
+    lower_sky_rows: u32,
+    sky_rows: u32,
+    optical_height_segments: [[f32; 4]; 6],
+    phase_blend_weight: f32,
+    cone_warp: f32,
+    reserved_angular_0: f32,
+    reserved_angular_1: f32,
+    solar_importance_width: f32,
+    path_height_scale_km: f32,
+    high_sun_weight: f32,
+    reserved_importance: f32,
+    batch_height_start: u32,
+    batch_height_count: u32,
+    optical_row_start: u32,
+    optical_row_count: u32,
 }
 
 impl Parameters {
@@ -227,15 +269,15 @@ impl Parameters {
     }
     /// 四个采样波长的太阳法向辐照度，单位 W m⁻² nm⁻¹。
     pub const fn solar_irradiance(&self) -> [f32; 4] {
-        self.solar
+        self.solar_irradiance_spectrum
     }
     /// 太阳角半径，单位 rad。
     pub const fn sun_angular_radius(&self) -> f32 {
-        self.sun[2]
+        self.sun_angular_radius
     }
     /// 四波长到线性 Rec.2020 的转换列，第四分量为零。
     pub const fn spectral_to_rgb(&self) -> [[f32; 4]; 4] {
-        self.rgb
+        self.spectral_to_rec2020
     }
     /// 大气外太阳的线性 Rec.2020 法向辐照度，单位 W m⁻²。
     pub const fn solar_irradiance_rgb(&self) -> [f32; 3] {
@@ -244,7 +286,8 @@ impl Parameters {
         while wavelength < 4 {
             let mut channel = 0;
             while channel < 3 {
-                rgb[channel] += self.solar[wavelength] * self.rgb[wavelength][channel];
+                rgb[channel] += self.solar_irradiance_spectrum[wavelength]
+                    * self.spectral_to_rec2020[wavelength][channel];
                 channel += 1;
             }
             wavelength += 1;
@@ -254,7 +297,7 @@ impl Parameters {
     /// 大气外均匀太阳盘的线性 Rec.2020 辐亮度，单位 W m⁻² sr⁻¹。
     /// 法向辐照度除以投影立体角 π sin²(半角)；方向采样 PDF 使用未投影立体角。
     pub fn sun_radiance_rgb(&self) -> [f32; 3] {
-        let sine = self.sun[2].sin();
+        let sine = self.sun_angular_radius.sin();
         let solid_angle = std::f32::consts::PI * sine * sine;
         self.solar_irradiance_rgb().map(|v| v / solid_angle)
     }
@@ -275,14 +318,24 @@ impl Model {
             .map_err(|_| Error::Data("Params 必须为 400 B"))?;
         let bytes = include_bytes!("../data/medium.bin");
         if !bytes.len().is_multiple_of(16)
-            || parameters.dims != [40, 160, 128, 512]
-            || parameters.solve != [1536, 20, 12, 0]
-            || parameters.mapping[0] != 63
-            || parameters.size_steps[3] != 1
-            || parameters.medium[3] != 3.0
-            || !parameters.importance[1].is_finite()
-            || parameters.importance[1] <= 0.0
-            || !(1..=40).contains(&parameters.offsets1[1])
+            || [
+                parameters.source_height_count,
+                parameters.sun_state_count,
+                parameters.optical_height_count,
+                parameters.optical_angle_count,
+            ] != [40, 160, 128, 512]
+            || [
+                parameters.incident_direction_count,
+                parameters.phase_node_count,
+                parameters.cone_node_count,
+                parameters.scattering_iteration,
+            ] != [1536, 20, 12, 0]
+            || parameters.mapping_version != 63
+            || parameters.multiple_scattering_marker != 1
+            || parameters.horizon_power != 3.0
+            || !parameters.path_height_scale_km.is_finite()
+            || parameters.path_height_scale_km <= 0.0
+            || !(1..=40).contains(&parameters.low_height_count)
         {
             return Err(Error::Data("balanced 网格或物理数据长度不匹配"));
         }
@@ -352,14 +405,24 @@ impl FrameState {
             sky: self.last_sky != Some(key),
             aerial: self.last_aerial != Some(view),
         };
-        self.parameters.view[3] = view.altitude_km;
-        self.parameters.sun[0] = view.sun_direction[0].atan2(view.sun_direction[2]);
-        self.parameters.sun[1] = elevation;
-        self.parameters.size_steps = [SKY_SIZE, SKY_SIZE, 64, 1];
+        self.parameters.observer_height_km = view.altitude_km;
+        self.parameters.sun_azimuth = view.sun_direction[0].atan2(view.sun_direction[2]);
+        self.parameters.sun_elevation = elevation;
+        [
+            self.parameters.output_width,
+            self.parameters.output_height,
+            self.parameters.integration_steps,
+            self.parameters.multiple_scattering_marker,
+        ] = [SKY_SIZE, SKY_SIZE, 64, 1];
         if self.pending.sky || previous_pending.sky {
             let (mapping, layout) = calibration.cache(view.altitude_km, elevation);
             self.mapping = mapping;
-            self.parameters.sky = layout;
+            [
+                self.parameters.sky_width,
+                self.parameters.sky_height,
+                self.parameters.lower_sky_rows,
+                self.parameters.sky_rows,
+            ] = layout;
         }
         self.view = Some(view);
         Ok(self.pending)
@@ -369,7 +432,7 @@ impl FrameState {
         if let Some(view) = self.view {
             self.last_sky = Some(SkyKey {
                 height: view.altitude_km,
-                elevation: self.parameters.sun[1],
+                elevation: self.parameters.sun_elevation,
             });
             self.last_aerial = Some(view);
         }

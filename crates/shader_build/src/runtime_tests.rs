@@ -1,5 +1,38 @@
 use super::*;
+use crate::Target;
 use std::io;
+
+#[cfg(shader_release)]
+#[test]
+#[ignore = "需要Slang；不创建GPU"]
+fn runtime_audit_is_read_on_demand_and_main_survives_cache_cleanup() {
+    let fixture = Fixture::new();
+    let compiler = fixture.compiler();
+    let recipe = Recipe {
+        source: fixture.source.to_str().unwrap(),
+        entry: "main",
+        stage: "compute",
+        output: "main.spv",
+        target: Target::Spirv("spirv_1_5"),
+        args: &["-DVALUE=17"],
+    };
+    let artifact = compiler.compile(&recipe).unwrap();
+    let audit = artifact.read_audit().unwrap();
+    assert!(matches!(audit, Cow::Owned(_)));
+    crate::verify_audit_pair(artifact.bytes(), &audit).unwrap();
+    drop(audit);
+    let main_hash = blake3::hash(artifact.bytes());
+    let audit_path = artifact.audit.as_ref().unwrap().path.clone();
+    fs::remove_file(&audit_path).unwrap();
+    assert!(matches!(artifact.read_audit(), Err(Error::Io { .. })));
+    assert_eq!(blake3::hash(artifact.bytes()), main_hash);
+    let restored = compiler.compile(&recipe).unwrap();
+    assert!(!restored.cache_hit());
+    crate::verify_audit_pair(restored.bytes(), &restored.read_audit().unwrap()).unwrap();
+    fs::write(&audit_path, b"corrupt").unwrap();
+    assert!(matches!(restored.read_audit(), Err(Error::AuditPair(_))));
+    assert_eq!(blake3::hash(restored.bytes()), main_hash);
+}
 
 struct Fixture {
     root: PathBuf,

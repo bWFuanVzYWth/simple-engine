@@ -48,7 +48,7 @@ pub struct Tables {
 #[derive(Default)]
 pub struct TablePatches {
     /// 选择头、活动槽与 BVH 的变化行。
-    pub alias: Vec<(usize, [u32; 4])>,
+    pub selection: Vec<(usize, [u32; 4])>,
     /// 面积协议与 quad 身份的变化行。
     pub meta: Vec<(usize, [u32; 4])>,
     /// 局部四角的变化行。
@@ -113,13 +113,8 @@ fn tree_base(capacity: usize) -> usize {
 }
 
 fn selection_rows(capacity: usize) -> Result<usize, Error> {
-    let packets = capacity.saturating_sub(1);
-    let tree_words = packets
-        .checked_mul(10)
-        .and_then(|v| v.checked_add(7))
-        .map(|v| v & !7)
-        .and_then(|v| v.checked_add(capacity * 8))
-        .ok_or(Error::Invalid("发光位置树容量溢出"))?;
+    let tree_words =
+        light_bvh::storage_words(capacity).ok_or(Error::Invalid("发光位置树容量溢出"))?;
     tree_base(capacity)
         .checked_add(tree_words / 4)
         .ok_or(Error::Invalid("发光选择表容量溢出"))
@@ -683,8 +678,8 @@ impl<'a> Writer<'a> {
                     }
                 }
             }
-            patches.alias = reserved(rows.len())?;
-            patches.alias.extend(rows);
+            patches.selection = reserved(rows.len())?;
+            patches.selection.extend(rows);
             patches.inverse = reserved(self.delta.inverse.len())?;
             patches
                 .inverse
@@ -954,7 +949,7 @@ mod tests {
     }
 
     fn apply(tables: &mut Tables, patches: &TablePatches) {
-        for &(row, value) in &patches.alias {
+        for &(row, value) in &patches.selection {
             tables.selection[row] = value;
         }
         for &(row, value) in &patches.meta {
@@ -1031,7 +1026,7 @@ mod tests {
         let tree_base = tables.selection[0][1] as usize;
         assert!(
             patches
-                .alias
+                .selection
                 .iter()
                 .filter(|(row, _)| *row < tree_base)
                 .count()
@@ -1071,7 +1066,7 @@ mod tests {
         writer.remove(0).unwrap();
         let (delta, _, patches) = writer.finish().unwrap();
         assert!(delta.proposal.is_some());
-        assert!(!patches.alias.is_empty());
+        assert!(!patches.selection.is_empty());
         drop(delta);
         validate(&registry, &tables);
     }
@@ -1201,7 +1196,7 @@ mod tests {
         assert_eq!(writer.add(record(16)).unwrap(), 16);
         let (delta, tables, patches) = writer.finish().unwrap();
         assert_eq!(tables.as_ref().unwrap().meta.len(), 32);
-        assert!(patches.alias.is_empty());
+        assert!(patches.selection.is_empty());
         registry.reserve(&delta, tables.as_ref()).unwrap();
         let shadow = copy_tables(tables.as_ref().unwrap());
         registry.commit(delta, tables);

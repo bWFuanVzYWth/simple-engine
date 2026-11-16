@@ -4,7 +4,7 @@ using namespace atmosphere;
 [[vk::binding(0, 0)]]
 var frames : StructuredBuffer<TerrainFrame>;
 [[vk::binding(1, 0)]]
-var shadowCells : RWStructuredBuffer<uint4>;
+var shadow_cells : RWStructuredBuffer<uint4>;
 #include "shadow_source.inc.slang"
 [shader("compute")]
 [numthreads(8, 1, 1)]

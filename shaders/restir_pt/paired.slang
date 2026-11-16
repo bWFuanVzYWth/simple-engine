@@ -46,27 +46,27 @@ public func paired_size(slot: uint)->uint
 /// NV随机平移、反射和转置；randomBits来自整帧共享RNG的一次next()。
 public struct PairedNeighborTransform
 {
-    public var offsetX : int;
-    public var offsetY : int;
-    public var flipX : bool;
-    public var flipY : bool;
+    public var offset_x : int;
+    public var offset_y : int;
+    public var flip_x : bool;
+    public var flip_y : bool;
     public var transpose : bool;
 };
 
 /// 保留NV 15+14+1+1+1bit分割；frameDim须非零，不按像素独立播种。
-public func paired_transform(randomBits: uint, frameDim: uint2)->PairedNeighborTransform
+public func paired_transform(random_bits: uint, frame_dim: uint2)->PairedNeighborTransform
 {
-    var randomBits = randomBits;
+    let random_bits = random_bits;
     var result : PairedNeighborTransform;
-    result.offsetX = int((randomBits & 0x7fffu) % frameDim.x);
-    randomBits >>= 15;
-    result.offsetY = int((randomBits & 0x3fffu) % frameDim.y);
-    randomBits >>= 14;
-    result.flipX = (randomBits & 1u) != 0;
-    randomBits >>= 1;
-    result.flipY = (randomBits & 1u) != 0;
-    randomBits >>= 1;
-    result.transpose = (randomBits & 1u) != 0;
+    result.offset_x = int((random_bits & 0x7fffu) % frame_dim.x);
+    random_bits >>= 15;
+    result.offset_y = int((random_bits & 0x3fffu) % frame_dim.y);
+    random_bits >>= 14;
+    result.flip_x = (random_bits & 1u) != 0;
+    random_bits >>= 1;
+    result.flip_y = (random_bits & 1u) != 0;
+    random_bits >>= 1;
+    result.transpose = (random_bits & 1u) != 0;
     return result;
 }
 
@@ -77,20 +77,20 @@ public func paired_delta(lut: StructuredBuffer<uint>, transform: PairedNeighborT
     ->int2
 {
     let size = int(paired_size(slot));
-    var coordinate : int2 = (int2(pixel) + int2(transform.offsetX, transform.offsetY)) % size;
-    if (transform.flipX)
+    var coordinate : int2 = (int2(pixel) + int2(transform.offset_x, transform.offset_y)) % size;
+    if (transform.flip_x)
         coordinate.x = size - 1 - coordinate.x;
-    if (transform.flipY)
+    if (transform.flip_y)
         coordinate.y = size - 1 - coordinate.y;
     if (transform.transpose)
         coordinate = coordinate.yx;
-    let packed : uint = lut[PAIRED_SLOT_CAPACITY * slot + uint(coordinate.y * size + coordinate.x)];
+    let packed = lut[PAIRED_SLOT_CAPACITY * slot + uint(coordinate.y * size + coordinate.x)];
     var delta = int2(int(packed & 0xffu) - 128, int(packed >> 8) - 128);
     if (transform.transpose)
         delta = delta.yx;
-    if (transform.flipX)
+    if (transform.flip_x)
         delta.x = -delta.x;
-    if (transform.flipY)
+    if (transform.flip_y)
         delta.y = -delta.y;
     return delta;
 }
@@ -104,8 +104,8 @@ public func paired_neighbor(lut: StructuredBuffer<uint>, transform: PairedNeighb
 }
 
 /// paired precomputed/reconnection逻辑地址。逆向缓存取neighborOffset的同一个slot。
-public func paired_address(reservoirOffset: uint, slot: uint)->uint
+public func paired_address(reservoir_offset: uint, slot: uint)->uint
 {
-    return PAIRED_NEIGHBOR_COUNT * reservoirOffset + slot;
+    return PAIRED_NEIGHBOR_COUNT * reservoir_offset + slot;
 }
 }

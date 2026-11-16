@@ -25,7 +25,7 @@
 mod layout;
 mod partition;
 
-pub use layout::{LEAF, SELECTORS};
+pub use layout::{LEAF, SELECTORS, storage_words};
 use layout::{child_offset, leaf_offset, metric_offset, packet_offset};
 use partition::select_median;
 

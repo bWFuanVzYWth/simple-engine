@@ -3,105 +3,106 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/state.slang";
 
-import "bsdf/openpbr/dielectric/contract.slang";
-import "bsdf/openpbr/math/microfacet_measure.slang";
-import "bsdf/openpbr/math/microfacet_energy.slang";
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/math/spectrum.slang";
-import "bsdf/openpbr/model/volume.slang";
+import bsdf.openpbr.dielectric.contract;
+import bsdf.openpbr.math.microfacet_measure;
+import bsdf.openpbr.math.microfacet_energy;
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.math.spectrum;
+import bsdf.openpbr.model.volume;
 
-public func primeFullCompactTransmissionClosureState(state: PrimeFullCompactTransmissionState)
-    ->PrimeFullCompactTransmissionState
+namespace openpbr
+{
+namespace kernel
+{
+public func transmission_closure_state(state: TransmissionState)->TransmissionState
 {
     var state = state;
-    if (state.geometryThinWalled == 0u)
+    if (state.geometry_thin_walled == 0u)
     {
         state.entering = 1u;
     }
     return state;
 }
 
-public func primeFullCompactTransmissionSupports(material: PrimeFullOpenPbrMaterial)->bool
+public func transmission_supports(material: FullMaterial)->bool
 {
-    return material.weight.base == 1.0 && material.weight.diffuseRoughness == 0.0 &&
+    return material.weight.base == 1.0 && material.weight.diffuse_roughness == 0.0 &&
            material.weight.specular == 1.0 && material.weight.metalness == 0.0 &&
            material.weight.subsurface == 0.0 && material.weight.transmission == 1.0 &&
            material.weight.coat == 0.0 && material.weight.fuzz == 0.0 &&
-           material.weight.thinFilm == 0.0 && material.weight.diffraction == 0.0 &&
-           material.transmission.dispersionScale == 0.0;
+           material.weight.thin_film == 0.0 && material.weight.diffraction == 0.0 &&
+           material.transmission.dispersion_scale == 0.0;
 }
 
-// energyCosine is abs(wi.z) for the material frame, or wi.z for the physical interface.
+// energy_cosine is abs(wi.z) for the material frame, or wi.z for the physical interface.
 // Selecting it here avoids constructing and then replacing the exiting-interface LUT result.
-public func primeFullCompactTransmissionStateInit<TransmissionGgxEnergy>(
-    transmissionGgxEnergy: TransmissionGgxEnergy, material: PrimeFullOpenPbrMaterial, wi: float3,
-    outsideMedium: PrimeFullOpenPbrVolume, rayT: float, energyCosine: float)
-    ->PrimeFullCompactTransmissionState
-    where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
+public func transmission_state_init<EnergyLut>(energy_lut: EnergyLut, material: FullMaterial,
+                                               wi: float3, outside_medium: Volume, ray_t: float,
+                                               energy_cosine: float)
+    ->TransmissionState
+    where EnergyLut : openpbr::IEnergyLut
 {
-    var state : PrimeFullCompactTransmissionState;
-    state.onb = material.geometry.onb;
-    state.geometryThinWalled = material.geometry.thinWalled;
+    var state : TransmissionState;
+    state.frame = material.geometry.frame;
+    state.geometry_thin_walled = material.geometry.thin_walled;
     state.entering = wi.z >= 0.0 ? 1u : 0u;
-    state.rayT = rayT;
-    state.originalIor = material.specular.ior;
-    state.transmissionColor = material.transmission.color;
-    state.specularMicrofacet.alpha = primeFullOpenPbrSpecularNdfRoughnesses(
-        material.specular.roughness, material.specular.roughnessAnisotropy);
-    state.specularFresnel.ior = material.specular.ior * (1.0 / outsideMedium.ior);
-    state.specularFresnel.energyIor =
-        primeFullOpenPbrIorAdjustment(state.specularFresnel.ior, material.weight.specular);
-    state.specularFresnel.color = material.specular.color;
-    state.transmissionTint =
+    state.ray_t = ray_t;
+    state.original_ior = material.specular.ior;
+    state.transmission_color = material.transmission.color;
+    state.specular_microfacet.alpha = specular_ndf_roughnesses(
+        material.specular.roughness, material.specular.roughness_anisotropy);
+    state.specular_fresnel.ior = material.specular.ior * (1.0 / outside_medium.ior);
+    state.specular_fresnel.energy_ior =
+        ior_adjustment(state.specular_fresnel.ior, material.weight.specular);
+    state.specular_fresnel.color = material.specular.color;
+    state.transmission_tint =
         material.transmission.depth == 0.0 ? material.transmission.color : float3(1.0);
-    state.transmissionVolume = primeFullOpenPbrVolumeFromTransmission(material.transmission);
-    state.transmissionVolume.ior = material.specular.ior;
-    if (state.geometryThinWalled == 0u && state.entering == 0u)
+    state.transmission_volume = volume_from_transmission(material.transmission);
+    state.transmission_volume.ior = material.specular.ior;
+    if (state.geometry_thin_walled == 0u && state.entering == 0u)
     {
-        state.transmissionVolume = outsideMedium;
+        state.transmission_volume = outside_medium;
     }
-    state.transmissionMicrofacet.alpha = float2(0.0);
-    state.transmissionMultipleScattering = float3(1.0, 1.0, 0.0);
-    if (state.geometryThinWalled != 0u)
+    state.transmission_microfacet.alpha = float2(0.0);
+    state.transmission_multiple_scattering = float3(1.0, 1.0, 0.0);
+    if (state.geometry_thin_walled != 0u)
     {
-        state.transmissionMicrofacet.alpha =
-            clamp(state.specularMicrofacet.alpha *
-                      primeFullOpenPbrThinDielectricRoughnessScaler2(state.specularFresnel.ior),
+        state.transmission_microfacet.alpha =
+            clamp(state.specular_microfacet.alpha *
+                      thin_dielectric_roughness_scaler2(state.specular_fresnel.ior),
                   float2(0.0), float2(1.0));
     }
     else
     {
-        state.transmissionMultipleScattering = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-            transmissionGgxEnergy, state.specularMicrofacet, energyCosine,
-            state.specularFresnel.ior);
+        state.transmission_multiple_scattering = dielectric_energy(
+            energy_lut, state.specular_microfacet, energy_cosine, state.specular_fresnel.ior);
     }
     return state;
 }
 
-public func primeFullCompactTransmissionStateInit<TransmissionGgxEnergy>(
-    transmissionGgxEnergy: TransmissionGgxEnergy, material: PrimeFullOpenPbrMaterial, wi: float3,
-    outsideMedium: PrimeFullOpenPbrVolume, rayT: float)
-    ->PrimeFullCompactTransmissionState
-    where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
+public func transmission_state_init<EnergyLut>(energy_lut: EnergyLut, material: FullMaterial,
+                                               wi: float3, outside_medium: Volume, ray_t: float)
+    ->TransmissionState
+    where EnergyLut : openpbr::IEnergyLut
 {
-    return primeFullCompactTransmissionStateInit(transmissionGgxEnergy, material, wi, outsideMedium,
-                                                 rayT, abs(wi.z));
+    return transmission_state_init(energy_lut, material, wi, outside_medium, ray_t, abs(wi.z));
 }
 
-public func primeFullCompactTransmissionInterfaceState<TransmissionGgxEnergy>(
-    transmissionGgxEnergy: TransmissionGgxEnergy, wi: float3,
-    state: PrimeFullCompactTransmissionState)
-    ->PrimeFullCompactTransmissionState
-    where TransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
+public func transmission_interface_state<EnergyLut>(energy_lut: EnergyLut, wi: float3,
+                                                    state: TransmissionState)
+    ->TransmissionState
+    where EnergyLut : openpbr::IEnergyLut
 {
     var state = state;
-    if (state.geometryThinWalled != 0u || state.entering != 0u)
+    if (state.geometry_thin_walled != 0u || state.entering != 0u)
     {
         return state;
     }
-    state.transmissionMultipleScattering = primeFullOpenPbrMicrofacetDielectricMsCompensation(
-        transmissionGgxEnergy, state.specularMicrofacet, wi.z, state.specularFresnel.ior);
+    state.transmission_multiple_scattering =
+        dielectric_energy(energy_lut, state.specular_microfacet, wi.z, state.specular_fresnel.ior);
     return state;
+}
+}
 }

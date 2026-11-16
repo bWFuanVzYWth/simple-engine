@@ -3,25 +3,28 @@
 #language slang 2026
 module "bsdf/openpbr/model/volume.slang";
 
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.math.spectrum;
 
-public func primeFullOpenPbrVolumeFromTransmission(transmission: PrimeFullOpenPbrTransmission)
-    ->PrimeFullOpenPbrVolume
+namespace openpbr
 {
-    var result : PrimeFullOpenPbrVolume;
+namespace kernel
+{
+public func volume_from_transmission(transmission: Transmission)->Volume
+{
+    var result : Volume;
     if (transmission.depth > 0.0)
     {
-        let muT : float3 = -log(max(float3(1.0e-3), transmission.color)) / transmission.depth;
-        let muS : float3 = transmission.scatter / transmission.depth;
-        var muA : float3 = muT - muS;
-        muA -= float3(min(0.0, primeFullOpenPbrReduceMin(muA)));
-        result.extinction = muA + muS;
-        result.albedo = float3(result.extinction.x != 0.0 ? muS.x / result.extinction.x : 0.0,
-                               result.extinction.y != 0.0 ? muS.y / result.extinction.y : 0.0,
-                               result.extinction.z != 0.0 ? muS.z / result.extinction.z : 0.0);
-        result.anisotropy = clamp(transmission.scatterAnisotropy, -0.99, 0.99);
+        let mu_t : float3 = -log(max(float3(1.0e-3), transmission.color)) / transmission.depth;
+        let mu_s : float3 = transmission.scatter / transmission.depth;
+        var mu_a : float3 = mu_t - mu_s;
+        mu_a -= float3(min(0.0, reduce_min(mu_a)));
+        result.extinction = mu_a + mu_s;
+        result.albedo = float3(result.extinction.x != 0.0 ? mu_s.x / result.extinction.x : 0.0,
+                               result.extinction.y != 0.0 ? mu_s.y / result.extinction.y : 0.0,
+                               result.extinction.z != 0.0 ? mu_s.z / result.extinction.z : 0.0);
+        result.anisotropy = clamp(transmission.scatter_anisotropy, -0.99, 0.99);
     }
     else
     {
@@ -30,7 +33,9 @@ public func primeFullOpenPbrVolumeFromTransmission(transmission: PrimeFullOpenPb
         result.anisotropy = 0.0;
     }
     result.ior = 1.0;
-    result.mediumId = 0u;
-    result.iorEncoding = 0u;
+    result.medium_id = 0u;
+    result.ior_encoding = 0u;
     return result;
+}
+}
 }

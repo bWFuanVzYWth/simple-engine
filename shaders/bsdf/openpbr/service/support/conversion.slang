@@ -3,72 +3,78 @@
 #language slang 2026
 module "bsdf/openpbr/service/support/conversion.slang";
 
-import "bsdf/openpbr/service/contract/sample.slang";
-import "bsdf/openpbr/service/support/sanitization.slang";
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/math/frame.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/contract/flags.slang";
+import bsdf.openpbr.service.contract.sample;
+import bsdf.openpbr.service.support.sanitization;
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.math.frame;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.contract.flags;
 
-public func lessThan(first: float3, second: float3)->bool3
+namespace openpbr
+{
+namespace kernel
+{
+public func less_than(first: float3, second: float3)->bool3
 {
     return first < second;
 }
-public func lessThanEqual(first: float3, second: float3)->bool3
+public func less_than_equal(first: float3, second: float3)->bool3
 {
     return first <= second;
 }
 
-public func primeFullOpenPbrHasSample(sampleValue: PrimeFullOpenPbrSample)->bool
+public func has_sample(sample_value: Proposal)->bool
 {
-    if (sampleValue.throughput.flags == PRIME_FULL_OPENPBR_FLAG_NONE)
+    if (sample_value.response.flags == LOBE_NONE)
     {
         // A rejected proposal has no consumable payload. The adapter replaces it with the canonical
         // zero-event sample, so inspecting discarded fields only creates diagnostic false
         // positives.
         return false;
     }
-    // relativeEta is sanitized after the adapter has accepted the internal proposal. Observe the
+    // relative_eta is sanitized after the adapter has accepted the internal proposal. Observe the
     // raw value here so that the sanitizer cannot erase the first numerical failure.
-    if (!primeBsdfDirection(sampleValue.wo) || !primeBsdfFinite(sampleValue.throughput.value) ||
-        !primeBsdfFinite(sampleValue.pdf) ||
-        any(lessThan(sampleValue.throughput.value, float3(0.0))) || !(sampleValue.pdf > 0.0))
+    if (!is_direction(sample_value.wo) || !is_finite(sample_value.response.value) ||
+        !is_finite(sample_value.pdf) || any(less_than(sample_value.response.value, float3(0.0))) ||
+        !(sample_value.pdf > 0.0))
     {
         // Float singularities in the reference closure are contained at the adapter boundary.
-        // A rejected proposal contributes zero and cannot poison later MIS or throughput state.
+        // A rejected proposal contributes zero and cannot poison later MIS or response state.
         return false;
     }
     return true;
 }
 
-public func primeFullOpenPbrToBsdfContinuousEventFlags(flags: uint)->uint
+public func to_bsdf_continuous_event_flags(flags: uint)->uint
 {
     var result = 0u;
-    if (primeFullOpenPbrIsReflective(flags))
+    if (is_reflective(flags))
     {
-        result |= PRIME_BSDF_EVENT_REFLECTION;
+        result |= EVENT_REFLECTION;
     }
-    if (primeFullOpenPbrIsTransmissive(flags))
+    if (is_transmissive(flags))
     {
-        result |= PRIME_BSDF_EVENT_TRANSMISSION;
+        result |= EVENT_TRANSMISSION;
     }
-    if (primeFullOpenPbrIsDiffuse(flags))
+    if (is_diffuse(flags))
     {
-        result |= PRIME_BSDF_EVENT_DIFFUSE;
+        result |= EVENT_DIFFUSE;
     }
-    if (primeFullOpenPbrIsSpecular(flags))
+    if (is_specular(flags))
     {
-        result |= PRIME_BSDF_EVENT_GLOSSY;
+        result |= EVENT_GLOSSY;
     }
     return result;
 }
 
-public func primeFullOpenPbrToBsdfEventFlags(flags: uint)->uint
+public func to_bsdf_event_flags(flags: uint)->uint
 {
-    var result : uint = primeFullOpenPbrToBsdfContinuousEventFlags(flags);
-    if (primeFullOpenPbrIsDelta(flags))
+    var result : uint = to_bsdf_continuous_event_flags(flags);
+    if (is_delta(flags))
     {
-        result |= PRIME_BSDF_EVENT_DISCRETE;
+        result |= EVENT_DISCRETE;
     }
     return result;
+}
+}
 }

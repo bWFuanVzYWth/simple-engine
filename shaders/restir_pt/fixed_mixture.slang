@@ -13,6 +13,6 @@ public func fixed_mixture_fresh(pixel: uint2, sample_value: uint, probability: f
     if (probability >= 1.0)
         return true;
     var sampler : TinyUniformSampleGenerator = rng_for_pixel(pixel, sample_value ^ 0xa511e9b3u);
-    return sampler.next1D() < probability;
+    return sampler.next_1d() < probability;
 }
 }

@@ -15,7 +15,7 @@
 //! 固定 seed、像素与绝对样本索引决定采样序列，batch 仅控制 dispatch 分组；
 //! 同设备/构建保证分批等价，不承诺跨 GPU 或编译器逐位一致。原生路径直接执行 Slang SPIR-V；
 //! 每批上传/提交，最终统一等待和读回，主机计时包含这些成本，不能视为纯 GPU 时间。
-//! shader_blake3 包含入口及共享模块，spirv_blake3 按 raygen/miss/closest-hit 记录实际字节码。
+//! shader_blake3 复用受控构建的编译器、着色器和构建工具身份，spirv_blake3 记录三个入口的实际字节码。
 #![forbid(unsafe_code)]
 
 #[cfg(all(feature = "mimalloc", not(target_arch = "wasm32")))]
@@ -307,7 +307,7 @@ fn run(args: Args) -> Result<(), Error> {
         "driver": info.driver, "driver_info": info.driver_info,
         "slang_version": env!("SLANG_VERSION"),
         "scene_blake3": scene_hash.finalize().to_hex().as_str(),
-        "shader_blake3": env!("CORNELL_SHADER_BLAKE3"),
+        "shader_blake3": env!("SOURCE_BLAKE3"),
         "spirv_blake3": spirv_hash.finalize().to_hex().as_str(),
         "dependency_lock_blake3": blake3::hash(include_bytes!("../../../Cargo.lock")).to_hex().as_str(),
         "executable_blake3": executable_hash.finalize().to_hex().as_str(),

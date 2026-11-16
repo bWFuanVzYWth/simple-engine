@@ -3,16 +3,22 @@
 #language slang 2026
 module "bsdf/openpbr/energy.slang";
 
-import "bsdf/openpbr/math/microfacet_energy.slang";
+import bsdf.openpbr.math.microfacet_energy;
 
 // Immutable author-supplied 44x32x159 HALF4 energy table, uploaded once into
 // device-local image memory. Normalized linear clamp filtering matches legacy.
 
-public struct PrimeFullTransmissionGgxEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
+namespace openpbr
 {
-    public Sampler3D<float4> texture;
-    public func sampleLevel(uvw: float3)->float4
+namespace kernel
+{
+public struct CombinedEnergySampler : openpbr::IEnergyLut
+{
+    public var texture : Sampler3D<float4>;
+    public func lookup(uvw: float3)->float4
     {
         return texture.SampleLevel(uvw, 0.0);
     }
 };
+}
+}

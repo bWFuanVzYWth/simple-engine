@@ -25,7 +25,6 @@ mimalloc = { workspace = true, optional = true }
 
 [build-dependencies]
 simple_engine = { workspace = true, features = ["shader_build", "shader_library"] }
-blake3.workspace = true
 
 [lints]
 workspace = true

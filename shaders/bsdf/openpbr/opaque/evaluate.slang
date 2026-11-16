@@ -3,72 +3,58 @@
 #language slang 2026
 module "bsdf/openpbr/opaque/evaluate.slang";
 
-import "bsdf/openpbr/opaque/state.slang";
-import "bsdf/openpbr/opaque/lobes.slang";
-import "bsdf/openpbr/contract/flags.slang";
+import bsdf.openpbr.opaque.state;
+import bsdf.openpbr.opaque.lobes;
+import bsdf.openpbr.contract.flags;
 
-public func primeFullCompactOpaqueEvaluate(wi: float3, wo: float3,
-                                           state: PrimeFullCompactOpaqueState)
-    ->PrimeFullCompactOpaqueEvaluation
+namespace openpbr
 {
-    var result : PrimeFullCompactOpaqueEvaluation;
+namespace kernel
+{
+public func opaque_evaluate(wi: float3, wo: float3, state: OpaqueState)->LocalEvaluation
+{
+    var result : LocalEvaluation;
     if (state.metalness > 0.0 && state.metalness < 1.0)
     {
-        result.throughput = primeFullCompactMixEval(
-            primeFullCompactOpaqueLayerEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL),
-            primeFullCompactConductorEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL),
-            state.metalness);
-        result.pdf = lerp(primeFullCompactOpaqueLayerPdf(wi, wo, state),
-                          primeFullCompactConductorPdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL),
+        result.response = mix_eval(opaque_layer_eval(wi, wo, state, LOBE_ALL),
+                                   conductor_eval(wi, wo, state, LOBE_ALL), state.metalness);
+        result.pdf = lerp(opaque_layer_pdf(wi, wo, state), conductor_pdf(wi, wo, state, LOBE_ALL),
                           state.metalness);
         return result;
     }
-    result.throughput =
-        state.kind == PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR
-            ? primeFullCompactConductorEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-            : primeFullCompactOpaqueLayerEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
-    result.pdf = state.kind == PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR
-                     ? primeFullCompactConductorPdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL)
-                     : primeFullCompactOpaqueLayerPdf(wi, wo, state);
+    result.response = state.kind == FULL_COMPACT_OPAQUE_CONDUCTOR
+                          ? conductor_eval(wi, wo, state, LOBE_ALL)
+                          : opaque_layer_eval(wi, wo, state, LOBE_ALL);
+    result.pdf = state.kind == FULL_COMPACT_OPAQUE_CONDUCTOR
+                     ? conductor_pdf(wi, wo, state, LOBE_ALL)
+                     : opaque_layer_pdf(wi, wo, state);
     return result;
 }
 
-public func primeFullCompactOpaqueEvaluateComponents(wi: float3, wo: float3,
-                                                     state: PrimeFullCompactOpaqueState)
-    ->PrimeFullCompactOpaqueComponents
+public func opaque_evaluate_components(wi: float3, wo: float3, state: OpaqueState)->OpaqueComponents
 {
-    var result : PrimeFullCompactOpaqueComponents;
+    var result : OpaqueComponents;
     result.diffuse = float3(0.0);
     result.specular = float3(0.0);
     if (state.metalness > 0.0 && state.metalness < 1.0)
     {
         result.diffuse =
-            (1.0 - state.metalness) *
-            primeFullCompactOpaqueLayerEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE).value;
-        result.specular = lerp(
-            primeFullCompactOpaqueLayerEval(
-                wi, wo, state, PRIME_FULL_OPENPBR_FLAG_SPECULAR | PRIME_FULL_OPENPBR_FLAG_DELTA)
-                .value,
-            primeFullCompactConductorEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL).value,
-            state.metalness);
-        result.pdf = primeFullCompactOpaqueEvaluate(wi, wo, state).pdf;
+            (1.0 - state.metalness) * opaque_layer_eval(wi, wo, state, LOBE_DIFFUSE).value;
+        result.specular = lerp(opaque_layer_eval(wi, wo, state, LOBE_SPECULAR | LOBE_DELTA).value,
+                               conductor_eval(wi, wo, state, LOBE_ALL).value, state.metalness);
+        result.pdf = opaque_evaluate(wi, wo, state).pdf;
         return result;
     }
-    if (state.kind == PRIME_FULL_COMPACT_OPAQUE_CONDUCTOR)
+    if (state.kind == FULL_COMPACT_OPAQUE_CONDUCTOR)
     {
-        result.specular =
-            primeFullCompactConductorEval(
-                wi, wo, state, PRIME_FULL_OPENPBR_FLAG_SPECULAR | PRIME_FULL_OPENPBR_FLAG_DELTA)
-                .value;
-        result.pdf = primeFullCompactConductorPdf(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_ALL);
+        result.specular = conductor_eval(wi, wo, state, LOBE_SPECULAR | LOBE_DELTA).value;
+        result.pdf = conductor_pdf(wi, wo, state, LOBE_ALL);
         return result;
     }
-    result.diffuse =
-        primeFullCompactOpaqueLayerEval(wi, wo, state, PRIME_FULL_OPENPBR_FLAG_DIFFUSE).value;
-    result.specular =
-        primeFullCompactOpaqueLayerEval(
-            wi, wo, state, PRIME_FULL_OPENPBR_FLAG_SPECULAR | PRIME_FULL_OPENPBR_FLAG_DELTA)
-            .value;
-    result.pdf = primeFullCompactOpaqueLayerPdf(wi, wo, state);
+    result.diffuse = opaque_layer_eval(wi, wo, state, LOBE_DIFFUSE).value;
+    result.specular = opaque_layer_eval(wi, wo, state, LOBE_SPECULAR | LOBE_DELTA).value;
+    result.pdf = opaque_layer_pdf(wi, wo, state);
     return result;
+}
+}
 }

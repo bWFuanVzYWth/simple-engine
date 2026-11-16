@@ -3,69 +3,68 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/discrete.slang";
 
-import "bsdf/openpbr/contract/volume_sample.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/dielectric/contract.slang";
-import "bsdf/openpbr/dielectric/thin_wall.slang";
-import "bsdf/openpbr/dielectric/volume.slang";
-import "bsdf/openpbr/math/fresnel.slang";
-import "bsdf/openpbr/math/delta.slang";
-import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.contract.volume_sample;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.dielectric.contract;
+import bsdf.openpbr.dielectric.thin_wall;
+import bsdf.openpbr.dielectric.volume;
+import bsdf.openpbr.math.fresnel;
+import bsdf.openpbr.math.delta;
+import bsdf.openpbr.math.spectrum;
 
-public func primeFullCompactRefractiveDiscreteSample(wi: float3, randomEvent: float,
-                                                     state: PrimeFullCompactTransmissionState,
-                                                     samplingFlags: uint)
-    ->PrimeFullOpenPbrSample
+namespace openpbr
 {
-    return primeFullRefractiveDeltaSample(wi, randomEvent, state.specularFresnel, samplingFlags);
+namespace kernel
+{
+public func refractive_discrete_sample(wi: float3, random_event: float, state: TransmissionState,
+                                       sampling_flags: uint)
+    ->Proposal
+{
+    return refractive_delta_sample(wi, random_event, state.specular_fresnel, sampling_flags);
 }
 
-public func primeFullCompactThinWallDiscreteSampleRaw(wi: float3, randomEvent: float,
-                                                      state: PrimeFullCompactTransmissionState,
-                                                      samplingFlags: uint)
-    ->PrimeFullOpenPbrSample
+public func thin_wall_discrete_sample_raw(wi: float3, random_event: float, state: TransmissionState,
+                                          sampling_flags: uint)
+    ->Proposal
 {
-    return primeFullThinWallDeltaSample(wi, randomEvent, state.specularFresnel,
-                                        state.transmissionTint, state.transmissionVolume.extinction,
-                                        samplingFlags);
+    return thin_wall_delta_sample(wi, random_event, state.specular_fresnel, state.transmission_tint,
+                                  state.transmission_volume.extinction, sampling_flags);
 }
 
-public func primeFullCompactTransmissionDiscreteSample(wi: float3, randomEvent: float,
-                                                       state: PrimeFullCompactTransmissionState,
-                                                       samplingFlags: uint,
-                                                       medium: PrimeFullOpenPbrVolume)
-    ->PrimeFullOpenPbrSampleResult
+public func transmission_discrete_sample(wi: float3, random_event: float, state: TransmissionState,
+                                         sampling_flags: uint, medium: Volume)
+    ->SampleResult
 {
-    var closureState : PrimeFullCompactTransmissionState = state;
-    if (closureState.geometryThinWalled == 0u)
+    var closure_state : TransmissionState = state;
+    if (closure_state.geometry_thin_walled == 0u)
     {
-        closureState.entering = 1u;
+        closure_state.entering = 1u;
     }
-    var result : PrimeFullOpenPbrSampleResult;
+    var result : SampleResult;
     result.medium = medium;
-    result.rayT = state.rayT;
-    if (closureState.geometryThinWalled != 0u)
+    result.ray_t = state.ray_t;
+    if (closure_state.geometry_thin_walled != 0u)
     {
-        result.bsdfSample =
-            primeFullCompactThinWallDiscreteSampleRaw(wi, randomEvent, closureState, samplingFlags);
+        result.proposal =
+            thin_wall_discrete_sample_raw(wi, random_event, closure_state, sampling_flags);
     }
     else
     {
-        result.bsdfSample = primeFullCompactRefractiveDiscreteSample(
-            primeFullCompactTransmissionMaterialFrame(wi, closureState), randomEvent, closureState,
-            samplingFlags);
-        if (result.bsdfSample.throughput.flags != PRIME_FULL_OPENPBR_FLAG_NONE)
+        result.proposal = refractive_discrete_sample(transmission_material_frame(wi, closure_state),
+                                                     random_event, closure_state, sampling_flags);
+        if (result.proposal.response.flags != LOBE_NONE)
         {
-            result.bsdfSample.wo =
-                primeFullCompactTransmissionMaterialFrame(result.bsdfSample.wo, closureState);
-            if (primeFullOpenPbrIsTransmissive(result.bsdfSample.throughput.flags))
+            result.proposal.wo = transmission_material_frame(result.proposal.wo, closure_state);
+            if (is_transmissive(result.proposal.response.flags))
             {
-                result.bsdfSample.throughput.value *= closureState.transmissionTint;
+                result.proposal.response.value *= closure_state.transmission_tint;
             }
         }
     }
-    primeFullCompactApplyTransmissionVolumeTransition(state, result);
+    apply_transmission_volume_transition(state, result);
     return result;
+}
+}
 }

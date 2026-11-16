@@ -26,12 +26,12 @@ public func uniform_light_sample(count: uint, selector: float)->LightAliasSample
     var result : LightAliasSample = {};
     if (count == 0)
         return result;
-    let target : uint = min(uint(selector * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
-    let base : uint = LIGHT_SELECTORS / count;
-    let extra : uint = LIGHT_SELECTORS % count;
-    let boundary : uint = extra * (base + 1u);
+    let target = min(uint(selector * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
+    let base = LIGHT_SELECTORS / count;
+    let extra = LIGHT_SELECTORS % count;
+    let boundary = extra * (base + 1u);
     result.index = target < boundary ? target / (base + 1u) : extra + (target - boundary) / base;
-    let mass : uint = base + uint(result.index < extra);
+    let mass = base + uint(result.index < extra);
     result.pmf = float(mass) * LIGHT_INVERSE_SELECTORS;
     return result;
 }
@@ -53,10 +53,10 @@ public func sample_light_alias(entries: StructuredBuffer<uint4>, count: uint, sh
     var result : LightAliasSample = {};
     if (count == 0)
         return result;
-    let target : uint = min(uint(selector * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
+    let target = min(uint(selector * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
     let column : uint = target >> shift;
     let local : uint = target & ((1u << shift) - 1u);
-    let entry : uint4 = entries[base + column];
+    let entry = entries[base + column];
     result.index = local < entry.x ? column : entry.y;
     result.pmf = float(entries[base + result.index].z) * LIGHT_INVERSE_SELECTORS;
     return result;
@@ -90,13 +90,13 @@ public func light_quad_vertices(p: float4, q: float4, r: float4)->LightQuadVerti
 /// 无有效f32面积时返回零密度，调用方不得再重建退化片endpoint。
 public func dynamic_quad_area(vertices_value: LightQuadVertices)->uint4
 {
-    let first : float = length(cross(vertices_value.b - vertices_value.a,
-                                     vertices_value.c - vertices_value.a)) *
-                        0.5;
-    let second : float = length(cross(vertices_value.c - vertices_value.a,
-                                      vertices_value.d - vertices_value.a)) *
-                         0.5;
-    let total : float = first + second;
+    let first =
+        length(cross(vertices_value.b - vertices_value.a, vertices_value.c - vertices_value.a)) *
+        0.5;
+    let second =
+        length(cross(vertices_value.c - vertices_value.a, vertices_value.d - vertices_value.a)) *
+        0.5;
+    let total = first + second;
     if (!(total > 0) || !isfinite(total))
         return 0;
     var split = uint(round(first / total * float(LIGHT_SELECTORS)));
@@ -122,12 +122,12 @@ public struct QuadAreaSample
 /// 条件区间取选择器格点的中点并保持开上端，返回 bary 对应该片的顶点 1/2。
 public func sample_quad_area(area: uint4, sample_value: float2)->QuadAreaSample
 {
-    let target : uint = min(uint(sample_value.x * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
-    let second : bool = target >= area.x;
-    let start : uint = second ? area.x : 0u;
-    let mass : uint = second ? LIGHT_SELECTORS - area.x : area.x;
+    let target = min(uint(sample_value.x * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
+    let second = target >= area.x;
+    let start = second ? area.x : 0u;
+    let mass = second ? LIGHT_SELECTORS - area.x : area.x;
     let u : float = min((float(target - start) + 0.5) / float(mass), 0.9999999403953552);
-    let root : float = sqrt(u);
+    let root = sqrt(u);
     var result : QuadAreaSample;
     result.half = uint(second);
     result.bary = float2(root * (1.0 - sample_value.y), root * sample_value.y);
@@ -169,12 +169,12 @@ public func quad_light_pdf(receiver: float3, target: float3, normal: float3, are
                            selection_pmf: float, sides: uint)
     ->float
 {
-    let delta : float3 = receiver - target;
-    let distance_squared : float = dot(delta, delta);
+    let delta = receiver - target;
+    let distance_squared = dot(delta, delta);
     if (area_density <= 0 || selection_pmf <= 0 || distance_squared <= 0 ||
         !isfinite(distance_squared))
         return 0;
-    let cosine : float = dot(normal, delta * rsqrt(distance_squared));
+    let cosine = dot(normal, delta * rsqrt(distance_squared));
     return quad_light_pdf_supported(distance_squared, cosine, area_density * selection_pmf, sides);
 }
 

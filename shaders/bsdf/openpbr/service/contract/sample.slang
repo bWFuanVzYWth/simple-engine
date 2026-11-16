@@ -3,107 +3,110 @@
 #language slang 2026
 module "bsdf/openpbr/service/contract/sample.slang";
 
-public func primeGeometricReflectionSupport(geometricNormal: float3, viewDirection: float3,
-                                            scatterDirection: float3)
+namespace openpbr
+{
+namespace kernel
+{
+public func geometric_reflection_support(geometric_normal: float3, view_direction: float3,
+                                         scatter_direction: float3)
     ->bool
 {
-    return dot(geometricNormal, viewDirection) * dot(geometricNormal, scatterDirection) > 0.0;
+    return dot(geometric_normal, view_direction) * dot(geometric_normal, scatter_direction) > 0.0;
 }
 
-public func primeGeometricEventSupport(geometricNormal: float3, viewDirection: float3,
-                                       scatterDirection: float3, eventFlags: uint)
+public func geometric_event_support(geometric_normal: float3, view_direction: float3,
+                                    scatter_direction: float3, event_flags: uint)
     ->bool
 {
-    let reflection : bool = (eventFlags & PRIME_BSDF_EVENT_REFLECTION) != 0u;
-    let transmission : bool = (eventFlags & PRIME_BSDF_EVENT_TRANSMISSION) != 0u;
+    let reflection : bool = (event_flags & EVENT_REFLECTION) != 0u;
+    let transmission : bool = (event_flags & EVENT_TRANSMISSION) != 0u;
     if (reflection == transmission)
     {
         return false;
     }
-    let geometricSide
-        : float = dot(geometricNormal, viewDirection) * dot(geometricNormal, scatterDirection);
-    return reflection ? geometricSide > 0.0 : geometricSide < 0.0;
+    let geometric_side
+        : float = dot(geometric_normal, view_direction) * dot(geometric_normal, scatter_direction);
+    return reflection ? geometric_side > 0.0 : geometric_side < 0.0;
 }
 
-public static const let PRIME_PI = 3.14159265358979323846;
+public static const let EVENT_REFLECTION : uint = 1 << 0;
+public static const let EVENT_TRANSMISSION : uint = 1 << 1;
+public static const let EVENT_DIFFUSE : uint = 1 << 2;
+public static const let EVENT_GLOSSY : uint = 1 << 3;
+public static const let EVENT_DISCRETE : uint = 1 << 4;
+public static const let MEASURE_SOLID_ANGLE : uint = 1;
+public static const let MEASURE_DISCRETE : uint = 2;
 
-public static const let PRIME_BSDF_EVENT_REFLECTION : uint = 1 << 0;
-public static const let PRIME_BSDF_EVENT_TRANSMISSION : uint = 1 << 1;
-public static const let PRIME_BSDF_EVENT_DIFFUSE : uint = 1 << 2;
-public static const let PRIME_BSDF_EVENT_GLOSSY : uint = 1 << 3;
-public static const let PRIME_BSDF_EVENT_DISCRETE : uint = 1 << 4;
-public static const let PRIME_MEASURE_SOLID_ANGLE : uint = 1;
-public static const let PRIME_MEASURE_DISCRETE : uint = 2;
-
-public struct PrimeClosureTraits
+public struct ClosureTraits
 {
-    public var measureMask : uint;
-    public var eventMask : uint;
+    public var measure_mask : uint;
+    public var event_mask : uint;
 };
 
-public func primeClosureSupports(traits: PrimeClosureTraits, measure: uint)->bool
+public func closure_supports(traits: ClosureTraits, measure: uint)->bool
 {
-    return (traits.measureMask & measure) != 0;
+    return (traits.measure_mask & measure) != 0;
 }
 
-public func primeClosureIsDiscreteOnly(traits: PrimeClosureTraits)->bool
+public func closure_is_discrete_only(traits: ClosureTraits)->bool
 {
-    return traits.measureMask == PRIME_MEASURE_DISCRETE;
+    return traits.measure_mask == MEASURE_DISCRETE;
 }
 
-public struct BsdfEvaluation
+public struct SurfaceEvaluation
 {
     public var response : float3;
     public var pdf : float;
 };
 
-public struct BsdfSample
+public struct SurfaceSample
 {
     public var direction : float3;
     public var response : float3;
     public var pdf : float;
-    public var relativeEta : float;
-    public var eventFlags : uint;
+    public var relative_eta : float;
+    public var event_flags : uint;
 };
 
-public func primeGeometricSampleSupport(normalMapped: bool, geometricNormal: float3,
-                                        viewDirection: float3, sample_value: BsdfSample)
+public func geometric_sample_support(normal_mapped: bool, geometric_normal: float3,
+                                     view_direction: float3, sample_value: SurfaceSample)
     ->bool
 {
-    return !normalMapped ||
-           primeGeometricEventSupport(geometricNormal, viewDirection, sample_value.direction,
-                                      sample_value.eventFlags);
+    return !normal_mapped ||
+           geometric_event_support(geometric_normal, view_direction, sample_value.direction,
+                                   sample_value.event_flags);
 }
 
 // Opaque direct lighting covers reflection only. Authored thin SSS transmission therefore
 // has no competing NEE estimator, while dielectric direct lighting covers both sides.
-public func primeDirectLightingMisPdf(dielectric: bool, sample_value: BsdfSample)->float
+public func direct_lighting_mis_pdf(dielectric: bool, sample_value: SurfaceSample)->float
 {
-    let noCompetition
-        : bool = (sample_value.eventFlags & PRIME_BSDF_EVENT_DISCRETE) != 0u ||
-                 (!dielectric && (sample_value.eventFlags & PRIME_BSDF_EVENT_TRANSMISSION) != 0u);
-    return noCompetition ? 0.0 : sample_value.pdf;
+    let no_competition : bool =
+                             (sample_value.event_flags & EVENT_DISCRETE) != 0u ||
+                             (!dielectric && (sample_value.event_flags & EVENT_TRANSMISSION) != 0u);
+    return no_competition ? 0.0 : sample_value.pdf;
 }
 
 // Direct lighting uses the same physical boundary side as continuation. The source opaque
 // direct-light contract accepts reflection only, including authored thin subsurface materials.
-public func primeGeometricEvaluationSupport(normalMapped: bool, geometricNormal: float3,
-                                            shadingNormal: float3, viewDirection: float3,
-                                            scatterDirection: float3, dielectric: bool)
+public func geometric_evaluation_support(normal_mapped: bool, geometric_normal: float3,
+                                         shading_normal: float3, view_direction: float3,
+                                         scatter_direction: float3, dielectric: bool)
     ->bool
 {
-    if (!normalMapped)
+    if (!normal_mapped)
         return true;
     let reflection
-        : bool = primeGeometricReflectionSupport(geometricNormal, viewDirection, scatterDirection);
-    let transmission
-        : bool = primeGeometricEventSupport(geometricNormal, viewDirection, scatterDirection,
-                                            PRIME_BSDF_EVENT_TRANSMISSION);
+        : bool = geometric_reflection_support(geometric_normal, view_direction, scatter_direction);
+    let transmission : bool = geometric_event_support(geometric_normal, view_direction,
+                                                      scatter_direction, EVENT_TRANSMISSION);
     if (!reflection && !transmission)
         return false;
     if (!dielectric)
         return reflection;
-    let shadingSide : float =
-                          dot(shadingNormal, viewDirection) * dot(shadingNormal, scatterDirection);
-    return shadingSide != 0.0 && (shadingSide >= 0.0) == reflection;
+    let shading_side
+        : float = dot(shading_normal, view_direction) * dot(shading_normal, scatter_direction);
+    return shading_side != 0.0 && (shading_side >= 0.0) == reflection;
+}
+}
 }

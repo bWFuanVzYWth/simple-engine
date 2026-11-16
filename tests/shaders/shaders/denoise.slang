@@ -20,9 +20,9 @@ var unused_sampler : SamplerState;
 
 using namespace pt;
 
-public struct ConstantEnergy : IPrimeFullOpenPbrTransmissionGgxEnergy
+public struct ConstantEnergy : openpbr::IEnergyLut
 {
-    public func sampleLevel(uvw: float3)->float4
+    public func lookup(uvw: float3)->float4
     {
         return float4(0.2, 0.3, 0.4, 0.5);
     }
@@ -81,7 +81,7 @@ func denoise_albedo_main(uint3 id: SV_DispatchThreadID)->void
     outputs[6] = float4(solid.specular_albedo, 1);
 }
 
-func compare_flow_albedo<let Flow : uint>(material: openpbr::Material, incident: float4,
+func compare_flow_albedo<let flow : uint>(material: openpbr::Material, incident: float4,
                                           transmitted: float4, index: uint)
     ->void
 {
@@ -89,7 +89,7 @@ func compare_flow_albedo<let Flow : uint>(material: openpbr::Material, incident:
     let view : float3 = normalize(float3(0.7, 0.1, 0.7));
     let reference : openpbr::DenoiseAlbedos = openpbr::denoise_albedos(
                         ConstantEnergy(), material, normal, view, incident, transmitted);
-    let specialized : openpbr::DenoiseAlbedos = openpbr::denoise_albedos_flow<Flow>(
+    let specialized : openpbr::DenoiseAlbedos = openpbr::denoise_albedos_flow<flow>(
                           ConstantEnergy(), material, normal, view, incident, transmitted);
     outputs[index * 4] = float4(reference.diffuse, 1);
     outputs[index * 4 + 1] = float4(reference.specular, 1);

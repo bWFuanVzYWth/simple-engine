@@ -63,11 +63,11 @@ static const let c2 = 1.19209317972490680404007434844970703125E-7;
 
 func reconstruct_triangle(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleData
 {
-    precise let edge1 : float3 = v1 - v0;
-    precise let edge2 : float3 = v2 - v0;
+    precise let edge1 = v1 - v0;
+    precise let edge2 = v2 - v0;
     precise var position : float3 = v0 + fma(float3(bary.x), edge1, bary.y * edge2);
-    let extent3 : float3 = abs(edge1) + abs(edge2) + abs(edge1 - edge2);
-    let extent : float = max(max(extent3.x, extent3.y), extent3.z);
+    let extent3 = abs(edge1) + abs(edge2) + abs(edge1 - edge2);
+    let extent = max(max(extent3.x, extent3.y), extent3.z);
     var point : TriangleData;
     point.position = position;
     point.normal = cross(edge1, edge2);
@@ -81,7 +81,7 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
                               object_to_world: float3x4, world_to_object: float3x4)
     ->TriangleEndpoint
 {
-    let object : TriangleData = reconstruct_triangle(v0, v1, v2, bary);
+    let object = reconstruct_triangle(v0, v1, v2, bary);
     precise var world_position : float3;
     world_position.x = object_to_world[0][3] + fma(object_to_world[0][0], object.position.x,
                                                    fma(object_to_world[0][1], object.position.y,
@@ -93,7 +93,7 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
                                                    fma(object_to_world[2][1], object.position.y,
                                                        object_to_world[2][2] * object.position.z));
     var world_normal : float3 = mul(transpose((float3x3)world_to_object), object.normal);
-    let world_scale : float = rsqrt(dot(world_normal, world_normal));
+    let world_scale = rsqrt(dot(world_normal, world_normal));
     world_normal *= world_scale;
 
     let translation = float3(object_to_world[0][3], object_to_world[1][3], object_to_world[2][3]);
@@ -105,7 +105,7 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
                                    c2 * abs(translation));
     let inverse_translation =
         float3(world_to_object[0][3], world_to_object[1][3], world_to_object[2][3]);
-    let object_error : float3 = fma(float3(c2), abs(inverse_translation), object.error);
+    let object_error = fma(float3(c2), abs(inverse_translation), object.error);
     var point : TriangleEndpoint;
     point.position = world_position;
     point.normal = world_normal;
@@ -119,8 +119,8 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
 /// 无实例变换的重载，输入即世界坐标；保留恒等变换误差预算，其余三角形条件同变换重载。
 public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleEndpoint
 {
-    let object : TriangleData = reconstruct_triangle(v0, v1, v2, bary);
-    let scale : float = rsqrt(dot(object.normal, object.normal));
+    let object = reconstruct_triangle(v0, v1, v2, bary);
+    let scale = rsqrt(dot(object.normal, object.normal));
     var point : TriangleEndpoint;
     point.position = object.position;
     point.normal = object.normal * scale;
@@ -159,9 +159,9 @@ public func triangle_point(v0: float3, v1: float3, v2: float3, bary: float2)->Su
 /// point 须携带单位几何法线及有效非负 offset；不修改传入的表面点。
 public func offset_origin(point_value: SurfacePoint, direction: float3)->float3
 {
-    let offset : float = dot(point_value.normal, direction) < 0.0 ? -point_value.offset
-                                                                  : point_value.offset;
-    precise let origin : float3 = fma(float3(offset), point_value.normal, point_value.position);
+    let offset =
+        dot(point_value.normal, direction) < 0.0 ? -point_value.offset : point_value.offset;
+    precise let origin = fma(float3(offset), point_value.normal, point_value.position);
     return origin;
 }
 
@@ -183,7 +183,7 @@ public func spawn_ray(point_value: SurfacePoint, direction: float3, t_max: float
 /// 连接射线误差分析：https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/#connection_rays
 public func connection_ray(source: SurfacePoint, target: TriangleEndpoint, out ray: Ray)->bool
 {
-    let delta : float3 = target.position - source.position;
+    let delta = target.position - source.position;
     ray.origin = offset_origin(source, delta);
     ray.t_min = 0.0;
     precise var direction : float3 = target.position - ray.origin;
@@ -191,7 +191,7 @@ public func connection_ray(source: SurfacePoint, target: TriangleEndpoint, out r
                          dot(target.traversal_weight, abs(ray.origin) + abs(direction));
     if (dot(target.normal, -direction) < 0.0)
         offset = -offset;
-    precise let adjusted : float3 = fma(float3(offset), target.normal, direction);
+    precise let adjusted = fma(float3(offset), target.normal, direction);
     ray.direction = adjusted;
     ray.t_max = asfloat(0x3f7fffffu);
     return all(float2(dot(direction, delta), dot(adjusted, delta)) > 0.0);

@@ -27,8 +27,9 @@
  **************************************************************************/
 
 /// 默认 point ReSTIR PT 的单棵路径树初采；NEE、BSDF-hit 与环境共同参与同一个 RIS。
-/// NV Hybrid 与独立 RR sourcePdf 契约见 replay；不改变上层配置的反弹上限。
+/// NV Hybrid 与独立 RR source_pdf 契约见 replay；不改变上层配置的反弹上限。
 module initial;
+import math.constants;
 
 import restir_pt.types;
 import restir_pt.scene;
@@ -55,7 +56,7 @@ public interface IInitialTrace<Scene : IRestirScene, State>
                out hit: HitInfo, out distance: float)
         ->bool;
     /// 当前新命中的表面；fromOrigin区分观察位置和已知wo，不能用于历史或光端点。
-    func load(inout scene: Scene, inout state: State, hit: HitInfo, view: float3, fromOrigin: bool)
+    func load(inout scene: Scene, inout state: State, hit: HitInfo, view: float3, from_origin: bool)
         ->Surface;
     [mutating]
     func shade(inout scene: Scene, inout state: State, surface: Surface, request: InitialRequest)
@@ -75,215 +76,218 @@ public struct InitialTrace<Scene : IRestirScene> : IInitialTrace<Scene, uint>
         return scene.trace(origin, direction, false, hit, distance);
     }
     public func load(inout scene: Scene, inout state: uint, hit: HitInfo, view: float3,
-                     fromOrigin: bool)
+                     from_origin: bool)
         ->Surface
     {
-        return fromOrigin ? scene.loadSurfaceFromOrigin(hit, view, false)
-                          : scene.loadSurface(hit, view, false);
+        return from_origin ? scene.load_surface_from_origin(hit, view, false)
+                           : scene.load_surface(hit, view, false);
     }
     [mutating]
     public func shade(inout scene: Scene, inout state: uint, surface: Surface,
                       request: InitialRequest)
         ->InitialVertex
     {
-        return scene.shadeInitialVertex(surface, request);
+        return scene.shade_initial_vertex(surface, request);
     }
 };
 
-func initialLastVertex(sample_value: BsdfSample, surface: Surface, rough: bool,
-                       segment: ReplaySegment, primaryFootprint: float, distanceThreshold: float)
+func initial_last_vertex(sample_value: BsdfSample, surface: Surface, rough: bool,
+                         segment: ReplaySegment, primary_footprint: float,
+                         distance_threshold: float)
     ->LastVertexState
 {
     var result : LastVertexState;
-    result.Init(sample_value.delta, sample_value.transmission, sample_value.component,
-                surface.supportBSDFIndexing, rough,
-                segment.rayFootprint >= primaryFootprint * distanceThreshold);
+    result.init(sample_value.delta, sample_value.transmission, sample_value.component,
+                surface.support_bsdf_indexing, rough,
+                segment.ray_footprint >= primary_footprint * distance_threshold);
     return result;
 }
 
-func initialCanConnect(settings: ShiftSettings, depth: uint, rcLength: uint, segment: ReplaySegment,
-                       outgoingPdf: float, previousRough: bool, primaryFootprint: float,
-                       distanceThreshold: float)
+func initial_can_connect(settings: ShiftSettings, depth: uint, rc_length: uint,
+                         segment: ReplaySegment, outgoing_pdf: float, previous_rough: bool,
+                         primary_footprint: float, distance_threshold: float)
     ->bool
 {
 
-    return settings.shiftMapping == 0
+    return settings.shift_mapping == 0
                ? depth == 1
-               : rcLength == MAXIMUM_RC_LENGTH && depth >= 1 && previousRough &&
-                     min(segment.rayFootprint, segment.inverseGeometryFactor / outgoingPdf) >=
-                         primaryFootprint * distanceThreshold;
+               : rc_length == MAXIMUM_RC_LENGTH && depth >= 1 && previous_rough &&
+                     min(segment.ray_footprint, segment.inverse_geometry_factor / outgoing_pdf) >=
+                         primary_footprint * distance_threshold;
 }
 
-/// 使用已保存 primaryHit；maxSurfaceBounces 须不超过254，与8bit路径长度保持一致。
-/// primaryHit、初始相机/介质与当前scene须属于同一代；所有材质和求交均为实际场景操作。
+/// 使用已保存 primary_hit；max_surface_bounces 须不超过254，与8bit路径长度保持一致。
+/// primary_hit、初始相机/介质与当前scene须属于同一代；所有材质和求交均为实际场景操作。
 /// 每个顶点合并eval/发光；预算耗尽后不采样散射，末顶点NEE不含BSDF竞争。
-/// LightSamples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
+/// light_samples=1保留联合灯分布；=2分别采u.z的两个半区，各为一个加性灯族，
 /// PDF不含族选择概率。第二族使用原padding维，不改变散射/RR及重放的随机身份。
 /// 完整材质阶段一次产生可见NEE候选；调度器不重采灯、不重算材质支持或介质。
-public func sampleInitialPath<Scene : IRestirScene, let LightSamples : uint = 1>(
-    inout scene: Scene, pixel: uint2, primaryHit: HitInfo, initialSeed: uint,
-    maxSurfaceBounces: uint, settings: ShiftSettings, useRussianRoulette: bool, useNEE: bool,
-    useMIS: bool)
+public func sample_initial_path<Scene : IRestirScene, let light_samples : uint = 1>(
+    inout scene: Scene, pixel: uint2, primary_hit: HitInfo, initial_seed: uint,
+    max_surface_bounces: uint, settings: ShiftSettings, use_russian_roulette: bool, use_nee: bool,
+    use_mis: bool)
     ->InitialResult
 {
     var tracer : InitialTrace<Scene>;
     var state : uint = 0;
-    return sampleInitialPathTraced<Scene, uint, InitialTrace<Scene>, LightSamples>(
-        scene, tracer, state, pixel, primaryHit, initialSeed, maxSurfaceBounces, settings,
-        useRussianRoulette, useNEE, useMIS);
+    return sample_initial_path_traced<Scene, uint, InitialTrace<Scene>, light_samples>(
+        scene, tracer, state, pixel, primary_hit, initial_seed, max_surface_bounces, settings,
+        use_russian_roulette, use_nee, use_mis);
 }
 
 /// primaryHit须由同一个tracer.trace产生；每次新命中仅在下一顶点着色前有效。
 /// tracer拥有硬件命中状态，算法不复制或持久化它；其余随机域、RIS及可见性不变。
-public func sampleInitialPathTraced<
-    Scene : IRestirScene, State, Trace : IInitialTrace<Scene, State>, let LightSamples : uint = 1>(
-    inout scene: Scene, inout tracer: Trace, inout state: State, pixel: uint2, primaryHit: HitInfo,
-    initialSeed: uint, maxSurfaceBounces: uint, settings: ShiftSettings, useRussianRoulette: bool,
-    useNEE: bool, useMIS: bool)
+public func sample_initial_path_traced<
+    Scene : IRestirScene, State, Trace : IInitialTrace<Scene, State>, let light_samples : uint = 1>(
+    inout scene: Scene, inout tracer: Trace, inout state: State, pixel: uint2, primary_hit: HitInfo,
+    initial_seed: uint, max_surface_bounces: uint, settings: ShiftSettings,
+    use_russian_roulette: bool, use_nee: bool, use_mis: bool)
     ->InitialResult
 {
-    static_assert(LightSamples == 1 || LightSamples == 2,
+    static_assert(light_samples == 1 || light_samples == 2,
                   "initial NEE supports one or two families");
     var result : InitialResult = {};
     result.reservoir.init();
-    if (!primaryHit.isValid())
+    if (!primary_hit.is_valid())
     {
         result.residual =
-            scene.environment(scene.initialDirection(pixel), scene.initialOrigin(pixel), false) *
-            exp(-scene.initialMedium(pixel).yzw * scene.environmentDistance());
+            scene.environment(scene.initial_direction(pixel), scene.initial_origin(pixel), false) *
+            exp(-scene.initial_medium(pixel).yzw * scene.environment_distance());
         return result;
     }
-    var surface : Surface = tracer.load(scene, state, primaryHit, scene.initialOrigin(pixel), true);
+    var surface : Surface =
+                      tracer.load(scene, state, primary_hit, scene.initial_origin(pixel), true);
     // primary 的物理生产者是实际相机射线；不从有限精度重建点重新推导另一条方向。
-    surface.wo = -scene.initialDirection(pixel);
-    scene.setIncident(surface, scene.initialMedium(pixel));
+    surface.wo = -scene.initial_direction(pixel);
+    scene.set_incident(surface, scene.initial_medium(pixel));
     var throughput : float3 = exp(-surface.incident.yzw * surface.distance);
-    let primaryFootprint : float = scene.primaryRayFootprint(surface, pixel, false);
-    var distanceThreshold : float;
-    var roughnessThreshold : float;
+    let primary_footprint = scene.primary_ray_footprint(surface, pixel, false);
+    var distance_threshold : float;
+    var roughness_threshold : float;
     var sampler
         : TinyUniformSampleGenerator =
-              initReplaySampler(initialSeed, settings, distanceThreshold, roughnessThreshold);
+              init_replay_sampler(initial_seed, settings, distance_threshold, roughness_threshold);
     var ris : PathRISState = {};
     ris.init();
     var rc : PathReconnectionInfo = {};
-    rc.pathFlags.insertRcVertexLength(MAXIMUM_RC_LENGTH);
-    rc.rcThroughput = 1.0;
-    rc.initRandomSeed = initialSeed;
-    var sourcePdf = 1.0;
-    var previousScatterPdf = 1.0;
-    var previousFullPdf = 1.0;
-    var previousRough = false;
-    var previousScatter : BsdfSample = {};
-    var previousSurface : Surface = {};
+    rc.path_flags.insert_rc_vertex_length(MAXIMUM_RC_LENGTH);
+    rc.rc_throughput = 1.0;
+    rc.init_random_seed = initial_seed;
+    var source_pdf = 1.0;
+    var previous_scatter_pdf = 1.0;
+    var previous_full_pdf = 1.0;
+    var previous_rough = false;
+    var previous_scatter : BsdfSample = {};
+    var previous_surface : Surface = {};
     var segment : ReplaySegment = {};
-    var previousSegmentTransmittance : float3 = 1.0;
-    for (var depth: uint = 0; depth <= maxSurfaceBounces; ++depth)
+    var previous_segment_transmittance : float3 = 1.0;
+    for (var depth: uint = 0; depth <= max_surface_bounces; ++depth)
     {
-        let bounceSeed : uint = sampler.state;
-        sampler.state = useRussianRoulette ? initialRandomState<11>(bounceSeed)
-                                           : initialRandomState<10>(bounceSeed);
-        let rouletteProbability
-            : float = useRussianRoulette ? initialRouletteProbability(throughput) : 1.0;
-        let rouletteKilled : bool = useRussianRoulette &&
-                                    (rouletteProbability == 0.0 ||
-                                     initialRandomValue<8>(bounceSeed) >= rouletteProbability);
-        let continuation : bool = depth < maxSurfaceBounces;
+        let bounce_seed = sampler.state;
+        sampler.state = use_russian_roulette ? initial_random_state<11>(bounce_seed)
+                                             : initial_random_state<10>(bounce_seed);
+        let roulette_probability =
+            use_russian_roulette ? initial_roulette_probability(throughput) : 1.0;
+        let roulette_killed : bool = use_russian_roulette &&
+                                     (roulette_probability == 0.0 ||
+                                      initial_random_value<8>(bounce_seed) >= roulette_probability);
+        let continuation = depth < max_surface_bounces;
         let request : InitialRequest = {
-            bounceSeed,
-            (continuation && !rouletteKilled ? INITIAL_SAMPLE : 0u) | (useNEE ? INITIAL_NEE : 0u) |
-                (continuation && useMIS ? INITIAL_MIS : 0u) |
-                (useRussianRoulette ? INITIAL_RR : 0u) |
-                (LightSamples == 2 ? INITIAL_TWO_LIGHTS : 0u) | (depth == 0 ? INITIAL_PRIMARY : 0u),
-            previousSurface.point.position,
+            bounce_seed,
+            (continuation && !roulette_killed ? INITIAL_SAMPLE : 0u) |
+                (use_nee ? INITIAL_NEE : 0u) | (continuation && use_mis ? INITIAL_MIS : 0u) |
+                (use_russian_roulette ? INITIAL_RR : 0u) |
+                (light_samples == 2 ? INITIAL_TWO_LIGHTS : 0u) |
+                (depth == 0 ? INITIAL_PRIMARY : 0u),
+            previous_surface.point.position,
             throughput,
             ris.weight,
-            useNEE && useMIS && !previousScatter.delta ? previousFullPdf : -1.0
+            use_nee && use_mis && !previous_scatter.delta ? previous_full_pdf : -1.0
         };
         let shading : InitialVertex = tracer.shade(scene, state, surface, request);
         surface.emission = shading.emission;
         ris.weight = shading.weight;
 
-        let last : LastVertexState =
-                       initialLastVertex(previousScatter, previousSurface, previousRough, segment,
-                                         primaryFootprint, distanceThreshold);
+        let last = initial_last_vertex(previous_scatter, previous_surface, previous_rough, segment,
+                                       primary_footprint, distance_threshold);
         if (depth == 0)
         {
             result.residual = throughput * surface.emission;
         }
         else if (any(surface.emission > 0.0))
         {
-            let lightPdf : float = shading.emissionPdf;
-            let mis : float = useNEE && useMIS && !previousScatter.delta
-                                  ? lightMisWeight(1.0, previousFullPdf, 1.0, lightPdf)
-                                  : 1.0;
-            var cachedEmission : float3 = surface.emission;
-            if (depth - 1 == rc.pathFlags.rcVertexLength())
-                cachedEmission *= previousSegmentTransmittance;
-            ris.storeBSDFHitCandidate(rc, depth - 1, throughput * mis * surface.emission,
-                                      cachedEmission, mis * surface.emission, sourcePdf, lightPdf,
-                                      LIGHT_EMISSIVE);
-            if (rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
-                (settings.shiftMapping == 1 || depth == 1))
+            let light_pdf = shading.emission_pdf;
+            let mis = use_nee && use_mis && !previous_scatter.delta
+                          ? light_mis_weight(1.0, previous_full_pdf, 1.0, light_pdf)
+                          : 1.0;
+            var cached_emission : float3 = surface.emission;
+            if (depth - 1 == rc.path_flags.rc_vertex_length())
+                cached_emission *= previous_segment_transmittance;
+            ris.store_bsdf_hit_candidate(rc, depth - 1, throughput * mis * surface.emission,
+                                         cached_emission, mis * surface.emission, source_pdf,
+                                         light_pdf, LIGHT_EMISSIVE);
+            if (rc.path_flags.rc_vertex_length() == MAXIMUM_RC_LENGTH &&
+                (settings.shift_mapping == 1 || depth == 1))
             {
-                let canConnect
-                    : bool =
-                          settings.shiftMapping == 0 ||
-                          min(segment.rayFootprint,
-                              segment.inverseGeometryFactor * (2.0 * 3.14159265358979323846)) >=
-                                  primaryFootprint * distanceThreshold &&
-                              (!previousSurface.supportSimpleRoughnessThreshold || previousRough);
-                if (canConnect)
+                let can_connect : bool =
+                                      settings.shift_mapping == 0 ||
+                                      min(segment.ray_footprint,
+                                          segment.inverse_geometry_factor * (math::tau)) >=
+                                              primary_footprint * distance_threshold &&
+                                          (!previous_surface.support_simple_roughness_threshold ||
+                                           previous_rough);
+                if (can_connect)
                 {
-                    ris.integrand *= previousScatterPdf;
-                    ris.markAsRcVertex(depth, surface.hit, last, lightPdf * segment.geometryFactor,
-                                       LIGHT_EMISSIVE, surface.emission, float3(0.0),
-                                       segment.geometryFactor);
+                    ris.integrand *= previous_scatter_pdf;
+                    ris.mark_as_rc_vertex(depth, surface.hit, last,
+                                          light_pdf * segment.geometry_factor, LIGHT_EMISSIVE,
+                                          surface.emission, float3(0.0), segment.geometry_factor);
                 }
             }
         }
         if (shading.direct.pdf > 0.0)
         {
             let light : InitialDirect = shading.direct;
-            let lightType : uint = light.lightType & ~INITIAL_POINT_LIGHT;
-            let canConnect : bool = initialCanConnect(
-                                 settings, depth, rc.pathFlags.rcVertexLength(), segment,
-                                 light.bsdfPdf, previousRough, primaryFootprint, distanceThreshold);
-            let cachedRadiance : float3 = canConnect ? light.attenuatedRadiance : light.radiance;
-            ris.storeNEECandidate(rc, canConnect, depth, throughput * light.reflected,
-                                  light.direction, cachedRadiance, light.reflected, sourcePdf,
-                                  light.pdf, lightType);
-            ris.pathFlags.insertTerminalNEE(!continuation);
-            if (canConnect)
+            let light_type : uint = light.light_type & ~INITIAL_POINT_LIGHT;
+            let can_connect = initial_can_connect(settings, depth, rc.path_flags.rc_vertex_length(),
+                                                  segment, light.bsdf_pdf, previous_rough,
+                                                  primary_footprint, distance_threshold);
+            let cached_radiance = can_connect ? light.attenuated_radiance : light.radiance;
+            ris.store_nee_candidate(rc, can_connect, depth, throughput * light.reflected,
+                                    light.direction, cached_radiance, light.reflected, source_pdf,
+                                    light.pdf, light_type);
+            ris.path_flags.insert_terminal_nee(!continuation);
+            if (can_connect)
             {
-                ris.reconnectionHit = surface.hit;
-                ris.reconnectionJacobian = segment.geometryFactor;
-                ris.integrand *= previousScatterPdf * light.pdf;
-                ris.rcNextVertexBounceSeed = initialRandomState<2>(bounceSeed);
-                ris.pathFlags.tryInsertBounceTypesBeforeRcVertex(last.data & 0x3fu, true);
+                ris.reconnection_hit = surface.hit;
+                ris.reconnection_jacobian = segment.geometry_factor;
+                ris.integrand *= previous_scatter_pdf * light.pdf;
+                ris.rc_next_vertex_bounce_seed = initial_random_state<2>(bounce_seed);
+                ris.path_flags.try_insert_bounce_types_before_rc_vertex(last.data & 0x3fu, true);
             }
-            if (!canConnect && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH)
+            if (!can_connect && rc.path_flags.rc_vertex_length() == MAXIMUM_RC_LENGTH)
             {
-                ris.reconnectionHit = light.hit;
-                ris.reconnectionJacobian = 1.0;
-                ris.reconnectionIncidentRadiance = light.radiance;
-                ris.reconnectionWi = light.direction;
+                ris.reconnection_hit = light.hit;
+                ris.reconnection_jacobian = 1.0;
+                ris.reconnection_incident_radiance = light.radiance;
+                ris.reconnection_wi = light.direction;
                 ris.integrand *= light.pdf;
-                ris.pathFlags.insertRcVertexLength(ris.pathFlags.pathLength() + 1);
-                ris.pathFlags.insertIsTransmissionEvent(
+                ris.path_flags.insert_rc_vertex_length(ris.path_flags.path_length() + 1);
+                ris.path_flags.insert_is_transmission_event(
                     dot(surface.point.normal, surface.wo) *
                             dot(surface.point.normal, light.direction) <
                         0.0,
                     true);
-                ris.pathFlags.insertSupportBSDFIndexingBeforeRcVertex(surface.supportBSDFIndexing);
-                if (light.hit.isValid())
+                ris.path_flags.insert_support_bsdf_indexing_before_rc_vertex(
+                    surface.support_bsdf_indexing);
+                if (light.hit.is_valid())
                 {
-                    if ((light.lightType & INITIAL_POINT_LIGHT) != 0)
-                        ris.reconnectionIncidentRadiance /= light.geometryFactor;
+                    if ((light.light_type & INITIAL_POINT_LIGHT) != 0)
+                        ris.reconnection_incident_radiance /= light.geometry_factor;
                     else
                     {
-                        ris.reconnectionJacobian *= light.geometryFactor;
-                        ris.lightPdf *= light.geometryFactor;
+                        ris.reconnection_jacobian *= light.geometry_factor;
+                        ris.light_pdf *= light.geometry_factor;
                     }
                 }
             }
@@ -292,92 +296,91 @@ public func sampleInitialPathTraced<
         if (!continuation)
             break;
 
-        if (useRussianRoulette)
+        if (use_russian_roulette)
         {
-            if (rouletteKilled)
+            if (roulette_killed)
                 break;
-            throughput /= rouletteProbability;
-            sourcePdf *= rouletteProbability;
+            throughput /= roulette_probability;
+            source_pdf *= roulette_probability;
         }
         var scatter : BsdfSample = shading.sample;
         if (scatter.pdf <= 0.0 || all(scatter.weight == 0.0) ||
             any(isnan(scatter.weight) | isinf(scatter.weight)) || isinf(scatter.pdf))
             break;
-        let scatterPdf : float = replayScatterPdf(scatter);
-        let rough : bool = !scatter.delta && scene.isSampleRough(surface, scatter.component,
-                                                                 scatterPdf, roughnessThreshold);
-        let componentPdf : float = scatter.delta                 ? 1.0
-                                   : surface.supportBSDFIndexing ? scatter.componentPdf
-                                                                 : scatter.pdf;
+        let scatter_pdf = replay_scatter_pdf(scatter);
+        let rough = !scatter.delta && scene.is_sample_rough(surface, scatter.component, scatter_pdf,
+                                                            roughness_threshold);
+        let component_pdf = scatter.delta                   ? 1.0
+                            : surface.support_bsdf_indexing ? scatter.component_pdf
+                                                            : scatter.pdf;
         throughput *= scatter.weight;
-        rc.rcThroughput *= scatter.weight;
-        if (initialCanConnect(settings, depth, rc.pathFlags.rcVertexLength(), segment, scatterPdf,
-                              previousRough, primaryFootprint, distanceThreshold))
+        rc.rc_throughput *= scatter.weight;
+        if (initial_can_connect(settings, depth, rc.path_flags.rc_vertex_length(), segment,
+                                scatter_pdf, previous_rough, primary_footprint, distance_threshold))
         {
-            rc.rcNextVertexBounceSeed = sampler.state;
-            rc.reconnectionWi = scatter.direction;
-            rc.pathFlags.insertRcVertexLength(depth);
-            rc.reconnectionHit = surface.hit;
-            rc.pathFlags.tryInsertBounceTypesBeforeRcVertex(last.data & 0x3fu, true);
-            rc.reconnectionJacobian = segment.geometryFactor;
-            sourcePdf *= previousScatterPdf * componentPdf;
-            rc.pathFlags.tryInsertBounceTypesAfterRcVertex(
+            rc.rc_next_vertex_bounce_seed = sampler.state;
+            rc.reconnection_wi = scatter.direction;
+            rc.path_flags.insert_rc_vertex_length(depth);
+            rc.reconnection_hit = surface.hit;
+            rc.path_flags.try_insert_bounce_types_before_rc_vertex(last.data & 0x3fu, true);
+            rc.reconnection_jacobian = segment.geometry_factor;
+            source_pdf *= previous_scatter_pdf * component_pdf;
+            rc.path_flags.try_insert_bounce_types_after_rc_vertex(
                 uint(scatter.delta) | (uint(scatter.transmission) << 1) | (scatter.component << 2),
                 true);
-            rc.rcThroughput = 1.0;
+            rc.rc_throughput = 1.0;
         }
-        let origin : float3 = geometry::offset_origin(surface.point, scatter.direction);
+        let origin = geometry::offset_origin(surface.point, scatter.direction);
         var hit : HitInfo = {};
         var distance : float;
         let found : bool = tracer.trace(scene, state, origin, scatter.direction, hit, distance);
         if (!found)
         {
-            let uBSDFRIS : float = sampler.next1D();
+            let u_bsdfris = sampler.next_1d();
             let radiance : float3 =
                                scene.environment(scatter.direction, surface.point.position, false);
-            let environmentTransmittance
-                : float3 = exp(-scatter.medium.yzw * scene.environmentDistance());
-            let lightPdf : float =
-                               scene.lightPdf(surface, hit, scatter.direction, LIGHT_ENV, false);
-            let mis : float = useNEE && useMIS && !scatter.delta
-                                  ? lightMisWeight(1.0, scatter.pdf, 1.0, lightPdf)
-                                  : 1.0;
-            var envLast : LastVertexState;
-            envLast.Init(scatter.delta, scatter.transmission, scatter.component,
-                         surface.supportBSDFIndexing, rough, true);
-            let cachedRadiance : float3 = depth == rc.pathFlags.rcVertexLength()
-                                              ? radiance * environmentTransmittance
-                                              : radiance;
-            let selected
-                : bool = ris.addBSDFHitCandidate(
-                      uBSDFRIS, rc, depth, throughput * environmentTransmittance * mis * radiance,
-                      scatter.direction, cachedRadiance, environmentTransmittance * mis * radiance,
-                      sourcePdf, lightPdf, LIGHT_ENV);
-            if (selected && rc.pathFlags.rcVertexLength() == MAXIMUM_RC_LENGTH &&
-                (settings.shiftMapping == 1 || depth == 0) && (rough || settings.shiftMapping == 0))
+            let environment_transmittance = exp(-scatter.medium.yzw * scene.environment_distance());
+            let light_pdf : float =
+                                scene.light_pdf(surface, hit, scatter.direction, LIGHT_ENV, false);
+            let mis = use_nee && use_mis && !scatter.delta
+                          ? light_mis_weight(1.0, scatter.pdf, 1.0, light_pdf)
+                          : 1.0;
+            var env_last : LastVertexState;
+            env_last.init(scatter.delta, scatter.transmission, scatter.component,
+                          surface.support_bsdf_indexing, rough, true);
+            let cached_radiance : float3 = depth == rc.path_flags.rc_vertex_length()
+                                               ? radiance * environment_transmittance
+                                               : radiance;
+            let selected = ris.add_bsdf_hit_candidate(
+                u_bsdfris, rc, depth, throughput * environment_transmittance * mis * radiance,
+                scatter.direction, cached_radiance, environment_transmittance * mis * radiance,
+                source_pdf, light_pdf, LIGHT_ENV);
+            if (selected && rc.path_flags.rc_vertex_length() == MAXIMUM_RC_LENGTH &&
+                (settings.shift_mapping == 1 || depth == 0) &&
+                (rough || settings.shift_mapping == 0))
             {
-                ris.integrand *= componentPdf;
-                ris.markAsRcVertex(depth + 1, hit, envLast, lightPdf, LIGHT_ENV, radiance,
-                                   scatter.direction, 1.0);
+                ris.integrand *= component_pdf;
+                ris.mark_as_rc_vertex(depth + 1, hit, env_last, light_pdf, LIGHT_ENV, radiance,
+                                      scatter.direction, 1.0);
             }
             break;
         }
-        let attenuation : float3 = exp(-scatter.medium.yzw * distance);
+        let attenuation = exp(-scatter.medium.yzw * distance);
         throughput *= attenuation;
-        rc.rcThroughput *= attenuation;
-        previousSegmentTransmittance = attenuation;
+        rc.rc_throughput *= attenuation;
+        previous_segment_transmittance = attenuation;
         var next : Surface = tracer.load(scene, state, hit, -scatter.direction, false);
-        scene.setIncident(next, scatter.medium);
-        segment = replaySegment(surface, next, scatterPdf);
-        previousSurface = surface;
-        previousScatter = scatter;
-        previousScatterPdf = componentPdf;
-        previousFullPdf = scatter.pdf;
-        previousRough = rough;
+        scene.set_incident(next, scatter.medium);
+        segment = replay_segment(surface, next, scatter_pdf);
+        previous_surface = surface;
+        previous_scatter = scatter;
+        previous_scatter_pdf = component_pdf;
+        previous_full_pdf = scatter.pdf;
+        previous_rough = rough;
         surface = next;
     }
-    result.reservoir = PathReservoir::createFromRisState(ris, initialSeed);
-    result.reservoir.finalizeReservoirWeight();
+    result.reservoir = PathReservoir::create_from_ris_state(ris, initial_seed);
+    result.reservoir.finalize_reservoir_weight();
     return result;
 }
 }

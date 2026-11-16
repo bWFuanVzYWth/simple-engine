@@ -3,26 +3,32 @@
 #language slang 2026
 module "bsdf/openpbr/math/frame.slang";
 
-import "bsdf/openpbr/contract/material.slang";
+import bsdf.openpbr.contract.material;
 
-public func primeFullOpenPbrOnbFromNormal(normal: float3)->PrimeFullOpenPbrOnb
+namespace openpbr
 {
-    let signZ : float = normal.z >= 0.0 ? 1.0 : -1.0;
-    let a : float = -1.0 / (signZ + normal.z);
+namespace kernel
+{
+public func frame_from_normal(normal: float3)->Frame
+{
+    let sign_z : float = normal.z >= 0.0 ? 1.0 : -1.0;
+    let a : float = -1.0 / (sign_z + normal.z);
     let b : float = normal.x * normal.y * a;
-    var result : PrimeFullOpenPbrOnb;
-    result.tangent = float3(1.0 + signZ * normal.x * normal.x * a, signZ * b, -signZ * normal.x);
-    result.bitangent = float3(b, signZ + normal.y * normal.y * a, -normal.y);
+    var result : Frame;
+    result.tangent = float3(1.0 + sign_z * normal.x * normal.x * a, sign_z * b, -sign_z * normal.x);
+    result.bitangent = float3(b, sign_z + normal.y * normal.y * a, -normal.y);
     result.normal = normal;
     return result;
 }
 
-public func primeFullOpenPbrOnbToWorld(onb: PrimeFullOpenPbrOnb, value: float3)->float3
+public func to_world(frame: Frame, value: float3)->float3
 {
-    return value.x * onb.tangent + value.y * onb.bitangent + value.z * onb.normal;
+    return value.x * frame.tangent + value.y * frame.bitangent + value.z * frame.normal;
 }
 
-public func primeFullOpenPbrOnbToLocal(onb: PrimeFullOpenPbrOnb, value: float3)->float3
+public func to_local(frame: Frame, value: float3)->float3
 {
-    return float3(dot(onb.tangent, value), dot(onb.bitangent, value), dot(onb.normal, value));
+    return float3(dot(frame.tangent, value), dot(frame.bitangent, value), dot(frame.normal, value));
+}
+}
 }

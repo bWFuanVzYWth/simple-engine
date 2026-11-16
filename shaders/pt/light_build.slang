@@ -61,7 +61,7 @@ func less_key(a: uint4, b: uint4)->bool
 groupshared var tile : uint4[64];
 func spatial_key(index: uint)->uint4
 {
-    let q : uint = p.leaves[4u * index];
+    let q = p.leaves[4u * index];
     if (q >= p.vertex_quads)
         return uint4(0xffffffffu, 0xffffffffu, 0xffffffffu, index);
     let row : uint * = p.vertices + 16u * q;
@@ -115,12 +115,12 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
     {
         if (node >= p.count)
             return;
-        let begin : uint = node / (2u * p.width) * (2u * p.width);
+        let begin = node / (2u * p.width) * (2u * p.width);
         let right : bool = node - begin >= p.width;
         let other : uint = right ? begin : begin + p.width;
         var lo : uint = min(other, p.count);
         var hi : uint = min(other + p.width, p.count);
-        let key : uint4 = p.sorted[node];
+        let key = p.sorted[node];
         while (lo < hi)
         {
             let mid : uint = lo + (hi - lo) / 2u;
@@ -145,7 +145,7 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
     {
         if (n <= 1u)
             return;
-        let left : uint = n / 2u;
+        let left = n / 2u;
         side = (node >> (p.level - 1u - depth)) & 1u;
         path |= side << depth;
         parent = packet;
@@ -171,19 +171,18 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
         if (leaf[0] >= p.vertex_quads)
             return;
         let row : uint * = p.vertices + 16u * leaf[0];
-        let region : int3 = asint(uint3(row[3], row[7], row[11]));
-        let offset : float3 = float3(region_delta(region.x, p.anchor_x),
-                                     region_delta(region.y, p.anchor_y),
-                                     region_delta(region.z, p.anchor_z)) *
-                              64.0;
+        let region = asint(uint3(row[3], row[7], row[11]));
+        let offset = float3(region_delta(region.x, p.anchor_x), region_delta(region.y, p.anchor_y),
+                            region_delta(region.z, p.anchor_z)) *
+                     64.0;
         let local : pt::LightQuadVertices = { point_at(row, 0), point_at(row, 1), point_at(row, 2),
                                               point_at(row, 3) };
-        let a : float3 = local.a;
-        let b : float3 = local.b;
-        let c : float3 = local.c;
-        let d : float3 = local.d;
-        let area0 : float = length(cross(b - a, c - a));
-        let area1 : float = length(cross(c - a, d - a));
+        let a = local.a;
+        let b = local.b;
+        let c = local.c;
+        let d = local.d;
+        let area0 = length(cross(b - a, c - a));
+        let area1 = length(cross(c - a, d - a));
         center = (a + c + lerp(d, b, area0 / (area0 + area1))) * (1.0 / 3.0) + offset;
         power = asfloat(leaf[1]);
         child = 0x80000000u | rank;
@@ -201,7 +200,7 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
         if (p.write_records != 0u)
         {
             var out_row : uint * = p.records + 16u * rank;
-            let area : uint4 = pt::dynamic_quad_area(local);
+            let area = pt::dynamic_quad_area(local);
             out_row[0] = area.x;
             out_row[1] = area.y;
             out_row[2] = area.z;
@@ -209,7 +208,7 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
             [unroll]
             for (var k: uint = 0; k < 4; ++k)
             {
-                let v : float3 = point_at(row, k) + offset;
+                let v = point_at(row, k) + offset;
                 out_row[4u + 3u * k] = asuint(v.x);
                 out_row[5u + 3u * k] = asuint(v.y);
                 out_row[6u + 3u * k] = asuint(v.z);
@@ -218,18 +217,18 @@ func build_level(uint3 thread: SV_DispatchThreadID, uint lane: SV_GroupIndex)->v
     }
     else
     {
-        let at : uint = metric_at(packet);
-        let a : float3 = asfloat(uint3(p.tree[at], p.tree[at + 1u], p.tree[at + 2u]));
-        let b : float3 = asfloat(uint3(p.tree[at + 4u], p.tree[at + 5u], p.tree[at + 6u]));
-        let pa : float = asfloat(p.tree[at + 3u]);
-        let pb : float = asfloat(p.tree[at + 7u]);
+        let at = metric_at(packet);
+        let a = asfloat(uint3(p.tree[at], p.tree[at + 1u], p.tree[at + 2u]));
+        let b = asfloat(uint3(p.tree[at + 4u], p.tree[at + 5u], p.tree[at + 6u]));
+        let pa = asfloat(p.tree[at + 3u]);
+        let pb = asfloat(p.tree[at + 7u]);
         power = pa + pb;
         center = lerp(a, b, pb / power);
         child = packet;
     }
     if (p.level != 0)
     {
-        let at : uint = metric_at(parent) + side * 4u;
+        let at = metric_at(parent) + side * 4u;
         p.tree[at] = asuint(center.x);
         p.tree[at + 1u] = asuint(center.y);
         p.tree[at + 2u] = asuint(center.z);

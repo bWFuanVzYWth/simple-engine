@@ -4,56 +4,61 @@ use simple_engine::{
     shader_library,
 };
 
+/// 本夹具所有入口使用同一stage/target；语义参数和输出身份仍由各recipe显式给出。
+const fn compute<'a>(
+    source: &'a str,
+    entry: &'a str,
+    output: &'a str,
+    args: &'a [&'a str],
+) -> Recipe<'a> {
+    Recipe {
+        source,
+        entry,
+        stage: "compute",
+        output,
+        target: Target::Spirv("spirv_1_4"),
+        args,
+    }
+}
+
 fn main() -> Result<(), shader_build::Error> {
     let mut recipes = vec![
-        Recipe {
-            source: "shaders/numerical.slang",
-            entry: "main",
-            stage: "compute",
-            output: "numerical.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
-        Recipe {
-            source: "shaders/numerical.slang",
-            entry: "math_main",
-            stage: "compute",
-            output: "math.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
-        Recipe {
-            source: "shaders/numerical.slang",
-            entry: "purpose_main",
-            stage: "compute",
-            output: "purpose.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
-        Recipe {
-            source: "shaders/production.slang",
-            entry: "main",
-            stage: "compute",
-            output: "production.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
-        Recipe {
-            source: "shaders/transport.slang",
-            entry: "main",
-            stage: "compute",
-            output: "transport.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
-        Recipe {
-            source: "shaders/transport.slang",
-            entry: "vectors",
-            stage: "compute",
-            output: "transport-vectors.spv",
-            target: Target::Spirv("spirv_1_4"),
-            args: &["-fp-mode", "precise"],
-        },
+        compute(
+            "shaders/numerical.slang",
+            "main",
+            "numerical.spv",
+            &["-fp-mode", "precise"],
+        ),
+        compute(
+            "shaders/numerical.slang",
+            "math_main",
+            "math.spv",
+            &["-fp-mode", "precise"],
+        ),
+        compute(
+            "shaders/numerical.slang",
+            "purpose_main",
+            "purpose.spv",
+            &["-fp-mode", "precise"],
+        ),
+        compute(
+            "shaders/production.slang",
+            "main",
+            "production.spv",
+            &["-fp-mode", "precise"],
+        ),
+        compute(
+            "shaders/transport.slang",
+            "main",
+            "transport.spv",
+            &["-fp-mode", "precise"],
+        ),
+        compute(
+            "shaders/transport.slang",
+            "vectors",
+            "transport-vectors.spv",
+            &["-fp-mode", "precise"],
+        ),
     ];
     const SPECIALIZATIONS: [(&str, &[&str]); 8] = [
         (
@@ -89,14 +94,11 @@ fn main() -> Result<(), shader_build::Error> {
             &["-fp-mode", "precise", "-DOPENPBR_CAPABILITY=7"],
         ),
     ];
-    recipes.extend(SPECIALIZATIONS.into_iter().map(|(output, args)| Recipe {
-        source: "shaders/specialized.slang",
-        entry: "main",
-        stage: "compute",
-        output,
-        target: Target::Spirv("spirv_1_4"),
-        args,
-    }));
+    recipes.extend(
+        SPECIALIZATIONS
+            .into_iter()
+            .map(|(output, args)| compute("shaders/specialized.slang", "main", output, args)),
+    );
     const FLOWS: [(&str, &[&str]); 30] = [
         (
             "flow-opaque.spv",
@@ -225,14 +227,11 @@ fn main() -> Result<(), shader_build::Error> {
             ],
         ),
     ];
-    recipes.extend(FLOWS.into_iter().map(|(output, args)| Recipe {
-        source: "shaders/flow.slang",
-        entry: "main",
-        stage: "compute",
-        output,
-        target: Target::Spirv("spirv_1_4"),
-        args,
-    }));
+    recipes.extend(
+        FLOWS
+            .into_iter()
+            .map(|(output, args)| compute("shaders/flow.slang", "main", output, args)),
+    );
     let guide_outputs: Vec<_> = FLOWS
         .iter()
         .map(|(output, _)| format!("{}-guide.spv", output.trim_end_matches(".spv")))
@@ -241,14 +240,7 @@ fn main() -> Result<(), shader_build::Error> {
         FLOWS
             .into_iter()
             .zip(&guide_outputs)
-            .map(|((_, args), output)| Recipe {
-                source: "shaders/flow.slang",
-                entry: "guide_main",
-                stage: "compute",
-                output,
-                target: Target::Spirv("spirv_1_4"),
-                args,
-            }),
+            .map(|((_, args), output)| compute("shaders/flow.slang", "guide_main", output, args)),
     );
     const SHARING: [(&str, &[&str]); 6] = [
         (
@@ -306,14 +298,11 @@ fn main() -> Result<(), shader_build::Error> {
             ],
         ),
     ];
-    recipes.extend(SHARING.into_iter().map(|(output, args)| Recipe {
-        source: "shaders/flow_shared.slang",
-        entry: "main",
-        stage: "compute",
-        output,
-        target: Target::Spirv("spirv_1_4"),
-        args,
-    }));
+    recipes.extend(
+        SHARING
+            .into_iter()
+            .map(|(output, args)| compute("shaders/flow_shared.slang", "main", output, args)),
+    );
     shader_build::build(
         &recipes,
         &[shader_library::root()],

@@ -7,28 +7,10 @@
 /// 算法来源：https://doi.org/10.1145/3414685.3417881 。整数序列沿用作者 z_sobol，
 /// 不等同 PBRT 原始 index hash。完整 net 的均匀性不保证任意早期前缀的质量。
 module z_sobol;
+import pt.sobol_bits;
 
 namespace pt
 {
-func avalanche(value: uint)->uint
-{
-    var value = value;
-    value ^= value >> 16;
-    value *= 0x7feb352du;
-    value ^= value >> 15;
-    value *= 0x846ca68bu;
-    return value ^ (value >> 16);
-}
-
-func spread(value: uint)->uint
-{
-    var value = value;
-    value &= 0xffffu;
-    value = (value | (value << 8)) & 0x00ff00ffu;
-    value = (value | (value << 4)) & 0x0f0f0f0fu;
-    value = (value | (value << 2)) & 0x33333333u;
-    return (value | (value << 1)) & 0x55555555u;
-}
 
 func permute_four(digit: uint, hash: uint)->uint
 {
@@ -40,7 +22,7 @@ func permute_four(digit: uint, hash: uint)->uint
 
 func node_hash(prefix: uint2, shift: uint, key: uint)->uint
 {
-    return avalanche(prefix.x ^ (prefix.y * 0x9e3779b9u) ^ key ^ (shift * 0x632be59bu));
+    return sobol_bits::hash(prefix.x ^ (prefix.y * 0x9e3779b9u) ^ key ^ (shift * 0x632be59bu));
 }
 
 func permuted_index(morton: uint2, bits: uint, odd: uint, key: uint)->uint2
@@ -70,7 +52,7 @@ func permuted_index(morton: uint2, bits: uint, odd: uint, key: uint)->uint2
         {
             let digit : uint = m.x & 3u;
             m = uint2((m.x >> 2) | (m.y << 30), m.y >> 2);
-            let d : uint = permute_four(digit, node_hash(m, shift, key));
+            let d = permute_four(digit, node_hash(m, shift, key));
             if (shift < 32)
             {
                 result.x |= d << shift;
@@ -84,28 +66,6 @@ func permuted_index(morton: uint2, bits: uint, odd: uint, key: uint)->uint2
     return result;
 }
 
-func reversed_sobol_y(value: uint)->uint
-{
-    var value = value;
-    value ^= (value >> 1) & 0x55555555u;
-    value ^= (value >> 2) & 0x33333333u;
-    value ^= (value >> 4) & 0x0f0f0f0fu;
-    value ^= (value >> 8) & 0x00ff00ffu;
-    value ^= (value >> 16) & 0x0000ffffu;
-    return value;
-}
-
-func owen_reversed(value: uint, seed: uint)->uint
-{
-    var value = value;
-    value ^= value * 0x3d20adeau;
-    value += seed;
-    value *= (seed >> 16) | 1u;
-    value ^= value * 0x05526c56u;
-    value ^= value * 0x53a22864u;
-    return reversebits(value);
-}
-
 /// 一个像素／样本的值类型；domain 是固定语义身份，调用顺序不推进随机流。
 public struct ZSobol
 {
@@ -117,19 +77,19 @@ public struct ZSobol
     /// 返回同一 domain 的两个 32 位 Sobol/Owen 分量。
     public func bits_2d(domain: uint)->uint2
     {
-        let key : uint = avalanche(domain ^ seed);
-        let index : uint2 = permuted_index(morton, bit_count, odd, key);
-        return uint2(
-            owen_reversed(index.x, avalanche(key ^ 0xa511e9b3u)),
-            owen_reversed(reversed_sobol_y(index.x ^ index.y), avalanche(key ^ 0x63d83595u)));
+        let key = sobol_bits::hash(domain ^ seed);
+        let index = permuted_index(morton, bit_count, odd, key);
+        return uint2(sobol_bits::owen_reversed(index.x, sobol_bits::hash(key ^ 0xa511e9b3u)),
+                     sobol_bits::owen_reversed(sobol_bits::reversed_y(index.x ^ index.y),
+                                               sobol_bits::hash(key ^ 0x63d83595u)));
     }
 
     /// 与 bits_2d(domain).x 相同，不构成额外随机维度。
     public func bits_1d(domain: uint)->uint
     {
-        let key : uint = avalanche(domain ^ seed);
-        let index : uint2 = permuted_index(morton, bit_count, odd, key);
-        return owen_reversed(index.x, avalanche(key ^ 0xa511e9b3u));
+        let key = sobol_bits::hash(domain ^ seed);
+        let index = permuted_index(morton, bit_count, odd, key);
+        return sobol_bits::owen_reversed(index.x, sobol_bits::hash(key ^ 0xa511e9b3u));
     }
 
     /// 用高 24 位返回 [0,1)²；不把舍入后的 1 当作合法样本。
@@ -149,7 +109,7 @@ public struct ZSobol
 /// 一个完整样本集固定 R/S/seed/domain；不能随累计样本数改变 S。
 public func z_sobol(pixel: uint2, sample_value: uint, r: uint, s: uint, seed: uint)->ZSobol
 {
-    let m : uint = spread(pixel.x) | (spread(pixel.y) << 1);
+    let m : uint = sobol_bits::spread(pixel.x) | (sobol_bits::spread(pixel.y) << 1);
     var result : ZSobol;
     if (s == 0)
         result.morton = uint2(m, 0);
@@ -165,7 +125,7 @@ public func z_sobol(pixel: uint2, sample_value: uint, r: uint, s: uint, seed: ui
 /// 超过 256 个绝对样本后由应用更换全局 scramble，开始新完整 net，不扩展原 net。
 public func z_sobol_s8(pixel: uint2, sample_value: uint, r: uint, seed: uint)->ZSobol
 {
-    let m : uint = spread(pixel.x) | (spread(pixel.y) << 1);
+    let m : uint = sobol_bits::spread(pixel.x) | (sobol_bits::spread(pixel.y) << 1);
     var result : ZSobol;
     result.morton = uint2((m << 8) | sample_value, m >> 24);
     result.bit_count = 2 * r + 8;

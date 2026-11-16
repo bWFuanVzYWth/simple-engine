@@ -39,14 +39,14 @@ static const let INVERSE_SRGB_GAMMA = 1.0 / 2.4;
 
 internal func to_virtual_rgb(color: float3)->float3
 {
-    let neutral : float = dot(color, NEUTRAL_WEIGHTS);
+    let neutral = dot(color, NEUTRAL_WEIGHTS);
     return lerp(color, neutral.xxx, GAMUT_COMPRESSION);
 }
 
 internal func from_virtual_rgb(color: float3)->float3
 {
     // neutral 投影不变，因此这是上述线性映射的逆。
-    let neutral : float = dot(color, NEUTRAL_WEIGHTS);
+    let neutral = dot(color, NEUTRAL_WEIGHTS);
     return (color - GAMUT_COMPRESSION * neutral.xxx) * INVERSE_GAMUT_SCALE;
 }
 
@@ -54,8 +54,8 @@ internal func curve_component(value: float, parameters: PrimeDrtParameters)->flo
 {
     if (value <= parameters.compression_start)
         return value;
-    let distance : float = value - parameters.compression_start;
-    let extent : float = parameters.curve_peak - parameters.compression_start;
+    let distance = value - parameters.compression_start;
+    let extent = parameters.curve_peak - parameters.compression_start;
     // 倒数形式避免 distance/extent 溢出及 GPU 大分母倒数冲零。
     return parameters.compression_start + extent / (1.0 + extent / distance);
 }
@@ -69,16 +69,16 @@ internal func curve(value: float3, parameters: PrimeDrtParameters)->float3
 internal func encode_srgb(linear_rgb: float3)->float3
 {
     // 负 outset 值保留到 HSV 补偿，不能在此饱和裁剪。
-    let cutoff : bool3 = linear_rgb < 0.0031308;
+    let cutoff = linear_rgb < 0.0031308;
     let higher : float3 = 1.055 * pow(max(linear_rgb, 0.0), INVERSE_SRGB_GAMMA) - 0.055;
-    let lower : float3 = linear_rgb * 12.92;
+    let lower = linear_rgb * 12.92;
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
                   cutoff.z ? lower.z : higher.z);
 }
 
 internal func decode_srgb(encoded: float3)->float3
 {
-    let cutoff : bool3 = encoded <= 0.04045;
+    let cutoff = encoded <= 0.04045;
     let lower : float3 = encoded * INVERSE_SRGB_SLOPE;
     let higher : float3 = pow((encoded + 0.055) * INVERSE_SRGB_SCALE, 2.4);
     return float3(cutoff.x ? lower.x : higher.x, cutoff.y ? lower.y : higher.y,
@@ -87,8 +87,8 @@ internal func decode_srgb(encoded: float3)->float3
 
 internal func rgb_to_hsv(color: float3)->float3
 {
-    let maximum : float = max(color.x, max(color.y, color.z));
-    let minimum : float = min(color.x, min(color.y, color.z));
+    let maximum = max(color.x, max(color.y, color.z));
+    let minimum = min(color.x, min(color.y, color.z));
     let chroma : float = maximum - minimum;
     var hue = 0.0;
     if (chroma > 0.0 && maximum > 1.0e-7)
@@ -105,9 +105,8 @@ internal func rgb_to_hsv(color: float3)->float3
 
 internal func hsv_to_rgb(hsv: float3)->float3
 {
-    let primary : float3 =
-                      clamp(abs(frac(hsv.x + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0,
-                            0.0, 1.0);
+    let primary =
+        clamp(abs(frac(hsv.x + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
     return hsv.z * lerp(1.0.xxx, primary, hsv.y);
 }
 
@@ -123,7 +122,7 @@ internal func compensate_hsv(original_linear: float3, mapped_display: float3,
         return mapped_display;
     if (hue_compensation > 0.0 && mapped_hsv.y > 1.0e-7)
     {
-        let original_hsv : float3 = rgb_to_hsv(encode_srgb(original_linear));
+        let original_hsv = rgb_to_hsv(encode_srgb(original_linear));
         if (original_hsv.y > 1.0e-7)
         {
             var hue_offset : float = original_hsv.x - mapped_hsv.x;
@@ -138,10 +137,10 @@ internal func compensate_hsv(original_linear: float3, mapped_display: float3,
 
 internal func tonemap(linear_bt709: float3, parameters: PrimeDrtParameters)->float3
 {
-    let nonnegative : float3 = max(linear_bt709, float3(0.0));
-    let working : float3 = to_virtual_rgb(nonnegative);
-    let mapped_linear : float3 = from_virtual_rgb(curve(working, parameters));
-    let mapped_display : float3 = encode_srgb(mapped_linear);
+    let nonnegative = max(linear_bt709, float3(0.0));
+    let working = to_virtual_rgb(nonnegative);
+    let mapped_linear = from_virtual_rgb(curve(working, parameters));
+    let mapped_display = encode_srgb(mapped_linear);
     return compensate_hsv(nonnegative, mapped_display, parameters.hue_compensation,
                           parameters.saturation_compensation);
 }
@@ -153,7 +152,7 @@ public func prime_drt_bt709(hdr_bt709: float3, parameters: PrimeDrtParameters)->
 {
     if (any(isnan(hdr_bt709)) || any(isinf(hdr_bt709)))
         return float3(0.0);
-    let exposed : float3 = max(hdr_bt709, float3(0.0)) * parameters.exposure_multiplier;
+    let exposed = max(hdr_bt709, float3(0.0)) * parameters.exposure_multiplier;
     return clamp(tonemap(exposed, parameters), 0.0, parameters.encoded_output_peak);
 }
 
@@ -164,8 +163,8 @@ public func prime_drt_rec2020(hdr_rec2020: float3, parameters: PrimeDrtParameter
 {
     if (any(isnan(hdr_rec2020)) || any(isinf(hdr_rec2020)))
         return float3(0.0);
-    let exposed : float3 = max(hdr_rec2020, float3(0.0)) * parameters.exposure_multiplier;
-    let linear709 : float3 = max(color::rec2020_to_bt709(exposed), float3(0.0));
+    let exposed = max(hdr_rec2020, float3(0.0)) * parameters.exposure_multiplier;
+    let linear709 = max(color::rec2020_to_bt709(exposed), float3(0.0));
     return clamp(tonemap(linear709, parameters), 0.0, parameters.encoded_output_peak);
 }
 

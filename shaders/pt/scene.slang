@@ -119,7 +119,7 @@ public interface IScene
     func environment(direction: float3, previous: float3, depth: uint)->Environment;
 };
 
-/// 组合 callable 的材料翻译；Flow 为编译期能力掩码，与旧 CAP 参数不混用。
+/// 组合 callable 的材料翻译；flow 为编译期能力掩码，与旧 CAP 参数不混用。
 /// 适配器只读取该能力需要的参数和纹理；资源世代保证实际材料落在已证明支持域。
 public interface IFlowScene : IScene
 {

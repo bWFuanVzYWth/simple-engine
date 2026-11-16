@@ -11,13 +11,14 @@
 //!
 //! | 模块 | 接口与约定索引 |
 //! |---|---|
+//! | `math.constants` | `math::pi`、`math::tau` 等共享 float32 数学常量；不混入编码尺度或算法容差 |
 //! | `display.prime_drt` | Prime DRT；线性 BT.709／Rec.2020 输入，编码 sRGB 或线性显示输出，参数由 `display` feature 准备 |
 //! | `display.exposure` / `display.exposure_compute` | 256 桶对数测光、裁尾与时域适应；未曝光线性 buffer／texture 输入，资源与提交由宿主维护 |
 //! | `color.primaries` | D65 线性 BT.709 与 Rec.2020 原色转换，不裁剪 gamut |
 //! | `bsdf.openpbr.api` | OpenPBR 能力子集；完整闭包 response/PDF、显式介质及原始能量纹理，不宣称完整标准 |
 //! | `bsdf.openpbr.denoise` | 与闭包一致的方向 diffuse/specular 能量；不包含照明、Beer 或曝光 |
 //! | `atmosphere.parameters` / `atmosphere.sampling` | 四波长球形边界、SkyView、太阳 T 与有限距离 Aerial L/T；参数与数据由 atmosphere crate 维护 |
-//! | `pt.transport` | 指数拆分贡献、稳定 power heuristic、面积转立体角与 Beer 透射 |
+//! | `pt.transport` | 指数拆分贡献、同量度 PDF 的稳定 power heuristic、面积转立体角与 Beer 透射 |
 //! | `pt.scene` / `pt.integrator` | 场景到 OpenPBR 的编译期适配、K1/K2 输运、NEE/MIS/RR；Rust 阶段录制由 `pt_gpu` 提供 |
 //! | `restir_pt.*` | ReSTIR PT Enhanced默认point profile的reservoir、重放、shift与MIS；场景适配与程序由上层注入，Rust录制由 `restir_pt_gpu` 提供 |
 //! | `restir_pt.control_variate` | ReSTCV 双向差值与像素颜色累计；独立于路径赢家，保留有限负 RGB，系数及颜色历史由上层维护 |
@@ -35,7 +36,6 @@
 //! | `pt.light_sampling` | 叶节点软化的位置树、均匀／纹理发光 alias、连接射线与正反向 PDF |
 //! | `pt.light_bvh` / `pt.light_area` | 统一光源采样的树与面积底层数值协议 |
 //! | `pt.bsdf` | 单面 Lambertian eval／PDF／sample，方向指离开表面，PDF 为立体角量度 |
-//! | `pt.mis` | 两种策略各一个样本的 power heuristic，两个 PDF 使用相同量度 |
 //! | `geometry.ray` | 三角形重建及散射／连接射线；只有单位方向的 t 才表示距离 |
 //! | `geometry.camera` | 左上原点 pinhole 射线、正 view-Z 投影与像素 jitter；使用输出 aspect、输入 extent |
 //! | `voxel.dag` | 64 叉 DAG 叶查询、祖先缓存与整数 DDA；资源、坐标映射和叶策略由调用者提供 |

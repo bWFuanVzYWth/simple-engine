@@ -18,7 +18,7 @@ func fixed_mixture_main(uint3 id: SV_DispatchThreadID)->void
     let pixel = uint2(9, 5);
     var source : restir_pt::TinyUniformSampleGenerator =
                      restir_pt::rng_for_pixel(pixel, 3u * (sample + inputs[0].y));
-    let sign : float = source.next1D() < 0.5 ? -1.0 : 1.0;
+    let sign : float = source.next_1d() < 0.5 ? -1.0 : 1.0;
     let delta : float3 = sign * float3(3.0, -4.0, 6.0);
     let mean = float3(1.0, 2.0, 3.0);
     let fresh

@@ -2,13 +2,13 @@ module triangle;
 
 struct VertexOutput
 {
-    float4 position : SV_Position;
+    var position : float4 : SV_Position;
     [[vk::location(0)]]
-    float3 color : COLOR0;
+    var color : float3 : COLOR0;
 };
 
 [shader("vertex")]
-func vertex_main(uint vertex_id: SV_VulkanVertexID)->VertexOutput
+func vertex_main(vertex_id: uint: SV_VulkanVertexID)->VertexOutput
 {
     let positions : float2[3] = {
         float2(-0.6, 0.6),
@@ -21,10 +21,7 @@ func vertex_main(uint vertex_id: SV_VulkanVertexID)->VertexOutput
         float3(0.0, 0.0, 1.0),
     };
 
-    var output : VertexOutput;
-    output.position = float4(positions[vertex_id], 0.0, 1.0);
-    output.color = colors[vertex_id];
-    return output;
+    return { float4(positions[vertex_id], 0.0, 1.0), colors[vertex_id] };
 }
 
 [shader("fragment")]

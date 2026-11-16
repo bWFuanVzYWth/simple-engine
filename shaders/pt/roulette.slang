@@ -30,8 +30,8 @@ public func roulette_applies(completed_scatters: uint, minimum_completed_scatter
 public func roulette_probability(throughput: float3, eta_scale: float, square_root: bool = false)
     ->float
 {
-    let probability
-        : float = clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
+    let probability =
+        clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
     return square_root ? sqrt(probability) : probability;
 }
 

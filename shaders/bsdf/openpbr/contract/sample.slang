@@ -3,106 +3,109 @@
 #language slang 2026
 module "bsdf/openpbr/contract/sample.slang";
 
-import "bsdf/openpbr/contract/flags.slang";
+import bsdf.openpbr.contract.flags;
 
-public struct PrimeFullOpenPbrThroughput
+namespace openpbr
+{
+/// 内部局部坐标数值核：响应含cosine、尚未除PDF，proposal尚未做世界坐标sanitize或介质交接。
+namespace kernel
+{
+public struct Response
 {
     public var value : float3;
     public var flags : uint;
 };
 
-public struct PrimeFullOpenPbrSample
+public struct Proposal
 {
-    public var throughput : PrimeFullOpenPbrThroughput;
+    public var response : Response;
     public var pdf : float;
     public var eta : float;
     public var wo : float3;
 };
 
-public struct PrimeFullOpenPbrFloatPair
+public struct PolarizedValue
 {
-    public var first : float;
-    public var second : float;
+    public var s : float;
+    public var p : float;
 };
-public struct PrimeFullOpenPbrVecPair
+public struct InterfaceResponse
 {
-    public var first : float3;
-    public var second : float3;
+    public var reflection : float3;
+    public var transmission : float3;
 };
 
-public struct PrimeFullOpenPbrRefractResult
+public struct RefractResult
 {
     public var wo : float3;
-    public var relativeIor : float;
+    public var relative_ior : float;
     public var valid : uint;
 };
 
-public struct PrimeFullOpenPbrMicrofacet
+public struct Microfacet
 {
     public var alpha : float2;
 };
 
-public struct PrimeFullOpenPbrSpecularFresnel
+public struct SpecularFresnel
 {
     public var ior : float;
-    public var energyIor : float;
+    public var energy_ior : float;
     public var color : float3;
 };
 
-public struct PrimeFullOpenPbrConductorFresnel
+public struct ConductorFresnel
 {
     public var f0 : float3;
     // Relative Schlick tint at RoboCute's 1/7 cosine anchor, not absolute F(82 degrees).
     public var f82 : float3;
     public var f90 : float3;
     public var weight : float;
-    public var energyF0 : float3;
+    public var energy_f0 : float3;
 };
 
-public func primeFullOpenPbrZeroThroughput()->PrimeFullOpenPbrThroughput
+public func empty_response()->Response
 {
-    var result : PrimeFullOpenPbrThroughput;
+    var result : Response;
     result.value = float3(0.0);
-    result.flags = PRIME_FULL_OPENPBR_FLAG_NONE;
+    result.flags = LOBE_NONE;
     return result;
 }
 
-public func primeFullOpenPbrZeroSample()->PrimeFullOpenPbrSample
+public func empty_proposal()->Proposal
 {
-    var result : PrimeFullOpenPbrSample;
-    result.throughput = primeFullOpenPbrZeroThroughput();
+    var result : Proposal;
+    result.response = empty_response();
     result.pdf = 0.0;
     result.eta = 1.0;
     result.wo = float3(0.0);
     return result;
 }
 
-public func primeFullOpenPbrThroughputAdd(a: PrimeFullOpenPbrThroughput,
-                                          b: PrimeFullOpenPbrThroughput)
-    ->PrimeFullOpenPbrThroughput
+public func add_response(a: Response, b: Response)->Response
 {
-    var result : PrimeFullOpenPbrThroughput;
+    var result : Response;
     result.value = a.value + b.value;
     result.flags = a.flags | b.flags;
     return result;
 }
 
-public func primeFullOpenPbrThroughputScale(value: PrimeFullOpenPbrThroughput, scale: float3)
-    ->PrimeFullOpenPbrThroughput
+public func scale_response(value: Response, scale: float3)->Response
 {
     var value = value;
     value.value *= scale;
     if (all(scale == float3(0.0)))
-        value.flags = PRIME_FULL_OPENPBR_FLAG_NONE;
+        value.flags = LOBE_NONE;
     return value;
 }
 
-public func primeFullOpenPbrThroughputScale(value: PrimeFullOpenPbrThroughput, scale: float)
-    ->PrimeFullOpenPbrThroughput
+public func scale_response(value: Response, scale: float)->Response
 {
     var value = value;
     value.value *= scale;
     if (scale == 0.0)
-        value.flags = PRIME_FULL_OPENPBR_FLAG_NONE;
+        value.flags = LOBE_NONE;
     return value;
+}
+}
 }

@@ -3,190 +3,38 @@
 
 use simple_engine::{
     gpu_test::{Capability, Gpu, Shader},
-    openpbr::{self, GpuEnergy, Material, Medium},
-    wgpu,
+    openpbr::{self, Material, Medium},
 };
+
+#[path = "support/fixture.rs"]
+mod fixture;
+#[path = "support/reference.rs"]
+mod reference;
+use fixture::{Case, EnergyBinding, Fixture};
+use reference::{reference_beta_integral, reference_null_metal_sample};
+
+const REFERENCE: Fixture<'static> = Fixture::main(
+    include_bytes!(concat!(env!("OUT_DIR"), "/production.spv")),
+    EnergyBinding::Required,
+);
+const NUMERICAL: Fixture<'static> = Fixture::main(
+    include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
+    EnergyBinding::Absent,
+);
+const MATH: Fixture<'static> = Fixture::new(
+    include_bytes!(concat!(env!("OUT_DIR"), "/math.spv")),
+    "math_main",
+    EnergyBinding::Absent,
+);
+const PURPOSE: Fixture<'static> = Fixture::new(
+    include_bytes!(concat!(env!("OUT_DIR"), "/purpose.spv")),
+    "purpose_main",
+    EnergyBinding::Required,
+);
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-#[derive(Clone, Debug)]
-struct Case {
-    material: Material,
-    view: [f32; 4],
-    u: [f32; 4],
-    incident: Medium,
-    transmitted: Medium,
-}
-
-impl Case {
-    fn words(&self) -> Vec<u32> {
-        let mut words = self.material.to_words().to_vec();
-        for values in [
-            self.view,
-            self.u,
-            self.incident.to_array(),
-            self.transmitted.to_array(),
-        ] {
-            words.extend(values.map(f32::to_bits));
-        }
-        words
-    }
-}
-
-fn run(cases: &[Case]) -> Result<Vec<[[f32; 4]; 5]>> {
-    run_shader(
-        cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/production.spv")),
-        true,
-    )
-}
-
-fn run_shader(cases: &[Case], spirv: &[u8], bind_energy: bool) -> Result<Vec<[[f32; 4]; 5]>> {
-    run_shader_entry(cases, spirv, bind_energy, "main")
-}
-
-fn run_shader_entry(
-    cases: &[Case],
-    spirv: &[u8],
-    bind_energy: bool,
-    entry: &str,
-) -> Result<Vec<[[f32; 4]; 5]>> {
-    let mut gpu = Gpu::new(Capability::Compute, 0, false)?;
-    let result = (|| -> Result<_> {
-        let context = gpu.context();
-        let device = context.device();
-        let energy = bind_energy
-            .then(|| GpuEnergy::new(device, context.queue()))
-            .transpose()?;
-        let bytes: Vec<u8> = cases
-            .iter()
-            .flat_map(Case::words)
-            .flat_map(u32::to_le_bytes)
-            .collect();
-        let input = context.buffer("OpenPBR cases", &bytes, wgpu::BufferUsages::STORAGE)?;
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("OpenPBR results"),
-            size: (cases.len() * 80) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("OpenPBR fixture layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ][..if bind_energy { 4 } else { 2 }],
-        });
-        let mut entries = vec![
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output.as_entire_binding(),
-            },
-        ];
-        if let Some(energy) = &energy {
-            entries.extend([
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(energy.view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(energy.sampler()),
-                },
-            ]);
-        }
-        let bindings = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OpenPBR fixture"),
-            layout: &layout,
-            entries: &entries,
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("OpenPBR fixture"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let shader = context.shader(spirv, entry, [64, 1, 1])?;
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("OpenPBR fixture"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some(entry),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bindings, &[]);
-            pass.dispatch_workgroups((cases.len() as u32).div_ceil(64), 1, 1);
-        }
-        context.queue().submit([encoder.finish()]);
-        let bytes = gpu.readback(&output)?;
-        let rows = bytes
-            .as_chunks::<80>()
-            .0
-            .iter()
-            .map(|row| {
-                std::array::from_fn(|a| {
-                    std::array::from_fn(|b| {
-                        f32::from_le_bytes(
-                            row[a * 16 + b * 4..a * 16 + b * 4 + 4].try_into().unwrap(),
-                        )
-                    })
-                })
-            })
-            .collect::<Vec<[[f32; 4]; 5]>>();
-        for (index, row) in rows.iter().enumerate() {
-            assert_eq!(row[2][2].to_bits(), index as u32 + 1, "shader执行身份");
-        }
-        Ok(rows)
-    })();
-    let cleanup = gpu.finish();
-    let rows = result?;
-    cleanup?;
-    Ok(rows)
-}
-
-fn fixture() -> Result<Vec<Case>> {
+fn representative_cases() -> Result<Vec<Case>> {
     let mut materials = Vec::new();
     for roughness in [0.0, 0.03, 0.3, 0.9] {
         for (metal, sss) in [
@@ -563,8 +411,9 @@ fn flow_compositions_preserve_the_complete_supported_closure() -> Result {
         let cases = flow_cases(profile)?;
         assert!(!cases.is_empty());
         let bind_energy = !matches!(profile, 2 | 4..=7 | 10 | 12 | 19..=24 | 26..=28);
-        let actual = run_shader(&cases, shader, bind_energy)?;
-        let reference = run(&cases)?;
+        let actual =
+            Fixture::main(shader, EnergyBinding::from_required(bind_energy)).run(&cases)?;
+        let reference = REFERENCE.run(&cases)?;
         for (index, (a, b)) in actual.iter().zip(&reference).enumerate() {
             assert_eq!(
                 a[2][0].to_bits(),
@@ -578,7 +427,7 @@ fn flow_compositions_preserve_the_complete_supported_closure() -> Result {
                     // null-metal用f64采样值检查原3e-5物理阈值；旧f32重建微法线也有舍入误差。
                     let physical =
                         if profile == 26 && row == 1 && actual[index][2][0].to_bits() != 0 {
-                            null_metal_sample(&cases[index])
+                            reference_null_metal_sample(&cases[index])
                                 .map(|(response, pdf)| if channel < 3 { response } else { pdf })
                         } else {
                             None
@@ -608,8 +457,9 @@ fn flow_compositions_preserve_the_complete_supported_closure() -> Result {
                 queries.push(case);
             }
         }
-        let actual = run_shader(&queries, shader, bind_energy)?;
-        let reference = run(&queries)?;
+        let actual =
+            Fixture::main(shader, EnergyBinding::from_required(bind_energy)).run(&queries)?;
+        let reference = REFERENCE.run(&queries)?;
         for (index, (a, b)) in actual.iter().zip(reference).enumerate() {
             let may_a = a[2][1].to_bits() != 0;
             let may_b = b[2][1].to_bits() != 0;
@@ -651,7 +501,7 @@ fn continuous_dielectric_extreme_samples_remain_finite() -> Result {
                 transmitted: Medium::new(if exiting { 1. } else { ior }, [0.; 3])?,
             });
         }
-        let rows = run_shader(&cases, FLOWS[3], true)?;
+        let rows = Fixture::main(FLOWS[3], EnergyBinding::Required).run(&cases)?;
         let mut peak = 0.;
         let mut worst = 0;
         for (index, row) in rows.iter().enumerate() {
@@ -786,7 +636,7 @@ fn composed_kernels_are_finite_before_sanitization() -> Result {
                 });
             }
         }
-        let rows = run_shader(&cases, shader, true)?;
+        let rows = Fixture::main(shader, EnergyBinding::Required).run(&cases)?;
         let mut count = 0;
         let mut interior_count = 0;
         for (c, row) in cases.iter().zip(&rows) {
@@ -845,11 +695,7 @@ fn transmission_masking_matches_integer_beta_identities() -> Result {
             }
         }
     }
-    let rows = run_shader(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
-        false,
-    )?;
+    let rows = NUMERICAL.run(&cases)?;
     for ((case, row), expected) in cases.iter().zip(rows).zip(expected) {
         let actual = f64::from(row[0][0]);
         assert!(
@@ -875,11 +721,7 @@ fn reflection_masking_preserves_the_grazing_limit() -> Result {
             });
         }
     }
-    let rows = run_shader(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
-        false,
-    )?;
+    let rows = NUMERICAL.run(&cases)?;
     for (case, row) in cases.iter().zip(rows) {
         let alpha = f64::from(f32::from_bits(case.material.to_words()[3])).powi(2);
         let ci = f64::from(case.view[2]);
@@ -907,8 +749,8 @@ fn flow_guide_energy_preserves_supported_materials() -> Result {
         for case in &mut cases {
             case.u[3] = 5.;
         }
-        let actual = run_shader_entry(&cases, shader, true, "guide_main")?;
-        let reference = run(&cases)?;
+        let actual = Fixture::new(shader, "guide_main", EnergyBinding::Required).run(&cases)?;
+        let reference = REFERENCE.run(&cases)?;
         for (index, (actual, reference)) in actual.iter().zip(&reference).enumerate() {
             for row in 0..2 {
                 for channel in 0..3 {
@@ -950,8 +792,8 @@ fn prepared_vertices_match_independent_evaluation_and_scatter() -> Result {
         ),
     ] {
         let cases = flow_cases(profile)?;
-        let actual = run_shader(&cases, shared, true)?;
-        let reference = run_shader(&cases, separate, true)?;
+        let actual = Fixture::main(shared, EnergyBinding::Required).run(&cases)?;
+        let reference = Fixture::main(separate, EnergyBinding::Required).run(&cases)?;
         for (index, (a, b)) in actual.iter().zip(reference).enumerate() {
             assert_eq!(
                 a[2][0].to_bits(),
@@ -974,8 +816,12 @@ fn specialized_closures_match_generic() -> Result {
     for (capability, shader) in SPECIALIZED.into_iter().enumerate() {
         let cases = specialized_cases(capability)?;
         // conductor、thin 和三个 delta fixture 都不创建或绑定能量资源。
-        let actual = run_shader(&cases, shader, matches!(capability, 0 | 1 | 3))?;
-        let reference = run(&cases)?;
+        let actual = Fixture::main(
+            shader,
+            EnergyBinding::from_required(matches!(capability, 0 | 1 | 3)),
+        )
+        .run(&cases)?;
+        let reference = REFERENCE.run(&cases)?;
         for (index, (a, b)) in actual.iter().zip(reference).enumerate() {
             assert_eq!(
                 a[2][0].to_bits(),
@@ -1024,12 +870,12 @@ fn specialized_continuous_support_preserves_its_domain() -> Result {
                 transmitted: medium,
             })
             .collect();
-        let actual = run_shader(
-            &cases,
+        let actual = Fixture::main(
             SPECIALIZED[capability],
-            matches!(capability, 0 | 1 | 3),
-        )?;
-        let reference = run(&cases)?;
+            EnergyBinding::from_required(matches!(capability, 0 | 1 | 3)),
+        )
+        .run(&cases)?;
+        let reference = REFERENCE.run(&cases)?;
         for (index, (a, b)) in actual.iter().zip(reference).enumerate() {
             for channel in 0..4 {
                 close(a[3][channel], b[3][channel]);
@@ -1064,7 +910,8 @@ fn specialized_batch_preserves_independent_evaluations_and_sample() -> Result {
             .step_by(16)
             .collect();
         let bind_energy = matches!(capability, 0 | 1 | 3);
-        let samples = run_shader(&cases, shader, bind_energy)?;
+        let samples =
+            Fixture::main(shader, EnergyBinding::from_required(bind_energy)).run(&cases)?;
         let evaluate = |direction: [f32; 3]| {
             let queries: Vec<_> = cases
                 .iter()
@@ -1074,7 +921,7 @@ fn specialized_batch_preserves_independent_evaluations_and_sample() -> Result {
                     case
                 })
                 .collect();
-            run_shader(&queries, shader, bind_energy)
+            Fixture::main(shader, EnergyBinding::from_required(bind_energy)).run(&queries)
         };
         let evaluations = [evaluate([0.6, 0.0, 0.8])?, evaluate([0.6, 0.0, -0.8])?];
         let mut queries = Vec::new();
@@ -1088,7 +935,8 @@ fn specialized_batch_preserves_independent_evaluations_and_sample() -> Result {
                 }
             }
         }
-        let actual = run_shader(&queries, shader, bind_energy)?;
+        let actual =
+            Fixture::main(shader, EnergyBinding::from_required(bind_energy)).run(&queries)?;
         for (index, case) in cases.iter().enumerate() {
             for control in 0..8 {
                 for direction in 0..2 {
@@ -1185,7 +1033,7 @@ fn continuous_support_preserves_scattering_directions() -> Result {
             transmitted,
         })
         .collect();
-    let actual = run(&cases)?;
+    let actual = REFERENCE.run(&cases)?;
     for (query, a) in queries.iter().zip(&actual) {
         let (label, _, _, _, may_evaluate, positive) = query;
         assert_eq!(a[2][1].to_bits(), u32::from(*may_evaluate), "{label}");
@@ -1248,8 +1096,8 @@ fn density_tolerance(case: &Case, row: &[[f32; 4]; 5]) -> f32 {
 #[test]
 #[ignore = "需要 Vulkan compute：连续sample与完整闭包边缘eval/pdf一致"]
 fn continuous_samples_match_the_evaluated_marginal() -> Result {
-    let cases = fixture()?;
-    let actual = run(&cases)?;
+    let cases = representative_cases()?;
+    let actual = REFERENCE.run(&cases)?;
     let mut compared = 0;
     let mut deviations = Vec::new();
     let mut maxima = std::collections::BTreeMap::<u32, [f32; 3]>::new();
@@ -1343,7 +1191,7 @@ fn ideal_dielectric_follows_fresnel_eta_and_medium_transition() -> Result {
             transmitted: glass,
         },
     ];
-    let rows = run(&cases)?;
+    let rows = REFERENCE.run(&cases)?;
     assert_eq!(rows[0][2][0].to_bits(), 2 | 16);
     close(rows[0][0][3], 1.5);
     close(rows[0][0][2], -1.0);
@@ -1403,7 +1251,7 @@ fn real_energy_texture_preserves_selected_half4_texels() -> Result {
             half(u16::from_le_bytes([bytes[0], bytes[1]]))
         }));
     }
-    for (row, expected) in run(&cases)?.iter().zip(expected) {
+    for (row, expected) in REFERENCE.run(&cases)?.iter().zip(expected) {
         for channel in 0..4 {
             close(row[0][channel], expected[channel]);
         }
@@ -1536,12 +1384,7 @@ fn ggx_distribution_and_reflection_density_match_analytic_limits() -> Result {
             }
         }
     }
-    let rows = run_shader_entry(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/math.spv")),
-        false,
-        "math_main",
-    )?;
+    let rows = MATH.run(&cases)?;
     for (case, row) in cases.iter().zip(rows) {
         let roughness = f32::from_bits(case.material.to_words()[3]);
         let alpha = f64::from(roughness * roughness);
@@ -1593,12 +1436,7 @@ fn dielectric_fresnel_matches_independent_snell_response() -> Result {
             });
         }
     }
-    let rows = run_shader_entry(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/math.spv")),
-        false,
-        "math_main",
-    )?;
+    let rows = MATH.run(&cases)?;
     for (case, row) in cases.iter().zip(rows) {
         let ratio = f64::from(case.incident.to_array()[0] / case.transmitted.to_array()[0]);
         let eta = if case.view[2] < 0. { 1. / ratio } else { ratio };
@@ -1624,25 +1462,6 @@ fn dielectric_fresnel_matches_independent_snell_response() -> Result {
 }
 
 // t=logistic(v)直接积分Beta定义；不复用生产Gamma近似或其连分式。
-fn beta_integral(a: f64, b: f64) -> f64 {
-    let center = (a / b).ln();
-    let steps = 16384_u32;
-    let width = 80. / f64::from(steps);
-    let mut sum = 0.;
-    for index in 0..=steps {
-        let v = center - 40. + f64::from(index) * width;
-        let value = (-a * (-v).exp().ln_1p() - b * v.exp().ln_1p()).exp();
-        let weight = if index == 0 || index == steps {
-            1.
-        } else if index % 2 == 0 {
-            2.
-        } else {
-            4.
-        };
-        sum += weight * value;
-    }
-    sum * width / 3.
-}
 
 #[test]
 #[ignore = "真实GPU；非整数透射遮蔽由独立Beta定义积分核对"]
@@ -1661,7 +1480,7 @@ fn transmission_masking_matches_noninteger_beta_integrals() -> Result {
                     + (1. + (alpha * f64::from(outgoing_sine) / f64::from(outgoing)).powi(2))
                         .sqrt())
                     * 0.5;
-                expected.push(beta_integral(a, b));
+                expected.push(reference_beta_integral(a, b));
                 cases.push(Case {
                     material: Material::dielectric(roughness, None)?,
                     view: [sine, 0., cosine, 0.],
@@ -1672,11 +1491,7 @@ fn transmission_masking_matches_noninteger_beta_integrals() -> Result {
             }
         }
     }
-    let rows = run_shader(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/numerical.spv")),
-        false,
-    )?;
+    let rows = NUMERICAL.run(&cases)?;
     for ((case, row), expected) in cases.iter().zip(rows).zip(expected) {
         let actual = f64::from(row[0][0]);
         assert!(
@@ -1685,55 +1500,6 @@ fn transmission_masking_matches_noninteger_beta_integrals() -> Result {
         );
     }
     Ok(())
-}
-// 黑色非金属端只提供null质量；连续金属端的f64 GGX/Schlick采样值。
-// 直接消费随机数，不从已舍入的出射方向重建微法线。
-fn null_metal_sample(case: &Case) -> Option<(f64, f64)> {
-    let words = case.material.to_words();
-    let weight = f64::from(f32::from_bits(words[5]));
-    if f64::from(case.u[2]) >= weight {
-        return None;
-    }
-    let roughness = f64::from(f32::from_bits(words[3]));
-    let alpha = roughness * roughness;
-    let wi = [
-        f64::from(case.view[0]),
-        f64::from(case.view[1]),
-        f64::from(case.view[2]).abs(),
-    ];
-    let length = (alpha * alpha * (wi[0] * wi[0] + wi[1] * wi[1]) + wi[2] * wi[2]).sqrt();
-    let visible = [
-        alpha * wi[0] / length,
-        alpha * wi[1] / length,
-        wi[2] / length,
-    ];
-    let s = 1. + wi[0].hypot(wi[1]);
-    let k = (1. - alpha * alpha) * s * s / (s * s + alpha * alpha * wi[2] * wi[2]);
-    let z = 1. - (1. + k * visible[2]) * f64::from(case.u[1]);
-    let phi = std::f64::consts::TAU * f64::from(case.u[0]);
-    let sine = (1. - z * z).max(0.).sqrt();
-    let half = [
-        alpha * (sine * phi.cos() + visible[0]),
-        alpha * (sine * phi.sin() + visible[1]),
-        (z + visible[2]).max(0.),
-    ];
-    let half_length = half.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let half = half.map(|x| x / half_length);
-    let cosine = wi.iter().zip(half).map(|(a, b)| a * b).sum::<f64>();
-    let outgoing = std::array::from_fn::<_, 3, _>(|axis| -wi[axis] + 2. * cosine * half[axis]);
-    if outgoing[2] <= 0. {
-        return None;
-    }
-    let denominator = half[0] * half[0] + half[1] * half[1] + alpha * alpha * half[2] * half[2];
-    let distribution = alpha * alpha / (std::f64::consts::PI * denominator * denominator);
-    let outgoing_length = (alpha * alpha * (outgoing[0] * outgoing[0] + outgoing[1] * outgoing[1])
-        + outgoing[2] * outgoing[2])
-        .sqrt();
-    let factor = 0.5 * outgoing[2] / (wi[2] * outgoing_length + outgoing[2] * length);
-    Some((
-        weight * distribution * factor * (1. - cosine).powi(5),
-        weight * distribution / (2. * (k * wi[2] + length)),
-    ))
 }
 
 #[test]
@@ -1774,12 +1540,7 @@ fn projected_energy_preserves_roughness_endpoints_and_lut_sampling() -> Result {
             }
         }
     }
-    let rows = run_shader_entry(
-        &cases,
-        include_bytes!(concat!(env!("OUT_DIR"), "/purpose.spv")),
-        true,
-        "purpose_main",
-    )?;
+    let rows = PURPOSE.run(&cases)?;
     for (case, row) in cases.iter().zip(rows) {
         for channel in 0..3 {
             let (before, after) = (row[0][channel], row[1][channel]);

@@ -94,18 +94,19 @@ public func write_surface_guides<Scene>(scene: Scene, images: GuideImages, p: Gu
 /// 生产HitObject/known-surface路径只消费按材质特化后返回的数值，不在RG求BSDF。
 public func write_key_guides<Scene : pt::IKeyGuideTrace>(
     scene: Scene, images: GuideImages, p: GuideFrame, pixel: uint2, film: float2,
-    first: pt::KeyGuideVertex, cameraOrigin: float3, cameraDirection: float3, initialMedium: float4,
-    deltaOnly: bool = false)
+    first: pt::KeyGuideVertex, camera_origin: float3, camera_direction: float3,
+    initial_medium: float4, delta_only: bool = false)
     ->void
 {
     var images = images;
     let keyed : pt::KeyGuideEndpoint =
-                    pt::trace_key_guide(scene, first, cameraOrigin, cameraDirection, initialMedium,
-                                        p.max_depth, false, deltaOnly);
+                    pt::trace_key_guide(scene, first, camera_origin, camera_direction,
+                                        initial_medium, p.max_depth, false, delta_only);
     let endpoint : pt::GuideEndpoint = keyed.endpoint;
     if ((endpoint.flags & pt::GUIDE_SKY) != 0)
     {
-        write_sky_guide(images, p, pixel, film, cameraDirection, endpoint.flags | GUIDE_FOREGROUND);
+        write_sky_guide(images, p, pixel, film, camera_direction,
+                        endpoint.flags | GUIDE_FOREGROUND);
         if (endpoint.use_interface_specular)
             images.specular[pixel] = float4(endpoint.interface_specular, 0);
     }
@@ -120,10 +121,10 @@ public func write_key_guides<Scene : pt::IKeyGuideTrace>(
                                        float(projection.flags | GUIDE_FOREGROUND) * (1.0 / 255.0));
         images.specular[pixel] = float4(keyed.albedos.specular_albedo, 0);
     }
-    let reflectedKey : pt::KeyGuideEndpoint =
-                           pt::trace_key_guide(scene, first, cameraOrigin, cameraDirection,
-                                               initialMedium, p.max_depth, true, deltaOnly);
-    let reflection : pt::GuideEndpoint = reflectedKey.endpoint;
+    let reflected_key : pt::KeyGuideEndpoint =
+                            pt::trace_key_guide(scene, first, camera_origin, camera_direction,
+                                                initial_medium, p.max_depth, true, delta_only);
+    let reflection : pt::GuideEndpoint = reflected_key.endpoint;
     let reflected : pt::GuideProjection = pt::project_guide(reflection, p.current, p.previous, film,
                                                             p.extent, p.history);
     images.distance[pixel] = (reflection.flags & pt::GUIDE_SKY) != 0 ? 0 : reflection.distance;

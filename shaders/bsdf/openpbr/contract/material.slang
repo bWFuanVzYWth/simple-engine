@@ -3,112 +3,118 @@
 #language slang 2026
 module "bsdf/openpbr/contract/material.slang";
 
-public struct PrimeFullOpenPbrOnb
+namespace openpbr
+{
+namespace kernel
+{
+public struct Frame
 {
     public var tangent : float3;
     public var bitangent : float3;
     public var normal : float3;
 };
 
-public struct PrimeFullOpenPbrWeight
+public struct MaterialWeights
 {
     public var base : float;
-    public var diffuseRoughness : float;
+    public var diffuse_roughness : float;
     public var specular : float;
     public var metalness : float;
     public var subsurface : float;
     public var transmission : float;
     public var coat : float;
     public var fuzz : float;
-    public var thinFilm : float;
+    public var thin_film : float;
     public var diffraction : float;
 };
 
-public struct PrimeFullOpenPbrGeometry
+public struct Geometry
 {
-    public var thinWalled : uint;
+    public var thin_walled : uint;
     public var thickness : float;
-    public var onb : PrimeFullOpenPbrOnb;
+    public var frame : Frame;
 };
 
-public struct PrimeFullOpenPbrSpecular
+public struct Specular
 {
     public var color : float3;
     public var roughness : float;
-    public var roughnessAnisotropy : float;
+    public var roughness_anisotropy : float;
     public var ior : float;
 };
 
-public struct PrimeFullOpenPbrEmission
+public struct Emission
 {
     public var luminance : float3;
 };
-public struct PrimeFullOpenPbrBase
+public struct Base
 {
     public var color : float3;
 };
 
-public struct PrimeFullOpenPbrSubsurface
+public struct Subsurface
 {
     public var color : float3;
     public var radius : float3;
-    public var scatterAnisotropy : float;
+    public var scatter_anisotropy : float;
 };
 
-public struct PrimeFullOpenPbrTransmission
+public struct Transmission
 {
     public var color : float3;
     public var depth : float;
     public var scatter : float3;
-    public var scatterAnisotropy : float;
-    public var dispersionScale : float;
-    public var dispersionAbbeNumber : float;
+    public var scatter_anisotropy : float;
+    public var dispersion_scale : float;
+    public var dispersion_abbe_number : float;
 };
 
-public struct PrimeFullOpenPbrCoat
+public struct Coat
 {
     public var color : float3;
     public var roughness : float;
-    public var roughnessAnisotropy : float;
+    public var roughness_anisotropy : float;
     public var ior : float;
     public var darkening : float;
     public var roughening : float;
-    public var onb : PrimeFullOpenPbrOnb;
+    public var frame : Frame;
 };
 
-public struct PrimeFullOpenPbrFuzz
+public struct Fuzz
 {
     public var color : float3;
     public var roughness : float;
 };
 
-public struct PrimeFullOpenPbrThinFilm
+public struct ThinFilm
 {
     public var thickness : float;
     public var ior : float;
 };
 
-public struct PrimeFullOpenPbrDiffraction
+public struct Diffraction
 {
     public var color : float3;
     public var thickness : float;
-    public var invPitch : float2;
+    public var inv_pitch : float2;
     public var angle : float;
-    public var lobeCount : uint;
+    public var lobe_count : uint;
     public var kind : uint;
 };
 
-public struct PrimeFullOpenPbrMaterial
+public struct FullMaterial
 {
-    public var weight : PrimeFullOpenPbrWeight;
-    public var geometry : PrimeFullOpenPbrGeometry;
-    public var specular : PrimeFullOpenPbrSpecular;
-    public var emission : PrimeFullOpenPbrEmission;
-    public var base : PrimeFullOpenPbrBase;
-    public var subsurface : PrimeFullOpenPbrSubsurface;
-    public var transmission : PrimeFullOpenPbrTransmission;
-    public var coat : PrimeFullOpenPbrCoat;
-    public var fuzz : PrimeFullOpenPbrFuzz;
-    public var thinFilm : PrimeFullOpenPbrThinFilm;
-    public var diffraction : PrimeFullOpenPbrDiffraction;
+    public var weight : MaterialWeights;
+    public var geometry : Geometry;
+    public var specular : Specular;
+    public var emission : Emission;
+    public var base : Base;
+    public var subsurface : Subsurface;
+    public var transmission : Transmission;
+    public var coat : Coat;
+    public var fuzz : Fuzz;
+    public var thin_film : ThinFilm;
+    public var diffraction : Diffraction;
 };
+}
+}

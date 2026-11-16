@@ -1,5 +1,5 @@
 //! Cargo与资源准备共用的批量调度及依赖内容缓存；缓存字节不替代调用方的 ABI 和物理审计。
-use super::{Compiler, Error, field, read};
+use super::{Compiler, Error, canonical_path, command_path, hash_field, read_file};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +11,7 @@ use std::{
 };
 
 static SERIAL: AtomicU64 = AtomicU64::new(0);
-const VERSION: &str = "slang-dependency-cache-1";
+const CACHE_VERSION: &str = "slang-dependency-cache-2";
 
 pub(super) struct Scheduler {
     jobs: usize,
@@ -51,6 +51,7 @@ pub(super) struct Task {
     arguments: Vec<String>,
     destination: PathBuf,
     reflection: Option<PathBuf>,
+    pub audit: Option<PathBuf>,
     publish_output: bool,
 }
 
@@ -78,11 +79,20 @@ impl Task {
                     "每个入口只允许一个 reflection 输出".into(),
                 ));
             }
-            if argument == "-o" || argument == "-depfile" || argument.starts_with("-depfile=") {
+            if argument == "-o"
+                || argument == "-depfile"
+                || argument.starts_with("-depfile=")
+                || argument == "-separate-debug-info-output"
+                || argument.starts_with("-separate-debug-info-output=")
+            {
                 return Err(Error::Configuration("-o/-depfile 由构建所有者管理".into()));
             }
         }
         let destination = absolute(&destination)?;
+        let audit = arguments
+            .iter()
+            .any(|argument| argument == "-separate-debug-info")
+            .then(|| destination.with_extension("audit.spv"));
         for path in std::iter::once(&destination).chain(reflection.iter()) {
             if path.file_name().is_none() {
                 return Err(Error::Configuration(format!(
@@ -96,6 +106,7 @@ impl Task {
             arguments,
             destination,
             reflection,
+            audit,
             publish_output: true,
         })
     }
@@ -124,8 +135,15 @@ pub struct CompileStatistics {
 
 pub(super) struct Compiled {
     pub path: PathBuf,
+    pub bytes: Vec<u8>,
+    pub audit: Option<AuditFile>,
     pub fingerprint: String,
     pub cache_hit: bool,
+}
+
+pub(super) struct AuditFile {
+    pub path: PathBuf,
+    pub digest: String,
 }
 
 pub(super) struct Output {
@@ -147,30 +165,14 @@ fn absolute(path: &Path) -> Result<PathBuf, Error> {
         env::current_dir().map_err(|e| failure(path, e))?.join(path)
     })
 }
-fn canonical(path: &Path) -> Result<PathBuf, Error> {
-    fs::canonicalize(path).map_err(|e| failure(path, e))
-}
-fn command_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    if cfg!(windows) {
-        if let Some(path) = text.strip_prefix(r"\\?\UNC\") {
-            return format!(r"\\{path}");
-        }
-        if let Some(path) = text.strip_prefix(r"\\?\") {
-            return path.into();
-        }
-    }
-    text.into_owned()
-}
-
-struct Inputs {
+struct InputSnapshot {
     output: PathBuf,
     roots: BTreeMap<PathBuf, Vec<PathBuf>>,
     hashes: BTreeMap<PathBuf, String>,
-    cargo: bool,
+    emit_cargo: bool,
 }
 
-impl Inputs {
+impl InputSnapshot {
     fn name(&self, path: &Path) -> String {
         match path.strip_prefix(&self.output) {
             Ok(path) => format!("@out/{}", path.display()),
@@ -192,11 +194,11 @@ impl Inputs {
     fn inventory(&self, roots: &[PathBuf], extensions: &BTreeSet<String>) -> String {
         let mut hash = blake3::Hasher::new();
         for root in roots {
-            field(&mut hash, self.name(root).as_bytes());
+            hash_field(&mut hash, self.name(root).as_bytes());
             if let Some(paths) = self.roots.get(root) {
                 for path in paths {
                     if extensions.contains(&extension(path)) {
-                        field(&mut hash, self.name(path).as_bytes());
+                        hash_field(&mut hash, self.name(path).as_bytes());
                     }
                 }
             }
@@ -215,7 +217,7 @@ struct Dependency {
     digest: String,
 }
 #[derive(Serialize, Deserialize)]
-struct Manifest {
+struct CacheManifest {
     version: String,
     dependencies: Vec<Dependency>,
     extensions: BTreeSet<String>,
@@ -223,9 +225,10 @@ struct Manifest {
     object: String,
     digest: String,
     reflection: Option<String>,
+    audit: Option<String>,
 }
 
-struct Prepared<'a> {
+struct PreparedTask<'a> {
     task: &'a Task,
     arguments: Vec<String>,
     roots: Vec<PathBuf>,
@@ -323,27 +326,27 @@ pub(super) fn compile_runtime(
     )
 }
 
-fn compile_tracked(
+// 准备阶段只验证并规范化请求；不启动worker或发布产物。
+struct PreparedBatch<'a> {
+    tasks: Vec<PreparedTask<'a>>,
+    roots: BTreeSet<PathBuf>,
+    outputs: BTreeSet<PathBuf>,
+}
+
+fn prepare_requests<'a>(
     compiler: &Compiler,
-    scheduler: &Scheduler,
     output: &Path,
-    tasks: &[Task],
-    cache: &Path,
-    tracked_files: &BTreeSet<PathBuf>,
-    cargo: bool,
-) -> Result<Output, Error> {
-    let started = Instant::now();
-    let output = canonical(output)?;
-    fs::create_dir_all(cache.join("requests")).map_err(|e| failure(cache, e))?;
-    fs::create_dir_all(cache.join("objects")).map_err(|e| failure(cache, e))?;
-    fs::create_dir_all(cache.join("temporary")).map_err(|e| failure(cache, e))?;
-    let cache = canonical(cache)?;
+    tasks: &'a [Task],
+) -> Result<PreparedBatch<'a>, Error> {
     let mut prepared = Vec::with_capacity(tasks.len());
     let mut all_roots = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     for task in tasks {
-        for path in std::iter::once(&task.destination).chain(task.reflection.iter()) {
-            let parent = canonical(
+        for path in std::iter::once(&task.destination)
+            .chain(task.reflection.iter())
+            .chain(task.audit.iter())
+        {
+            let parent = canonical_path(
                 path.parent()
                     .ok_or_else(|| Error::Configuration("输出缺少父目录".into()))?,
             )?;
@@ -352,30 +355,35 @@ fn compile_tracked(
                 return Err(Error::Configuration(format!("重复输出 {}", path.display())));
             }
         }
-        let source = canonical(Path::new(&task.arguments[0]))?;
+        let source = canonical_path(Path::new(&task.arguments[0]))?;
         if !source.is_file() {
             return Err(Error::Configuration(format!(
                 "shader 源路径不是文件：{}",
                 source.display()
             )));
         }
-        let mut roots = vec![source.parent().expect("canonical 文件父目录").to_owned()];
+        let mut roots = vec![
+            source
+                .parent()
+                .expect("canonical_path 文件父目录")
+                .to_owned(),
+        ];
         let mut args = task.arguments.clone();
-        args[0] = normalize(&source, &output);
+        args[0] = normalize(&source, output);
         let mut index = 1;
         while index < args.len() {
             if args[index] == "-I" {
                 index += 1;
-                let path = canonical(Path::new(
+                let path = canonical_path(Path::new(
                     args.get(index)
                         .ok_or_else(|| Error::Configuration("-I 缺少路径".into()))?,
                 ))?;
                 roots.push(path.clone());
-                args[index] = normalize(&path, &output);
+                args[index] = normalize(&path, output);
             } else if args[index].starts_with("-I") && args[index].len() > 2 {
-                let path = canonical(Path::new(&args[index][2..]))?;
+                let path = canonical_path(Path::new(&args[index][2..]))?;
                 roots.push(path.clone());
-                args[index] = format!("-I{}", normalize(&path, &output));
+                args[index] = format!("-I{}", normalize(&path, output));
             } else if args[index] == "-reflection-json" {
                 index += 1;
                 args[index] = "@reflection".into();
@@ -386,31 +394,49 @@ fn compile_tracked(
         }
         all_roots.extend(roots.iter().cloned());
         let mut hash = blake3::Hasher::new();
-        field(&mut hash, VERSION.as_bytes());
-        field(&mut hash, compiler.identity.as_bytes());
-        for argument in &args {
-            field(&mut hash, argument.as_bytes());
+        if task.audit.is_some() {
+            args.extend(["-separate-debug-info-output".into(), "@audit".into()]);
         }
-        prepared.push(Prepared {
+        hash_field(&mut hash, CACHE_VERSION.as_bytes());
+        hash_field(&mut hash, compiler.identity.as_bytes());
+        for argument in &args {
+            hash_field(&mut hash, argument.as_bytes());
+        }
+        prepared.push(PreparedTask {
             task,
             arguments: args,
             roots,
             key: hash.finalize().to_hex().to_string(),
         });
     }
-    let mut inputs = Inputs {
+    Ok(PreparedBatch {
+        tasks: prepared,
+        roots: all_roots,
+        outputs,
+    })
+}
+
+fn snapshot_inputs(
+    output: PathBuf,
+    roots: BTreeSet<PathBuf>,
+    outputs: &BTreeSet<PathBuf>,
+    cache: &Path,
+    tracked_files: &BTreeSet<PathBuf>,
+    emit_cargo: bool,
+) -> Result<InputSnapshot, Error> {
+    let mut inputs = InputSnapshot {
         output,
         roots: BTreeMap::new(),
         hashes: BTreeMap::new(),
-        cargo,
+        emit_cargo,
     };
-    for root in all_roots {
+    for root in roots {
         let mut paths = Vec::new();
         let mut pending = vec![root.clone()];
         let mut visited = BTreeSet::new();
         while let Some(path) = pending.pop() {
-            let path = canonical(&path)?;
-            if path.starts_with(&cache) || !visited.insert(path.clone()) {
+            let path = canonical_path(&path)?;
+            if path.starts_with(cache) || !visited.insert(path.clone()) {
                 continue;
             }
             if path.is_dir() {
@@ -426,14 +452,38 @@ fn compile_tracked(
         inputs.roots.insert(root, paths);
     }
     for path in tracked_files {
-        let path = canonical(path)?;
-        if !path.starts_with(&cache) && !outputs.contains(&path) {
+        let path = canonical_path(path)?;
+        if !path.starts_with(cache) && !outputs.contains(&path) {
             inputs.hashes.entry(path).or_default();
         }
     }
     for (path, digest) in &mut inputs.hashes {
-        *digest = blake3::hash(&read(path)?).to_hex().to_string();
+        *digest = blake3::hash(&read_file(path)?).to_hex().to_string();
     }
+    Ok(inputs)
+}
+
+fn compile_tracked(
+    compiler: &Compiler,
+    scheduler: &Scheduler,
+    output: &Path,
+    tasks: &[Task],
+    cache: &Path,
+    tracked_files: &BTreeSet<PathBuf>,
+    emit_cargo: bool,
+) -> Result<Output, Error> {
+    let started = Instant::now();
+    let output = canonical_path(output)?;
+    fs::create_dir_all(cache.join("requests")).map_err(|e| failure(cache, e))?;
+    fs::create_dir_all(cache.join("objects")).map_err(|e| failure(cache, e))?;
+    fs::create_dir_all(cache.join("temporary")).map_err(|e| failure(cache, e))?;
+    let cache = canonical_path(cache)?;
+    let PreparedBatch {
+        tasks: prepared,
+        roots,
+        outputs,
+    } = prepare_requests(compiler, &output, tasks)?;
+    let inputs = snapshot_inputs(output, roots, &outputs, &cache, tracked_files, emit_cargo)?;
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let active = AtomicUsize::new(0);
@@ -478,7 +528,7 @@ fn compile_tracked(
                     };
                     let count = active.fetch_add(1, Ordering::AcqRel) + 1;
                     peak.fetch_max(count, Ordering::AcqRel);
-                    let result = execute(compiler, inputs, cache, task);
+                    let result = execute_request(compiler, inputs, cache, task);
                     active.fetch_sub(1, Ordering::AcqRel);
                     if result.is_err() {
                         failed.store(true, Ordering::Release);
@@ -529,7 +579,7 @@ fn compile_tracked(
         peak.load(Ordering::Acquire),
         started.elapsed().as_millis()
     );
-    if cargo {
+    if emit_cargo {
         println!(
             "cargo::warning=Slang: {hits}/{count} cache hits, {} compiled, {} ms, peak {}",
             count - hits,
@@ -556,11 +606,11 @@ fn normalize(path: &Path, output: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn execute(
+fn execute_request(
     compiler: &Compiler,
-    inputs: &Inputs,
+    inputs: &InputSnapshot,
     cache: &Path,
-    prepared: &Prepared<'_>,
+    prepared: &PreparedTask<'_>,
 ) -> Result<Compiled, Error> {
     let index = cache
         .join("requests")
@@ -574,7 +624,7 @@ fn execute(
         .open(&lock_path)
         .map_err(|e| failure(&lock_path, e))?;
     lock.lock().map_err(|e| failure(&lock_path, e))?;
-    let current = load(&index)?;
+    let current = load_manifest(&index)?;
     if let Some(manifest) = &current
         && let Some(result) = restore(inputs, cache, prepared, manifest)?
     {
@@ -583,7 +633,7 @@ fn execute(
     let history = cache.join("requests").join(&prepared.key);
     // 先保存旧单索引，兼容已有缓存。热命中不枚举历史目录。
     if let Some(manifest) = &current {
-        remember(&history, &prepared.key, manifest)?;
+        archive_manifest(&history, &prepared.key, manifest)?;
     }
     let candidates = match fs::read_dir(&history) {
         Ok(entries) => entries
@@ -602,17 +652,29 @@ fn execute(
         {
             continue;
         }
-        if let Some(manifest) = load(&path)?
+        if let Some(manifest) = load_manifest(&path)?
             && let Some(result) = restore(inputs, cache, prepared, &manifest)?
         {
-            publish(&index, &encode(&manifest)?)?;
+            publish_file(&index, &encode_manifest(&manifest)?)?;
             return Ok(result);
         }
     }
-    let temporary = Temporary::new(&cache.join("temporary"))?;
-    let destination = temporary.0.join("shader");
-    let reflection = temporary.0.join("reflection.json");
-    let depfile = temporary.0.join("dependencies.d");
+    compile_request(compiler, inputs, cache, prepared, &index, &history)
+}
+
+fn compile_request(
+    compiler: &Compiler,
+    inputs: &InputSnapshot,
+    cache: &Path,
+    prepared: &PreparedTask<'_>,
+    index: &Path,
+    history: &Path,
+) -> Result<Compiled, Error> {
+    let temporary = TemporaryDirectory::new(&cache.join("temporary"))?;
+    let destination = temporary.path.join("shader");
+    let reflection = temporary.path.join("reflection.json");
+    let audit = temporary.path.join("audit.spv");
+    let depfile = temporary.path.join("dependencies.d");
     let mut args = prepared.task.arguments.clone();
     for index in 0..args.len() {
         if args[index] == "-reflection-json" {
@@ -622,6 +684,9 @@ fn execute(
         }
     }
     let mut command = compiler.command();
+    if prepared.task.audit.is_some() {
+        args.extend(["-separate-debug-info-output".into(), command_path(&audit)]);
+    }
     command
         .args(&args)
         .arg("-depfile")
@@ -642,12 +707,12 @@ fn execute(
             diagnostic,
         });
     }
-    let paths = dependencies(&read(&depfile)?)?;
+    let paths = dependencies(&read_file(&depfile)?)?;
     let mut deps = Vec::new();
     let mut cacheable = true;
     let mut extensions = BTreeSet::from(["slang".into(), "slang-module".into()]);
     for path in paths {
-        let path = canonical(&path)?;
+        let path = canonical_path(&path)?;
         let digest = inputs
             .digest(&path)?
             .ok_or_else(|| Error::InputChanged(path.clone()))?;
@@ -657,7 +722,7 @@ fn execute(
             Some(_) => {}
             None => {
                 cacheable = false;
-                if inputs.cargo {
+                if inputs.emit_cargo {
                     println!("cargo::rerun-if-changed={}", path.display());
                 }
             }
@@ -669,15 +734,24 @@ fn execute(
         });
     }
     deps.sort_by(|a, b| a.path.cmp(&b.path));
-    let bytes = read(&destination)?;
+    let bytes = read_file(&destination)?;
+    let audit_bytes = prepared
+        .task
+        .audit
+        .as_ref()
+        .map(|_| read_file(&audit))
+        .transpose()?;
+    if let Some(audit_bytes) = &audit_bytes {
+        super::verify_audit_pair(&bytes, audit_bytes)?;
+    }
     let reflection_bytes = prepared
         .task
         .reflection
         .as_ref()
-        .map(|_| read(&reflection))
+        .map(|_| read_file(&reflection))
         .transpose()?;
-    let mut manifest = Manifest {
-        version: VERSION.into(),
+    let mut manifest = CacheManifest {
+        version: CACHE_VERSION.into(),
         dependencies: deps,
         extensions: extensions.clone(),
         inventory: inputs.inventory(&prepared.roots, &extensions),
@@ -686,90 +760,127 @@ fn execute(
         reflection: reflection_bytes
             .as_ref()
             .map(|b| blake3::hash(b).to_hex().to_string()),
+        audit: audit_bytes
+            .as_ref()
+            .map(|bytes| blake3::hash(bytes).to_hex().to_string()),
     };
     manifest.object = object_identity(&prepared.key, &manifest);
     let object = manifest.object.clone();
     if !cacheable {
-        publish(&prepared.task.destination, &bytes)?;
-        if let (Some(path), Some(bytes)) = (&prepared.task.reflection, &reflection_bytes) {
-            publish(path, bytes)?;
-        }
-        if inputs.cargo {
+        let diagnostic = format!(
+            "compiler={}\narguments={:?}\nmain_blake3={}\naudit_blake3={:?}\n{diagnostic}",
+            compiler.path.display(),
+            command.get_args().collect::<Vec<_>>(),
+            manifest.digest,
+            manifest.audit
+        );
+        publish_task(
+            prepared.task,
+            &bytes,
+            audit_bytes.as_deref(),
+            reflection_bytes.as_deref(),
+            true,
+            Some(diagnostic.as_bytes()),
+        )?;
+        if inputs.emit_cargo {
             println!(
                 "cargo::warning=Slang {} 包含未声明搜索根或 source_roots 的依赖，本次不缓存",
                 prepared.task.entry
             );
         }
-        publish(
-            &prepared.task.destination.with_extension("txt"),
-            diagnostic.as_bytes(),
-        )?;
         return Ok(Compiled {
             path: prepared.task.destination.clone(),
+            bytes,
+            audit: manifest.audit.map(|digest| AuditFile {
+                path: prepared
+                    .task
+                    .audit
+                    .clone()
+                    .expect("审计manifest对应请求目标"),
+                digest,
+            }),
             fingerprint: object,
             cache_hit: false,
         });
     }
     fs::write(
-        temporary.0.join("diagnostic.txt"),
+        temporary.path.join("diagnostic.txt"),
         format!(
-            "compiler={}\narguments={:?}\nnormalized_arguments={:?}\n{diagnostic}",
+            "compiler={}\narguments={:?}\nnormalized_arguments={:?}\nmain_blake3={}\naudit_blake3={:?}\n{diagnostic}",
             compiler.path.display(),
             command.get_args().collect::<Vec<_>>(),
-            prepared.arguments
+            prepared.arguments,
+            manifest.digest,
+            manifest.audit
         ),
     )
-    .map_err(|e| failure(&temporary.0, e))?;
+    .map_err(|e| failure(&temporary.path, e))?;
     let object_dir = cache.join("objects").join(&object);
     // 请求锁串行化同一输入；校验失败的旧目录只保存再生数据，逐文件替换后才发布索引。
     fs::create_dir_all(&object_dir).map_err(|e| failure(&object_dir, e))?;
-    publish(&object_dir.join("shader"), &bytes)?;
+    let main_path = object_dir.join("shader");
+    let audit_path = object_dir.join("audit.spv");
+    let reflection_path = object_dir.join("reflection.json");
+    let diagnostic_path = object_dir.join("diagnostic.txt");
+    let diagnostic_bytes = read_file(&temporary.path.join("diagnostic.txt"))?;
+    let mut object_files = vec![
+        (main_path.as_path(), bytes.as_slice()),
+        (diagnostic_path.as_path(), diagnostic_bytes.as_slice()),
+    ];
+    if let Some(audit) = &audit_bytes {
+        object_files.push((&audit_path, audit));
+    }
     if let Some(reflection) = &reflection_bytes {
-        publish(&object_dir.join("reflection.json"), reflection)?;
+        object_files.push((&reflection_path, reflection));
     }
-    publish(
-        &object_dir.join("diagnostic.txt"),
-        &read(&temporary.0.join("diagnostic.txt"))?,
+    publish_files(&object_files)?;
+    publish_task(
+        prepared.task,
+        &bytes,
+        audit_bytes.as_deref(),
+        reflection_bytes.as_deref(),
+        false,
+        None,
     )?;
-    remember(&history, &prepared.key, &manifest)?;
-    publish(&index, &encode(&manifest)?)?;
-    if prepared.task.publish_output {
-        publish(&prepared.task.destination, &bytes)?;
-    }
-    if let (Some(path), Some(bytes)) = (&prepared.task.reflection, reflection_bytes) {
-        publish(path, &bytes)?;
-    }
+    archive_manifest(history, &prepared.key, &manifest)?;
+    publish_file(index, &encode_manifest(&manifest)?)?;
     Ok(Compiled {
         path: object_dir.join("shader"),
+        bytes,
+        audit: manifest.audit.map(|digest| AuditFile {
+            path: audit_path,
+            digest,
+        }),
         fingerprint: object,
         cache_hit: false,
     })
 }
 
-fn encode(manifest: &Manifest) -> Result<Vec<u8>, Error> {
+fn encode_manifest(manifest: &CacheManifest) -> Result<Vec<u8>, Error> {
     serde_json::to_vec(manifest).map_err(|e| Error::Configuration(e.to_string()))
 }
 
-fn remember(directory: &Path, key: &str, manifest: &Manifest) -> Result<(), Error> {
-    if manifest.version == VERSION && object_identity(key, manifest) == manifest.object {
+fn archive_manifest(directory: &Path, key: &str, manifest: &CacheManifest) -> Result<(), Error> {
+    if manifest.version == CACHE_VERSION && object_identity(key, manifest) == manifest.object {
         fs::create_dir_all(directory).map_err(|e| failure(directory, e))?;
-        publish(
+        publish_file(
             &directory.join(format!("{}.json", manifest.object)),
-            &encode(manifest)?,
+            &encode_manifest(manifest)?,
         )?;
     }
     Ok(())
 }
 
 fn restore(
-    inputs: &Inputs,
+    inputs: &InputSnapshot,
     cache: &Path,
-    prepared: &Prepared<'_>,
-    manifest: &Manifest,
+    prepared: &PreparedTask<'_>,
+    manifest: &CacheManifest,
 ) -> Result<Option<Compiled>, Error> {
-    if manifest.version != VERSION
+    if manifest.version != CACHE_VERSION
         || object_identity(&prepared.key, manifest) != manifest.object
         || prepared.task.reflection.is_some() != manifest.reflection.is_some()
+        || prepared.task.audit.is_some() != manifest.audit.is_some()
         || manifest.inventory != inputs.inventory(&prepared.roots, &manifest.extensions)
     {
         return Ok(None);
@@ -785,63 +896,86 @@ fn restore(
         }
     }
     let object = cache.join("objects").join(&manifest.object);
-    let Some(bytes) = checked(&object.join("shader"), &manifest.digest)? else {
+    let Some(bytes) = read_verified_file(&object.join("shader"), &manifest.digest)? else {
         return Ok(None);
     };
+    let audit = match &manifest.audit {
+        Some(hash) => match read_verified_file(&object.join("audit.spv"), hash)? {
+            Some(audit) => {
+                if super::verify_audit_pair(&bytes, &audit).is_err() {
+                    return Ok(None);
+                }
+                Some(audit)
+            }
+            None => return Ok(None),
+        },
+        None => None,
+    };
     let reflection = match &manifest.reflection {
-        Some(hash) => checked(&object.join("reflection.json"), hash)?,
+        Some(hash) => read_verified_file(&object.join("reflection.json"), hash)?,
         None => Some(Vec::new()),
     };
     let Some(reflection) = reflection else {
         return Ok(None);
     };
-    if prepared.task.publish_output {
-        publish(&prepared.task.destination, &bytes)?;
-    }
-    if let Some(path) = &prepared.task.reflection {
-        publish(path, &reflection)?;
-    }
+    publish_task(
+        prepared.task,
+        &bytes,
+        audit.as_deref(),
+        Some(&reflection),
+        false,
+        None,
+    )?;
     Ok(Some(Compiled {
         path: object.join("shader"),
+        bytes,
+        audit: manifest.audit.as_ref().map(|digest| AuditFile {
+            path: object.join("audit.spv"),
+            digest: digest.clone(),
+        }),
         fingerprint: manifest.object.clone(),
         cache_hit: true,
     }))
 }
 
-fn object_identity(key: &str, manifest: &Manifest) -> String {
+fn object_identity(key: &str, manifest: &CacheManifest) -> String {
     let mut hash = blake3::Hasher::new();
-    field(&mut hash, key.as_bytes());
-    field(&mut hash, manifest.version.as_bytes());
+    hash_field(&mut hash, key.as_bytes());
+    hash_field(&mut hash, manifest.version.as_bytes());
     for dep in &manifest.dependencies {
-        field(&mut hash, dep.path.as_bytes());
-        field(&mut hash, dep.digest.as_bytes());
+        hash_field(&mut hash, dep.path.as_bytes());
+        hash_field(&mut hash, dep.digest.as_bytes());
     }
     for extension in &manifest.extensions {
-        field(&mut hash, extension.as_bytes());
+        hash_field(&mut hash, extension.as_bytes());
     }
-    field(&mut hash, manifest.inventory.as_bytes());
-    field(&mut hash, manifest.digest.as_bytes());
+    hash_field(&mut hash, manifest.inventory.as_bytes());
+    hash_field(&mut hash, manifest.digest.as_bytes());
     if let Some(reflection) = &manifest.reflection {
-        field(&mut hash, reflection.as_bytes());
+        hash_field(&mut hash, reflection.as_bytes());
+    }
+    if let Some(audit) = &manifest.audit {
+        hash_field(&mut hash, b"paired-audit");
+        hash_field(&mut hash, audit.as_bytes());
     }
     hash.finalize().to_hex().to_string()
 }
 
-fn load(path: &Path) -> Result<Option<Manifest>, Error> {
+fn load_manifest(path: &Path) -> Result<Option<CacheManifest>, Error> {
     match fs::read(path) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(failure(path, e)),
     }
 }
-fn checked(path: &Path, hash: &str) -> Result<Option<Vec<u8>>, Error> {
+fn read_verified_file(path: &Path, hash: &str) -> Result<Option<Vec<u8>>, Error> {
     match fs::read(path) {
         Ok(bytes) => Ok((blake3::hash(&bytes).to_hex().as_str() == hash).then_some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(failure(path, e)),
     }
 }
-fn publish(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+pub(super) fn publish_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     if fs::read(path).ok().is_some_and(|old| old == bytes) {
         return Ok(());
     }
@@ -853,8 +987,95 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     fs::write(&temporary, bytes).map_err(|e| failure(&temporary, e))?;
     fs::rename(&temporary, path).map_err(|e| failure(path, e))
 }
-struct Temporary(PathBuf);
-impl Temporary {
+
+fn publish_task(
+    task: &Task,
+    bytes: &[u8],
+    audit: Option<&[u8]>,
+    reflection: Option<&[u8]>,
+    uncached: bool,
+    diagnostic: Option<&[u8]>,
+) -> Result<(), Error> {
+    let mut files = Vec::new();
+    if task.publish_output || uncached {
+        files.push((task.destination.as_path(), bytes));
+        if let Some(path) = &task.audit {
+            files.push((path.as_path(), audit.expect("已验证配对任务拥有副本")));
+        }
+    }
+    if let Some(path) = &task.reflection {
+        files.push((path.as_path(), reflection.expect("已验证反射任务拥有反射")));
+    }
+    let diagnostic_path = task.destination.with_extension("txt");
+    if let Some(bytes) = diagnostic {
+        files.push((&diagnostic_path, bytes));
+    }
+    publish_files(&files)
+}
+
+struct PendingFile<'a> {
+    path: &'a Path,
+    temporary: PathBuf,
+    previous: Option<Vec<u8>>,
+}
+
+impl Drop for PendingFile<'_> {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.temporary);
+    }
+}
+
+// 所有文件先完成暂存，再在请求锁内发布；失败恢复已替换文件，索引始终最后提交。
+// 调用方只在请求成功后消费整组输出；不为绕过owner并发读取裸路径提供跨文件事务。
+fn publish_files(files: &[(&Path, &[u8])]) -> Result<(), Error> {
+    let mut pending = Vec::new();
+    for &(path, bytes) in files {
+        let previous = match fs::read(path) {
+            Ok(old) if old == bytes => continue,
+            Ok(old) => Some(old),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(failure(path, error)),
+        };
+        let temporary = path.with_extension(format!(
+            "{}-{}.tmp",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        pending.push(PendingFile {
+            path,
+            temporary,
+            previous,
+        });
+        let file = pending.last().expect("刚登记暂存文件");
+        fs::write(&file.temporary, bytes).map_err(|error| failure(&file.temporary, error))?;
+    }
+    for (index, file) in pending.iter().enumerate() {
+        if let Err(source) = fs::rename(&file.temporary, file.path) {
+            let mut rollback = None;
+            for old in pending[..index].iter().rev() {
+                let result = if let Some(bytes) = &old.previous {
+                    fs::write(&old.temporary, bytes)
+                        .and_then(|()| fs::rename(&old.temporary, old.path))
+                } else {
+                    fs::remove_file(old.path)
+                };
+                if let Err(error) = result {
+                    rollback.get_or_insert(error);
+                }
+            }
+            return Err(Error::Publication {
+                path: file.path.to_owned(),
+                source,
+                rollback,
+            });
+        }
+    }
+    Ok(())
+}
+struct TemporaryDirectory {
+    path: PathBuf,
+}
+impl TemporaryDirectory {
     fn new(parent: &Path) -> Result<Self, Error> {
         loop {
             let path = parent.join(format!(
@@ -863,16 +1084,16 @@ impl Temporary {
                 SERIAL.fetch_add(1, Ordering::Relaxed)
             ));
             match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self(path)),
+                Ok(()) => return Ok(Self { path }),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(failure(&path, e)),
             }
         }
     }
 }
-impl Drop for Temporary {
+impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 

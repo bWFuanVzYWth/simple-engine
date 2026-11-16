@@ -15,32 +15,32 @@ public struct MergeSelection
     public var hot : PathReservoir;
     public var source : uint;
     public var canonical : bool;
-    public var reconnectionJacobian : float;
+    public var reconnection_jacobian : float;
 };
 
 /// canonical/history仅要求M、UCW与integrand；两个方向的shift已由独立追踪完成。
 /// 源历史M只在本轮竞争中封顶，不改变源UCW、随机身份或颜色所有权。
 public func temporal_selection(canonical: PathReservoir, history: PathReservoir,
-                               canonicalAtHistory: PrecomputedShiftData,
-                               historyAtCanonical: PrecomputedShiftData, offset: uint,
-                               historyOffset: uint, u: float2, historyLength: float)
+                               canonical_at_history: PrecomputedShiftData,
+                               history_at_canonical: PrecomputedShiftData, offset: uint,
+                               history_offset: uint, u: float2, history_length: float)
     ->MergeSelection
 {
     var history = history;
-    history.M = min(historyLength, history.M);
+    history.sample_mass = min(history_length, history.sample_mass);
     var result : MergeSelection = { empty_reservoir(), NO_REUSE_WINNER, false, 0.0 };
-    let canonicalWeight : float = temporal_canonical_weight(canonical, history, canonicalAtHistory);
-    let neighborWeight : float = temporal_neighbor_weight(canonical, history, historyAtCanonical);
-    if (result.hot.mergeWithoutWriting(target(historyAtCanonical.pathThroughput) *
-                                           historyAtCanonical.Jacobian,
-                                       history, u.x, neighborWeight))
+    let canonical_weight = temporal_canonical_weight(canonical, history, canonical_at_history);
+    let neighbor_weight = temporal_neighbor_weight(canonical, history, history_at_canonical);
+    if (result.hot.merge_without_writing(target(history_at_canonical.path_throughput) *
+                                             history_at_canonical.jacobian,
+                                         history, u.x, neighbor_weight))
     {
-        result.hot.integrand = historyAtCanonical.pathThroughput;
-        result.source = historyOffset;
-        result.reconnectionJacobian = historyAtCanonical.reconnectionJacobian;
+        result.hot.integrand = history_at_canonical.path_throughput;
+        result.source = history_offset;
+        result.reconnection_jacobian = history_at_canonical.reconnection_jacobian;
     }
-    if (result.hot.mergeWithoutWriting(target(canonical.integrand), canonical, u.y,
-                                       canonicalWeight))
+    if (result.hot.merge_without_writing(target(canonical.integrand), canonical, u.y,
+                                         canonical_weight))
     {
         result.hot.integrand = canonical.integrand;
         result.source = offset;
@@ -55,15 +55,15 @@ public struct SpatialSelection
 {
     public var canonical : PathReservoir;
     public var factor : PairwiseFactor;
-    public var canonicalWeight : float;
+    public var canonical_weight : float;
     public var selected : MergeSelection;
 
     [mutating]
-    public func init(center: PathReservoir, massSum: float)->void
+    public func init(center: PathReservoir, mass_sum: float)->void
     {
         canonical = center;
-        factor = { massSum, center.M };
-        canonicalWeight = spatial_begin(factor);
+        factor = { mass_sum, center.sample_mass };
+        canonical_weight = spatial_begin(factor);
         selected = { empty_reservoir(), NO_REUSE_WINNER, false, 0.0 };
     }
 
@@ -72,22 +72,22 @@ public struct SpatialSelection
                     reverse: PrecomputedShiftData, u: float)
         ->void
     {
-        canonicalWeight += spatial_canonical_term(canonical, neighbor, reverse, factor);
-        if (selected.hot.mergeWithoutWriting(target(forward.pathThroughput) * forward.Jacobian,
-                                             neighbor, u,
-                                             spatial_neighbor_weight(neighbor, forward, factor)))
+        canonical_weight += spatial_canonical_term(canonical, neighbor, reverse, factor);
+        if (selected.hot.merge_without_writing(target(forward.path_throughput) * forward.jacobian,
+                                               neighbor, u,
+                                               spatial_neighbor_weight(neighbor, forward, factor)))
         {
-            selected.hot.integrand = forward.pathThroughput;
+            selected.hot.integrand = forward.path_throughput;
             selected.source = source;
-            selected.reconnectionJacobian = forward.reconnectionJacobian;
+            selected.reconnection_jacobian = forward.reconnection_jacobian;
         }
     }
 
     [mutating]
     public func finish(offset: uint, u: float)->void
     {
-        if (selected.hot.mergeWithoutWriting(target(canonical.integrand), canonical, u,
-                                             canonicalWeight))
+        if (selected.hot.merge_without_writing(target(canonical.integrand), canonical, u,
+                                               canonical_weight))
         {
             selected.hot.integrand = canonical.integrand;
             selected.source = offset;
@@ -103,11 +103,11 @@ public func restore_selection(cold: PathReservoir, selected: MergeSelection)->Pa
     var cold = cold;
     if (selected.source == NO_REUSE_WINNER)
         return selected.hot;
-    cold.M = selected.hot.M;
+    cold.sample_mass = selected.hot.sample_mass;
     cold.weight = selected.hot.weight;
     cold.integrand = selected.hot.integrand;
     if (!selected.canonical)
-        cold.reconnectionJacobian = selected.reconnectionJacobian;
+        cold.reconnection_jacobian = selected.reconnection_jacobian;
     return cold;
 }
 

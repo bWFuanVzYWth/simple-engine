@@ -15,7 +15,7 @@ recipe 的完整写法见[构建 API 示例](../target/doc/shader_build/index.ht
 ```slang
 import pt.sampling;
 import pt.bsdf;
-import pt.mis;
+import pt.transport;
 import geometry.ray;
 ```
 

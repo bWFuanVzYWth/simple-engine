@@ -19,35 +19,34 @@ func consider_direct<Scene : IRestirScene>(inout vertex: InitialVertex, family: 
 {
     if (!(light.pdf > 0.0) || !any(light.radiance > 0.0))
         return;
-    let mis : float = (request.flags & INITIAL_MIS) != 0 && light.lightType != LIGHT_ANALYTIC
-                          ? lightMisWeight(1.0, light.pdf, 1.0, nee.pdf)
-                          : 1.0;
-    let reflected : float3 = nee.value * light.radiance * transmittance * (mis / light.pdf);
+    let mis = (request.flags & INITIAL_MIS) != 0 && light.light_type != LIGHT_ANALYTIC
+                  ? light_mis_weight(1.0, light.pdf, 1.0, nee.pdf)
+                  : 1.0;
+    let reflected = nee.value * light.radiance * transmittance * (mis / light.pdf);
     if (!any(reflected > 0.0))
         return;
     var target : Surface = {};
-    if (light.hit.isValid())
+    if (light.hit.is_valid())
     {
         target.hit = light.hit;
-        target.point = scene.lightEndpoint(light.hit, false);
+        target.point = scene.light_endpoint(light.hit, false);
     }
-    let visible : bool = light.hit.isValid()
-                             ? scene.visible(surface, target, false)
-                             : scene.visibleDirection(surface, light.direction, false);
+    let visible = light.hit.is_valid() ? scene.visible(surface, target, false)
+                                       : scene.visible_direction(surface, light.direction, false);
     if (!visible)
         return;
-    if (!PathRISState::selectCandidate(vertex.weight,
-                                       initialLightRISRandom(request.bounceSeed, family),
-                                       request.throughput * reflected))
+    if (!PathRISState::select_candidate(vertex.weight,
+                                        initial_light_ris_random(request.bounce_seed, family),
+                                        request.throughput * reflected))
         return;
     if ((request.flags & INITIAL_PRIMARY) == 0)
         vertex.emission = 0;
-    let point : bool = light.hit.isValid() && light.lightType == LIGHT_ANALYTIC &&
-                       scene.isPointLight(light.hit);
-    let factor : float = light.hit.isValid()
-                             ? (point ? 1.0 : abs(dot(target.point.normal, -light.direction))) /
-                                   (light.distance * light.distance)
-                             : 1.0;
+    let point = light.hit.is_valid() && light.light_type == LIGHT_ANALYTIC &&
+                scene.is_point_light(light.hit);
+    let factor = light.hit.is_valid()
+                     ? (point ? 1.0 : abs(dot(target.point.normal, -light.direction))) /
+                           (light.distance * light.distance)
+                     : 1.0;
     vertex.direct = { light.hit,
                       light.direction,
                       light.radiance,
@@ -56,7 +55,7 @@ func consider_direct<Scene : IRestirScene>(inout vertex: InitialVertex, family: 
                       light.pdf,
                       nee.pdf,
                       factor,
-                      light.lightType | (point ? INITIAL_POINT_LIGHT : 0u) };
+                      light.light_type | (point ? INITIAL_POINT_LIGHT : 0u) };
 }
 
 // 初采只有一个路径内 reservoir。按原随机维逐项更新和，胜者以外的重连数据在叶子内释放。
@@ -67,78 +66,80 @@ func select_hit(inout result: InitialVertex, request: InitialRequest, emission: 
         result.emission = emission;
     else if (any(emission > 0.0))
     {
-        let mis : float = request.previousMisPdf >= 0.0
-                              ? lightMisWeight(1.0, request.previousMisPdf, 1.0, pdf)
-                              : 1.0;
-        if (PathRISState::selectCandidate(result.weight, initialRandomValue<1>(request.bounceSeed),
-                                          request.throughput * mis * emission))
+        let mis = request.previous_mis_pdf >= 0.0
+                      ? light_mis_weight(1.0, request.previous_mis_pdf, 1.0, pdf)
+                      : 1.0;
+        if (PathRISState::select_candidate(result.weight,
+                                           initial_random_value<1>(request.bounce_seed),
+                                           request.throughput * mis * emission))
         {
             result.emission = emission;
-            result.emissionPdf = pdf;
+            result.emission_pdf = pdf;
         }
     }
 }
 
 /// 专用叶子已解码一次完整材料；source的point始终为几何法线/误差界，material.normal仅供BSDF。
 /// 两族只采一次，候选可见性在已知精确BSDF支持之后查询；不跨调用传射线或材料闭包。
-public func shade_initial_vertex<let Flow : uint, Scene : IRestirScene, let LightMask : uint = 3>(
+public func shade_initial_vertex<let flow : uint, Scene : IRestirScene, let light_mask : uint = 3>(
     scene: Scene, surface: Surface, material: pt::SurfaceMaterial, energy: openpbr::Energy,
-    request: InitialRequest, emissionPdf: float)
+    request: InitialRequest, emission_pdf: float)
     ->InitialVertex
 {
-    static const let Directions : uint = (Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
+    static const let directions : uint = (flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
                                                   openpbr::FLOW_CONTINUOUS_REFLECTION |
                                                   openpbr::FLOW_CONTINUOUS_TRANSMISSION)) != 0
-                                             ? LightMask
+                                             ? light_mask
                                              : 0u;
     var result : InitialVertex = {};
     result.weight = request.weight;
-    if ((Flow & openpbr::FLOW_EMISSION) != 0)
-        select_hit(result, request, material.emission, emissionPdf);
+    if ((flow & openpbr::FLOW_EMISSION) != 0)
+        select_hit(result, request, material.emission, emission_pdf);
     var first : LightSample = {};
     var second : LightSample = {};
     var evaluation : uint = 0;
-    if (Directions != 0 && (request.flags & INITIAL_NEE) != 0 &&
-        !openpbr::is_discrete_only_flow<Flow>(material.pbr, surface.incident, material.transmitted))
+    if (directions != 0 && (request.flags & INITIAL_NEE) != 0 &&
+        !openpbr::is_discrete_only_flow<flow>(material.pbr, surface.incident, material.transmitted))
     {
         let two : bool = (request.flags & INITIAL_TWO_LIGHTS) != 0;
-        if ((Directions & 1u) != 0)
+        if ((directions & 1u) != 0)
         {
-            first = scene.sampleLight(surface, two ? initialLightRandom<2>(request.bounceSeed, 0)
-                                                   : initialLightRandom<1>(request.bounceSeed, 0));
+            first =
+                scene.sample_light(surface, two ? initial_light_random<2>(request.bounce_seed, 0)
+                                                : initial_light_random<1>(request.bounce_seed, 0));
             if (first.pdf > 0)
                 evaluation |= 1u;
         }
-        if ((Directions & 2u) != 0 && two)
+        if ((directions & 2u) != 0 && two)
         {
-            second = scene.sampleLight(surface, initialLightRandom<2>(request.bounceSeed, 1));
+            second = scene.sample_light(surface, initial_light_random<2>(request.bounce_seed, 1));
             if (second.pdf > 0)
                 evaluation |= 2u;
         }
     }
     let scatter : bool = (request.flags & INITIAL_SAMPLE) != 0;
-    let random : float3 = scatter ? initialBsdfRandom(request.bounceSeed,
-                                                      (request.flags & INITIAL_RR) != 0)
+    let random : float3 = scatter ? initial_bsdf_random(request.bounce_seed,
+                                                        (request.flags & INITIAL_RR) != 0)
                                   : float3(0);
-    let normal : float3 = material_normal(surface, material);
-    let batch : openpbr::Batch = openpbr::shade_flow<Flow, openpbr::Energy, Directions>(
+    let normal = material_normal(surface, material);
+    let batch : openpbr::Batch = openpbr::shade_flow<flow, openpbr::Energy, directions>(
                     energy, material.pbr, normal, surface.wo, first.direction, second.direction,
                     evaluation, random, scatter, surface.incident, material.transmitted);
-    result.sample = material_sample<Flow>(surface, material, batch.scattered);
-    if (Directions != 0)
+    result.sample = material_sample<flow>(surface, material, batch.scattered);
+    if (directions != 0)
     {
-        if ((Directions & 1u) != 0 && first.pdf > 0)
+        if ((directions & 1u) != 0 && first.pdf > 0)
         {
             consider_direct(
                 result, 0u, scene, surface, first, { batch.first.response, batch.first.pdf },
-                material_transmittance<Flow>(surface, material, first.direction, first.distance),
+                material_transmittance<flow>(surface, material, first.direction, first.distance),
                 request);
         }
-        if ((Directions & 2u) != 0 && second.pdf > 0)
+        if ((directions & 2u) != 0 && second.pdf > 0)
         {
             consider_direct(
                 result, 1u, scene, surface, second, { batch.second.response, batch.second.pdf },
-                material_transmittance<Flow>(surface, material, second.direction, second.distance),
+                material_transmittance<flow>(surface, material, second.direction, second.distance),
                 request);
         }
     }
@@ -150,22 +151,22 @@ public func generic_initial_vertex<Scene : IRestirScene>(scene: Scene, surface: 
                                                          request: InitialRequest)
     ->InitialVertex
 {
-    let sampleNEE : bool = (request.flags & INITIAL_NEE) != 0 && surface.hasNonDeltaLobes;
+    let sample_nee : bool = (request.flags & INITIAL_NEE) != 0 && surface.has_non_delta_lobes;
     let two : bool = (request.flags & INITIAL_TWO_LIGHTS) != 0;
     var first : LightSample = {};
     var second : LightSample = {};
-    if (sampleNEE)
+    if (sample_nee)
     {
-        first = scene.sampleLight(surface, two ? initialLightRandom<2>(request.bounceSeed, 0)
-                                               : initialLightRandom<1>(request.bounceSeed, 0));
+        first = scene.sample_light(surface, two ? initial_light_random<2>(request.bounce_seed, 0)
+                                                : initial_light_random<1>(request.bounce_seed, 0));
         if (two)
-            second = scene.sampleLight(surface, initialLightRandom<2>(request.bounceSeed, 1));
+            second = scene.sample_light(surface, initial_light_random<2>(request.bounce_seed, 1));
     }
     let scatter : bool = (request.flags & INITIAL_SAMPLE) != 0;
     let shading
-        : InitialShading = scene.shadeInitial(
+        : InitialShading = scene.shade_initial(
               surface,
-              scatter ? initialBsdfRandom(request.bounceSeed, (request.flags & INITIAL_RR) != 0)
+              scatter ? initial_bsdf_random(request.bounce_seed, (request.flags & INITIAL_RR) != 0)
                       : float3(0),
               first.pdf > 0 ? first.direction : surface.wo,
               second.pdf > 0 ? second.direction : surface.wo, scatter);
@@ -176,15 +177,15 @@ public func generic_initial_vertex<Scene : IRestirScene>(scene: Scene, surface: 
     if ((request.flags & INITIAL_PRIMARY) == 0 && any(shading.emission > 0))
     {
         var previous : Surface = {};
-        previous.point.position = request.previousPosition;
-        pdf = scene.lightPdf(previous, surface.hit, -surface.wo, LIGHT_EMISSIVE, false);
+        previous.point.position = request.previous_position;
+        pdf = scene.light_pdf(previous, surface.hit, -surface.wo, LIGHT_EMISSIVE, false);
     }
     select_hit(result, request, shading.emission, pdf);
     if (first.pdf > 0)
         consider_direct(result, 0u, scene, surface, first, shading.nee,
                         scene.transmittance(surface, first.direction, first.distance), request);
     if (second.pdf > 0)
-        consider_direct(result, 1u, scene, surface, second, shading.secondNEE,
+        consider_direct(result, 1u, scene, surface, second, shading.second_nee,
                         scene.transmittance(surface, second.direction, second.distance), request);
     return result;
 }

@@ -2,156 +2,183 @@
 module support_composition;
 import bsdf.openpbr.selection;
 import bsdf.openpbr.api;
-import "bsdf/openpbr/math/spectrum.slang";
-namespace openpbr_composition
+import bsdf.openpbr.math.spectrum;
+namespace openpbr
+{
+namespace closure
 {
 public interface IDeltaDomain
 {
-    static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool;
+    static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)->bool;
 };
 public struct NeverDelta : IDeltaDomain
 {
-    public static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool
+    public static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)
+        ->bool
     {
         return false;
     }
 };
 public struct AlwaysDelta : IDeltaDomain
 {
-    public static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool
+    public static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)
+        ->bool
     {
         return true;
     }
 };
 public struct SolidDeltaDomain : IDeltaDomain
 {
-    public static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool
+    public static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)
+        ->bool
     {
         let exiting : bool = incident.x > transmitted.x;
         let ior : float = (exiting ? incident.x : transmitted.x) /
                           (exiting ? transmitted.x : incident.x);
-        return m.base_roughness.w * m.base_roughness.w < 1e-4 || ior == 1;
+        return material.base_roughness.w * material.base_roughness.w < 1e-4 || ior == 1;
     }
 };
 public struct ThinDeltaDomain : IDeltaDomain
 {
-    public static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool
+    public static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)
+        ->bool
     {
-        return clamp(m.base_roughness.w * m.base_roughness.w *
-                         primeFullOpenPbrThinDielectricRoughnessScaler2(transmitted.x / incident.x),
+        return clamp(material.base_roughness.w * material.base_roughness.w *
+                         kernel::thin_dielectric_roughness_scaler2(transmitted.x / incident.x),
                      0.0, 1.0) < 1e-4;
     }
 };
 public struct MetalDeltaDomain : IDeltaDomain
 {
-    public static func discrete(m: openpbr::Material, incident: float4, transmitted: float4)->bool
+    public static func discrete(material: openpbr::Material, incident: float4, transmitted: float4)
+        ->bool
     {
-        return m.surface.y == 1 && m.base_roughness.w * m.base_roughness.w < 1e-4;
+        return material.surface.y == 1 &&
+               material.base_roughness.w * material.base_roughness.w < 1e-4;
     }
 };
 public interface IDirectionSupport
 {
-    static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool;
+    static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)->bool;
 };
 public struct NoDirection : IDirectionSupport
 {
-    public static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool
+    public static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)
+        ->bool
     {
         return false;
     }
 };
 public struct BothDirections : IDirectionSupport
 {
-    public static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool
+    public static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)
+        ->bool
     {
         return true;
     }
 };
 public struct ReflectionDirection : IDirectionSupport
 {
-    public static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool
+    public static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)
+        ->bool
     {
-        return !(dot(dot(n, v) < 0 ? -n : n, d) < 0);
+        return !(dot(dot(n, evaluated) < 0 ? -n : n, d) < 0);
     }
 };
 public struct SmoothMetalMixture : IDirectionSupport
 {
-    public static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool
+    public static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)
+        ->bool
     {
-        return m.surface.y != 1 && ReflectionDirection.allows(m, n, v, d);
+        return material.surface.y != 1 && ReflectionDirection.allows(material, n, evaluated, d);
     }
 };
 public interface IBasePresence
 {
-    public static func present(m: openpbr::Material)->bool;
+    public static func present(material: openpbr::Material)->bool;
 };
 public struct AlwaysBase : IBasePresence
 {
-    public static func present(m: openpbr::Material)->bool
+    public static func present(material: openpbr::Material)->bool
     {
         return true;
     }
 };
 public struct DielectricBase : IBasePresence
 {
-    public static func present(m: openpbr::Material)->bool
+    public static func present(material: openpbr::Material)->bool
     {
-        return m.surface.y < 1;
+        return material.surface.y < 1;
     }
 };
 public interface ISubsurfacePresence
 {
-    public static func present(m: openpbr::Material)->bool;
+    public static func present(material: openpbr::Material)->bool;
 };
 public struct FullSubsurface : ISubsurfacePresence
 {
-    public static func present(m: openpbr::Material)->bool
+    public static func present(material: openpbr::Material)->bool
     {
         return true;
     }
 };
 public struct WeightedSubsurface : ISubsurfacePresence
 {
-    public static func present(m: openpbr::Material)->bool
+    public static func present(material: openpbr::Material)->bool
     {
-        return m.surface.z > 0;
+        return material.surface.z > 0;
     }
 };
-public struct SubsurfaceDirection<B : IBasePresence, S : ISubsurfacePresence, R : IDirectionSupport>
-    : IDirectionSupport
+public struct SubsurfaceDirection<Base : IBasePresence, S : ISubsurfacePresence,
+                                  R : IDirectionSupport> : IDirectionSupport
 {
-    public static func allows(m: openpbr::Material, n: float3, v: float3, d: float3)->bool
+    public static func allows(material: openpbr::Material, n: float3, evaluated: float3, d: float3)
+        ->bool
     {
-        return (B.present(m) && S.present(m)) || R.allows(m, n, v, d);
+        return (Base.present(material) && S.present(material)) ||
+               R.allows(material, n, evaluated, d);
     }
 };
-static const let SupportHasNoDelta : bool = (SelectedFlow & 320) == 0 || (SelectedFlow & 52) == 0;
-static const let SupportIsDeltaOnly
-    : bool = (SelectedFlow & 649) == 0 && ((SelectedFlow & 48) != 0 || (SelectedFlow & 2048) == 0);
-static const let SupportIsSolid : bool = (SelectedFlow & 16) != 0;
-static const let SupportIsThin : bool = (SelectedFlow & 32) != 0;
-static const let SupportIsTransmission : bool = (SelectedFlow & 48) != 0;
-static const let SupportHasMetalMixture : bool = (SelectedFlow & 2048) != 0;
-static const let SupportHasSmoothMetalMixture
-    : bool = SupportHasMetalMixture && (SelectedFlow & 128) == 0;
-static const let SupportHasDiffuse : bool = (SelectedFlow & 1) != 0;
-static const let SupportHasSubsurface : bool = (SelectedFlow & 8) != 0;
-static const let SupportHasNoContinuous : bool = (SelectedFlow & 649) == 0;
-typealias OtherDeltaDomain = TypeSelect<SupportIsThin, ThinDeltaDomain, MetalDeltaDomain>.Type;
-typealias MixedDeltaDomain = TypeSelect<SupportIsSolid, SolidDeltaDomain, OtherDeltaDomain>.Type;
-typealias PresentDeltaDomain = TypeSelect<SupportIsDeltaOnly, AlwaysDelta, MixedDeltaDomain>.Type;
-public typealias DeltaDomain = TypeSelect<SupportHasNoDelta, NeverDelta, PresentDeltaDomain>.Type;
+static const let support_has_no_delta
+    : bool = (selected_flow & (FLOW_DELTA_REFLECTION | FLOW_DELTA_TRANSMISSION)) == 0 ||
+             (selected_flow &
+              (FLOW_CONDUCTOR_REFLECTION | FLOW_SOLID_TRANSMISSION | FLOW_THIN_TRANSMISSION)) == 0;
+static const let support_is_delta_only
+    : bool = (selected_flow & (FLOW_DIFFUSE | FLOW_SUBSURFACE | FLOW_CONTINUOUS_REFLECTION |
+                               FLOW_CONTINUOUS_TRANSMISSION)) == 0 &&
+             ((selected_flow & (FLOW_SOLID_TRANSMISSION | FLOW_THIN_TRANSMISSION)) != 0 ||
+              (selected_flow & FLOW_METAL_MIX) == 0);
+static const let support_is_solid : bool = (selected_flow & FLOW_SOLID_TRANSMISSION) != 0;
+static const let support_is_thin : bool = (selected_flow & FLOW_THIN_TRANSMISSION) != 0;
+static const let support_is_transmission
+    : bool = (selected_flow & (FLOW_SOLID_TRANSMISSION | FLOW_THIN_TRANSMISSION)) != 0;
+static const let support_has_metal_mixture : bool = (selected_flow & FLOW_METAL_MIX) != 0;
+static const let support_has_smooth_metal_mixture
+    : bool = support_has_metal_mixture && (selected_flow & FLOW_CONTINUOUS_REFLECTION) == 0;
+static const let support_has_diffuse : bool = (selected_flow & FLOW_DIFFUSE) != 0;
+static const let support_has_subsurface : bool = (selected_flow & FLOW_SUBSURFACE) != 0;
+static const let support_has_no_continuous
+    : bool = (selected_flow & (FLOW_DIFFUSE | FLOW_SUBSURFACE | FLOW_CONTINUOUS_REFLECTION |
+                               FLOW_CONTINUOUS_TRANSMISSION)) == 0;
+typealias OtherDeltaDomain = TypeSelect<support_is_thin, ThinDeltaDomain, MetalDeltaDomain>.Type;
+typealias MixedDeltaDomain = TypeSelect<support_is_solid, SolidDeltaDomain, OtherDeltaDomain>.Type;
+typealias PresentDeltaDomain =
+    TypeSelect<support_is_delta_only, AlwaysDelta, MixedDeltaDomain>.Type;
+public typealias DeltaDomain =
+    TypeSelect<support_has_no_delta, NeverDelta, PresentDeltaDomain>.Type;
 
 typealias ReflectionSupport =
-    TypeSelect<SupportHasSmoothMetalMixture, SmoothMetalMixture, ReflectionDirection>.Type;
-typealias BasePresence = TypeSelect<SupportHasMetalMixture, DielectricBase, AlwaysBase>.Type;
+    TypeSelect<support_has_smooth_metal_mixture, SmoothMetalMixture, ReflectionDirection>.Type;
+typealias BasePresence = TypeSelect<support_has_metal_mixture, DielectricBase, AlwaysBase>.Type;
 typealias SubsurfacePresence =
-    TypeSelect<SupportHasDiffuse, WeightedSubsurface, FullSubsurface>.Type;
+    TypeSelect<support_has_diffuse, WeightedSubsurface, FullSubsurface>.Type;
 typealias SubsurfaceSupport =
     SubsurfaceDirection<BasePresence, SubsurfacePresence, ReflectionSupport>;
 typealias OpaqueSupport =
-    TypeSelect<SupportHasSubsurface, SubsurfaceSupport, ReflectionSupport>.Type;
-typealias ContinuousSupport = TypeSelect<SupportIsTransmission, BothDirections, OpaqueSupport>.Type;
+    TypeSelect<support_has_subsurface, SubsurfaceSupport, ReflectionSupport>.Type;
+typealias ContinuousSupport =
+    TypeSelect<support_is_transmission, BothDirections, OpaqueSupport>.Type;
 public typealias DirectionSupport =
-    TypeSelect<SupportHasNoContinuous, NoDirection, ContinuousSupport>.Type;
+    TypeSelect<support_has_no_continuous, NoDirection, ContinuousSupport>.Type;
+}
 }

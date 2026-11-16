@@ -21,27 +21,27 @@ func atmosphere_main(uint3 id: SV_DispatchThreadID)->void
     let a : float4 = asfloat(inputs[2 * id.x]);
     let b : uint4 = inputs[2 * id.x + 1];
     if (b.y == 0)
-        outputs[id.x] = asuint(segment_integral(a, asfloat(b.x)));
+        outputs[id.x] = asuint(segment_transport(a, asfloat(b.x)).integral);
     else if (b.y == 2)
         outputs[id.x] = asuint(segment_transport(a, asfloat(b.x)).transmittance);
     else
     {
         var p : Params = (Params)0;
-        p.sun.w = 6360.0;
-        p.medium.x = 120.0;
+        p.planet_radius_km = 6360.0;
+        p.atmosphere_height_km = 120.0;
         let hit : bool = ground(p, a.x, a.y);
         let d : float = boundary(p, a.x, a.y, hit);
         outputs[id.x] = uint4(asuint(float3(d, height_at(p, a.x, a.y, d), float(hit))), id.x + 1);
     }
 }
 
-struct IntervalProfileSource : IPrimeSunShadowProfileSource
+struct IntervalProfileSource : IShadowProfileSource
 {
-    func texelSize(cascade: int)->float
+    func texel_size(cascade: int)->float
     {
-        return sunShadowTexelSize(cascade);
+        return shadow_texel_size(cascade);
     }
-    func blockerDepth(cascade: int, node: int2)->float
+    func blocker_depth(cascade: int, node: int2)->float
     {
         return 0;
     }
@@ -57,19 +57,19 @@ func shadow_interval_main(uint3 id: SV_DispatchThreadID)->void
         return;
     let a = asfloat(inputs[2 * id.x]);
     let b = asfloat(inputs[2 * id.x + 1]);
-    primeInitializeSunShadowProfile(float3(0, 0, 1), float2(0), a.w, float3(1, 0, 0),
-                                    float3(1, 0, 0), float3(0, 1, 0));
-    sunShadowProfileCounts[0] = 3;
-    sunShadowProfileEntries[0] = float2(63.5, -0.25);
-    sunShadowProfileEntries[1] = float2(95.25, 0.5);
-    sunShadowProfileEntries[2] = float2(127.0, 1.25);
+    initialize_shadow_profile(float3(0, 0, 1), float2(0), a.w, float3(1, 0, 0), float3(1, 0, 0),
+                              float3(0, 1, 0));
+    shadow_profile_counts[0] = 3;
+    shadow_profile_entries[0] = float2(63.5, -0.25);
+    shadow_profile_entries[1] = float2(95.25, 0.5);
+    shadow_profile_entries[2] = float2(127.0, 1.25);
     for (var cascade = 1; cascade < SUN_SHADOW_CASCADE_COUNT; ++cascade)
     {
-        sunShadowProfileCounts[cascade] = 1;
-        sunShadowProfileEntries[sunShadowProfileBase(cascade)] =
-            float2(sunShadowProfileCascadeEnd(IntervalProfileSource(), cascade), 0.35);
+        shadow_profile_counts[cascade] = 1;
+        shadow_profile_entries[shadow_profile_base(cascade)] =
+            float2(shadow_profile_cascade_end(IntervalProfileSource(), cascade), 0.35);
     }
     let visibility =
-        localSunVisibilityInterval(IntervalProfileSource(), sunShadowProfileRay(a.xyz), b.x, b.y);
+        shadow_visible_interval(IntervalProfileSource(), shadow_profile_ray(a.xyz), b.x, b.y);
     outputs[id.x] = uint4(asuint(visibility), 0, 0, id.x + 1);
 }

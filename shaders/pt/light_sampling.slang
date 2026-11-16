@@ -69,18 +69,18 @@ public struct TexturedEmitterAlias : IEmitterAlias
 };
 
 func connect_quad_emitter(point_value: geometry::SurfacePoint, target: geometry::TriangleEndpoint,
-                          density: float, selectionPmf: float, sides: uint)
+                          density: float, selection_pmf: float, sides: uint)
     ->LightSample
 {
     var result : LightSample = {};
-    let delta : float3 = target.position - point_value.position;
-    let squared : float = dot(delta, delta);
+    let delta = target.position - point_value.position;
+    let squared = dot(delta, delta);
     if (!(squared > 0) || !isfinite(squared))
         return result;
     let inverse_distance = rsqrt(squared);
     result.direction = delta * inverse_distance;
     result.pdf = quad_light_pdf_geometry(squared, dot(target.normal, -result.direction), density,
-                                         selectionPmf, sides);
+                                         selection_pmf, sides);
     if (result.pdf <= 0)
         return result;
     let distance = squared * inverse_distance;
@@ -98,52 +98,52 @@ func connect_quad_emitter(point_value: geometry::SurfacePoint, target: geometry:
 public func sample_quad_emitter<A : IEmitterAlias>(distribution: A, proposal: LightSurfaceProposal,
                                                    vertices_value: LightQuadVertices,
                                                    point_value: geometry::SurfacePoint, u: float2,
-                                                   selectionPmf: float, sides: uint,
+                                                   selection_pmf: float, sides: uint,
                                                    transform: float3x4, inverse: float3x4,
                                                    out area: QuadAreaSample)
     ->LightSample
 {
     area = {};
-    if (selectionPmf <= 0 || (asfloat(proposal.area.y) <= 0 && asfloat(proposal.area.z) <= 0))
+    if (selection_pmf <= 0 || (asfloat(proposal.area.y) <= 0 && asfloat(proposal.area.z) <= 0))
         return {};
     area = distribution.sample(proposal, u);
     return connect_quad_emitter(point_value,
                                 quad_endpoint(vertices_value, area, transform, inverse),
-                                area.density, selectionPmf, sides);
+                                area.density, selection_pmf, sides);
 }
 
 /// 世界坐标、无实例变换的重载；保留 geometry 的恒等变换误差预算和运算顺序。
 public func sample_quad_emitter<A : IEmitterAlias>(distribution: A, proposal: LightSurfaceProposal,
                                                    vertices_value: LightQuadVertices,
                                                    point_value: geometry::SurfacePoint, u: float2,
-                                                   selectionPmf: float, sides: uint,
+                                                   selection_pmf: float, sides: uint,
                                                    out area: QuadAreaSample)
     ->LightSample
 {
     area = {};
-    if (selectionPmf <= 0 || (asfloat(proposal.area.y) <= 0 && asfloat(proposal.area.z) <= 0))
+    if (selection_pmf <= 0 || (asfloat(proposal.area.y) <= 0 && asfloat(proposal.area.z) <= 0))
         return {};
     area = distribution.sample(proposal, u);
     return connect_quad_emitter(point_value, quad_endpoint(vertices_value, area), area.density,
-                                selectionPmf, sides);
+                                selection_pmf, sides);
 }
 
-/// 反查同一树、灯面分布和发射侧；treeReceiver 允许树在独立的近原点坐标系。
+/// 反查同一树、灯面分布和发射侧；tree_receiver 允许树在独立的近原点坐标系。
 public func quad_emitter_pdf<A : IEmitterAlias>(distribution: A, surface: LightSurfaceProposal,
-                                                tree: LightBvhProposal, treeReceiver: float3,
+                                                tree: LightBvhProposal, tree_receiver: float3,
                                                 rank: uint, receiver: float3, target: float3,
                                                 normal: float3, half: uint, uv: float2, sides: uint)
     ->float
 {
     return quad_light_pdf(receiver, target, normal, distribution.density(surface, half, uv),
-                          tree.pmf(treeReceiver, rank), sides);
+                          tree.pmf(tree_receiver, rank), sides);
 }
 
 /// 两个族分别独立采一次，返回条件随机数；PDF不乘二选一概率，缺失族贡献为0。
 /// 输入z在[0,1)，下半区为局部灯，上半区为环境灯；调用方不能按活动族重新分配。
 public func local_light_family(inout u: float3)->bool
 {
-    let local : bool = u.z < 0.5;
+    let local = u.z < 0.5;
     u.z = local ? 2.0 * u.z : 2.0 * u.z - 1.0;
     return local;
 }

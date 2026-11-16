@@ -2,8 +2,15 @@
 use crate::{Error, Identities};
 use std::collections::HashMap;
 
-const OFFSET: u32 = (1 << 29) - 1;
-const ESCAPE: u32 = 1 << 31;
+const PAYLOAD_OFFSET_MASK: u32 = (1 << 29) - 1;
+const EXTENDED_GEOMETRY: u32 = 1 << 31;
+const CELL_GEOMETRY: u32 = 1 << 31;
+const SURFACE_INDEX_LIMIT: u32 = 1 << 31;
+
+/// 应用解释的三个原始uint4；位置编码器只保留和复制这些位。
+pub type QuadAttributes = [[u32; 4]; 3];
+/// 一个quad的应用属性字节数；不包含几何头和源身份。
+pub const QUAD_ATTRIBUTE_BYTES: usize = size_of::<QuadAttributes>();
 
 /// 紧凑矩形的表面目录：形状的轴、起角、格距与完整的 48B 应用属性同属一条共享记录。
 /// 面头提供 32 位表面字。模板的前三个附加 word 可保存回退面的源格，整条记录为 64B。
@@ -81,7 +88,7 @@ fn rectangle(points: [[f32; 3]; 4], lod: u8) -> Option<(u32, u32)> {
         axis as u32 | u32::from(flip_u) << 2 | u32::from(flip_v) << 3 | u32::from(lod) << 4;
     Some((packed, layout))
 }
-const WORDS: [usize; 4] = [2, 3, 6, 12];
+const PAYLOAD_WORD_COUNTS: [usize; 4] = [2, 3, 6, 12];
 
 // 一格内的十二个角坐标只需十二位。适用于对角草卡及其他由单位格角组成的模型面。
 fn cell_quad(points: [[f32; 3]; 4], lod: u8, cell: Option<[i32; 3]>) -> Option<u32> {
@@ -111,7 +118,7 @@ fn cell_quad(points: [[f32; 3]; 4], lod: u8, cell: Option<[i32; 3]>) -> Option<u
             mask |= 1u32 << (i * 3 + j);
         }
     }
-    Some(ESCAPE | mask << 18 | anchor[0] | anchor[1] << 6 | anchor[2] << 12)
+    Some(EXTENDED_GEOMETRY | mask << 18 | anchor[0] | anchor[1] << 6 | anchor[2] << 12)
 }
 /// 地形 PCIe 包：每面两个 word，分别为几何与表面索引。同一模板的轴由所有矩形共享。
 /// 64³ 格内的矩形占 8B，三轴锚点各 6 bit，两边长减一各 6 bit，正法线占 1 bit。
@@ -135,7 +142,7 @@ struct Inherited {
 impl QuadEncoder {
     /// 预留目录和常见整数矩形的净荷。超出格式寻址范围或分配失败返回错误。
     pub fn with_capacity(count: usize) -> Result<Self, Error> {
-        if count > OFFSET as usize / 2 {
+        if count > PAYLOAD_OFFSET_MASK as usize / 2 {
             return Err(Error::Capacity);
         }
         let mut stream = Self::default();
@@ -148,7 +155,7 @@ impl QuadEncoder {
         &mut self,
         points: [[f32; 3]; 4],
         lod: u8,
-        attributes: [[u32; 4]; 3],
+        attributes: QuadAttributes,
     ) -> Result<(), Error> {
         self.insert(points, lod, attributes, None)
     }
@@ -199,7 +206,7 @@ impl QuadEncoder {
         &mut self,
         points: [[f32; 3]; 4],
         lod: u8,
-        attributes: [[u32; 4]; 3],
+        attributes: QuadAttributes,
         cell: [i32; 3],
         uv_axes: [i8; 2],
     ) -> Result<(), Error> {
@@ -212,7 +219,7 @@ impl QuadEncoder {
         &mut self,
         points: [[f32; 3]; 4],
         lod: u8,
-        attributes: [[u32; 4]; 3],
+        attributes: QuadAttributes,
         projected: Option<([i32; 3], [i8; 2])>,
     ) -> Result<(), Error> {
         let mut rect = rectangle(points, lod);
@@ -277,7 +284,7 @@ impl QuadEncoder {
             self.stream.surfaces.try_reserve(1)?;
             u32::try_from(self.stream.surfaces.len())
                 .ok()
-                .filter(|i| *i < ESCAPE)
+                .filter(|i| *i < SURFACE_INDEX_LIMIT)
                 .ok_or(Error::Capacity)?
         };
         self.stream.headers.try_reserve(1)?;
@@ -288,7 +295,7 @@ impl QuadEncoder {
         }
         self.stream
             .headers
-            .push([geometry, index | if anchored { ESCAPE } else { 0 }]);
+            .push([geometry, index | if anchored { CELL_GEOMETRY } else { 0 }]);
         Ok(())
     }
     /// 拼入已编码区域或分片的源序范围。只重定位表面索引和回退净荷，完整保留几何字与着色属性。
@@ -316,7 +323,7 @@ impl QuadEncoder {
         self.stream.headers.try_reserve(headers.len())?;
         let mut last = None;
         for &[mut geometry, s] in headers {
-            let surface = s & !ESCAPE;
+            let surface = s & !CELL_GEOMETRY;
             let id = if let Some((_, mapped)) = last.filter(|(prev, _)| *prev == surface) {
                 mapped
             } else {
@@ -328,7 +335,7 @@ impl QuadEncoder {
                     self.stream.surfaces.try_reserve(1)?;
                     let id = u32::try_from(self.stream.surfaces.len())
                         .ok()
-                        .filter(|v| *v < ESCAPE)
+                        .filter(|v| *v < SURFACE_INDEX_LIMIT)
                         .ok_or(Error::Capacity)?;
                     self.stream.surfaces.push(row);
                     self.lookup.insert(row, id);
@@ -337,20 +344,22 @@ impl QuadEncoder {
                 last = Some((surface, id));
                 id
             };
-            if s & ESCAPE == 0 && geometry & ESCAPE != 0 {
-                let at = (geometry & OFFSET) as usize;
-                let n = WORDS[((geometry >> 29) & 3) as usize];
+            if s & CELL_GEOMETRY == 0 && geometry & EXTENDED_GEOMETRY != 0 {
+                let at = (geometry & PAYLOAD_OFFSET_MASK) as usize;
+                let n = PAYLOAD_WORD_COUNTS[((geometry >> 29) & 3) as usize];
                 let offset = self.stream.payload.len();
-                if offset > OFFSET as usize {
+                if offset > PAYLOAD_OFFSET_MASK as usize {
                     return Err(Error::Capacity);
                 }
                 self.stream.payload.try_reserve(n)?;
                 self.stream
                     .payload
                     .extend_from_slice(&source.payload[at..at + n]);
-                geometry = (geometry & !OFFSET) | offset as u32;
+                geometry = (geometry & !PAYLOAD_OFFSET_MASK) | offset as u32;
             }
-            self.stream.headers.push([geometry, id | (s & ESCAPE)]);
+            self.stream
+                .headers
+                .push([geometry, id | (s & CELL_GEOMETRY)]);
         }
         Ok(())
     }
@@ -378,28 +387,28 @@ impl QuadEncoder {
         &mut self,
         source: &ResidentQuads,
         i: usize,
-        attr: [[u32; 4]; 3],
+        attributes: QuadAttributes,
     ) -> Result<(), Error> {
         let packed = source.positions();
         let &[g, s] = packed.headers.get(i).ok_or(Error::Capacity)?;
-        let mut surface = packed.surfaces[(s & !ESCAPE) as usize];
+        let mut surface = packed.surfaces[(s & !CELL_GEOMETRY) as usize];
         surface[0] &= 0x1ff;
-        surface[4..].copy_from_slice(attr.as_flattened());
+        surface[4..].copy_from_slice(attributes.as_flattened());
         let next = self.stream.headers.len();
         self.stream.inherited.try_reserve(1)?;
-        self.append(surface, s & ESCAPE != 0, |dest| {
-            if g & ESCAPE == 0 || s & ESCAPE != 0 {
+        self.append(surface, s & CELL_GEOMETRY != 0, |dest| {
+            if g & EXTENDED_GEOMETRY == 0 || s & CELL_GEOMETRY != 0 {
                 return Ok(g);
             }
-            let at = (g & OFFSET) as usize;
-            let n = WORDS[((g >> 29) & 3) as usize];
+            let at = (g & PAYLOAD_OFFSET_MASK) as usize;
+            let n = PAYLOAD_WORD_COUNTS[((g >> 29) & 3) as usize];
             let offset = dest.payload.len();
-            if offset > OFFSET as usize {
+            if offset > PAYLOAD_OFFSET_MASK as usize {
                 return Err(Error::Capacity);
             }
             dest.payload.try_reserve(n)?;
             dest.payload.extend_from_slice(&packed.payload[at..at + n]);
-            Ok((g & !OFFSET) | offset as u32)
+            Ok((g & !PAYLOAD_OFFSET_MASK) | offset as u32)
         })?;
         if let Some(span) = self.stream.inherited.last_mut()
             && span.serial == source.serial
@@ -467,13 +476,13 @@ impl PackedQuads {
             }
         };
         let offset = self.payload.len();
-        let len = WORDS[format];
-        if offset + len > OFFSET as usize {
+        let len = PAYLOAD_WORD_COUNTS[format];
+        if offset + len > PAYLOAD_OFFSET_MASK as usize {
             return Err(Error::Capacity);
         }
         self.payload.try_reserve(len)?;
         self.payload.extend_from_slice(&words[..len]);
-        Ok(ESCAPE | (format as u32) << 29 | offset as u32)
+        Ok(EXTENDED_GEOMETRY | (format as u32) << 29 | offset as u32)
     }
 
     /// 每个 quad 一个目录项。GPU 按生产者的源序展开，BLAS 的局部 primitive 编号除以二即源 quad 序号。
@@ -490,35 +499,39 @@ impl PackedQuads {
     }
     /// 实际传输的目录及坐标净荷字节数。
     pub const fn bytes(&self) -> usize {
-        self.headers.len() * 8 + self.payload.len() * 4 + self.surfaces.len() * 64
+        self.headers.len() * 8
+            + self.payload.len() * 4
+            + self.surfaces.len() * size_of::<QuadSurface>()
     }
     /// 两个数组占有的堆容量。
     pub const fn retained_bytes(&self) -> usize {
-        self.headers.capacity() * 8 + self.payload.capacity() * 4 + self.surfaces.capacity() * 64
+        self.headers.capacity() * 8
+            + self.payload.capacity() * 4
+            + self.surfaces.capacity() * size_of::<QuadSurface>()
     }
 
     fn record(&self, index: usize) -> (u32, u32, &[u32]) {
         let [geometry, surface] = self.headers[index];
-        if surface & ESCAPE != 0 {
+        if surface & CELL_GEOMETRY != 0 {
             return (
                 geometry,
-                self.surfaces[(surface & !ESCAPE) as usize][0] & 0x1ff,
+                self.surfaces[(surface & !CELL_GEOMETRY) as usize][0] & 0x1ff,
                 &[],
             );
         }
-        if geometry & ESCAPE == 0 {
+        if geometry & EXTENDED_GEOMETRY == 0 {
             return (geometry, self.surfaces[surface as usize][0] & 0x1ff, &[]);
         }
-        let start = (geometry & OFFSET) as usize;
+        let start = (geometry & PAYLOAD_OFFSET_MASK) as usize;
         let format = ((geometry >> 29) & 3) as usize;
         (
-            ESCAPE,
+            EXTENDED_GEOMETRY,
             format as u32,
-            &self.payload[start..start + WORDS[format]],
+            &self.payload[start..start + PAYLOAD_WORD_COUNTS[format]],
         )
     }
     fn surface(&self, index: usize) -> &QuadSurface {
-        &self.surfaces[(self.headers[index][1] & !ESCAPE) as usize]
+        &self.surfaces[(self.headers[index][1] & !CELL_GEOMETRY) as usize]
     }
 }
 

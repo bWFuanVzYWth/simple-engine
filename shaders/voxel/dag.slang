@@ -42,8 +42,8 @@ public func uniform_at(view: DagView, voxel: uint3, inout path: DagPath)->DagSam
     var level : uint = 9;
     if (path.sample.valid)
     {
-        let different : uint3 = voxel ^ path.voxel;
-        let changed : uint = different.x | different.y | different.z;
+        let different = voxel ^ path.voxel;
+        let changed = different.x | different.y | different.z;
         if (changed < (1u << path.sample.lod))
             return path.sample;
         level = uint(firstbithigh(changed)) >> 1u;
@@ -60,7 +60,7 @@ public func uniform_at(view: DagView, voxel: uint3, inout path: DagPath)->DagSam
         }
         path.ancestors[level] = child.y;
         let index : uint = view.offsets[level >> 2u][level & 3u] + child.y;
-        let slot : uint = slot_at(voxel, level);
+        let slot = slot_at(voxel, level);
         let bits : uint = view.masks[index][slot >> 5u];
         child = uint2((bits >> (slot & 31)) & 1, view.values[index * 64 + slot]);
         if (level == 0)
@@ -140,16 +140,16 @@ public func begin_dda(origin: RayOrigin, dir: float3, lower: int3, upper: int3, 
         else
         {
             let inverse : float = 1.0 / dir[axis];
-            let lo : float = boundary_t(origin.base[axis], origin.fraction[axis], inverse,
-                                        lower[axis], state.step[axis]);
-            let hi : float = boundary_t(origin.base[axis], origin.fraction[axis], inverse,
-                                        upper[axis], state.step[axis]);
+            let lo = boundary_t(origin.base[axis], origin.fraction[axis], inverse, lower[axis],
+                                state.step[axis]);
+            let hi = boundary_t(origin.base[axis], origin.fraction[axis], inverse, upper[axis],
+                                state.step[axis]);
             near_t[axis] = min(lo, hi);
             far_t[axis] = max(lo, hi);
         }
     }
     state.t = max(max(max(near_t.x, near_t.y), near_t.z), 0.0);
-    let box_end : float = min(min(far_t.x, far_t.y), far_t.z);
+    let box_end = min(min(far_t.x, far_t.y), far_t.z);
     end = min(box_end, max_t);
     if (end < state.t || end < 0.0)
         return false;
@@ -190,7 +190,7 @@ func boundary_times(state: DdaState, inverse: float3, boundary: int3, origin: Ra
 /// 后续 advance/skip 沿用此约定，调用者在越出盒或达到最大 t 后停止。
 public func next_t(state: DdaState, inverse: float3, origin: RayOrigin)->float
 {
-    let times : float3 = boundary_times(state, inverse, state.next_boundary, origin);
+    let times = boundary_times(state, inverse, state.next_boundary, origin);
     return times[argmin3(times)];
 }
 
@@ -198,7 +198,7 @@ public func next_t(state: DdaState, inverse: float3, origin: RayOrigin)->float
 public func advance_one(state: DdaState, inverse: float3, origin: RayOrigin)->DdaState
 {
     var state = state;
-    let times : float3 = boundary_times(state, inverse, state.next_boundary, origin);
+    let times = boundary_times(state, inverse, state.next_boundary, origin);
     var axis : int = argmin3(times);
     state.voxel[axis] += state.step[axis];
     state.next_boundary[axis] += state.step[axis];
@@ -211,8 +211,8 @@ func crossing_reaches(axis: int, inverse: float, boundary: int, step: int, cross
                       limit: float, equal: bool, origin: RayOrigin)
     ->bool
 {
-    let t : float = boundary_t(origin.base[axis], origin.fraction[axis], inverse,
-                               boundary + step * int(crossing), step);
+    let t = boundary_t(origin.base[axis], origin.fraction[axis], inverse,
+                       boundary + step * int(crossing), step);
     return equal ? t <= limit : t < limit;
 }
 
@@ -228,8 +228,7 @@ func crossings_before(axis: int, inverse: float, boundary: int, step: int, count
     if (count == 1 ||
         crossing_reaches(axis, inverse, boundary, step, count - 1, limit, equal, origin))
         return count;
-    let first : float =
-                    boundary_t(origin.base[axis], origin.fraction[axis], inverse, boundary, step);
+    let first = boundary_t(origin.base[axis], origin.fraction[axis], inverse, boundary, step);
     let estimated : float = floor((limit - first) / abs(inverse)) + 1.0;
     if (estimated >= 0 && estimated <= float(count) + 2.0)
     {
@@ -269,7 +268,7 @@ public func skip_region(state: DdaState, inverse: float3, origin: RayOrigin, reg
     ->DdaState
 {
     var state = state;
-    let region_max : int3 = region_min + int(edge);
+    let region_max = region_min + int(edge);
     var boundary : int3;
     var max_count : uint3;
     [unroll]
@@ -281,8 +280,8 @@ public func skip_region(state: DdaState, inverse: float3, origin: RayOrigin, reg
                 ? uint(region_max[axis] - state.voxel[axis])
                 : (state.step[axis] < 0 ? uint(state.voxel[axis] - region_min[axis] + 1) : 0);
     }
-    let times : float3 = boundary_times(state, inverse, boundary, origin);
-    let face : int = argmin3(times);
+    let times = boundary_times(state, inverse, boundary, origin);
+    let face = argmin3(times);
     var t : float = times[face];
     [unroll]
     for (var axis = 0; axis < 3; ++axis)

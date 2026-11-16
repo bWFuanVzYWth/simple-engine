@@ -7,7 +7,7 @@ public func identity_index(words: StructuredBuffer<uint4>, base: uint, token: ui
 {
     if (token == 0u)
         return 0xffffffffu;
-    let header : uint4 = words[base];
+    let header = words[base];
     var hash : uint = token;
     hash ^= hash >> 16u;
     hash *= 0x7feb352du;
@@ -17,8 +17,8 @@ public func identity_index(words: StructuredBuffer<uint4>, base: uint, token: ui
     var slot : uint = hash & header.y;
     for (var attempt: uint = 0; attempt <= header.y; ++attempt)
     {
-        let packed : uint4 = words[base + header.z + slot / 2u];
-        let entry : uint2 = (slot & 1u) == 0u ? packed.xy : packed.zw;
+        let packed = words[base + header.z + slot / 2u];
+        let entry = (slot & 1u) == 0u ? packed.xy : packed.zw;
         if (entry.x == token)
             return entry.y - 1u;
         if (entry.x == 0u)

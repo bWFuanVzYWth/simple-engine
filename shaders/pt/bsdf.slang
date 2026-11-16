@@ -1,6 +1,7 @@
 /// 无资源绑定的单面 Lambertian；方向约定均为离开表面，不执行路径或光源策略。
 /// 来源：https://pbr-book.org/4ed/Reflection_Models/Diffuse_Reflection
 module bsdf;
+import math.constants;
 
 import pt.sampling;
 
@@ -19,14 +20,14 @@ public struct DirectionSample
 /// 调用方须确认入射与出射单位方向均指离开表面，且处于单位法线正半球；本函数不检查方向。
 public func lambertian_eval(albedo: float3)->float3
 {
-    return albedo * (1.0 / pi);
+    return albedo * math::frac_1_pi;
 }
 
 /// normal、wi 须为单位向量，wi 指离开表面；返回立体角 PDF，负半球返回零。
 /// 采用此单面 BSDF 的另一出射方向也须位于 normal 正半球，由调用方约束。
 public func lambertian_pdf(normal: float3, wi: float3)->float
 {
-    return saturate(dot(normal, wi)) * (1.0 / pi);
+    return saturate(dot(normal, wi)) * math::frac_1_pi;
 }
 
 /// normal 须为单位向量，u 属于 [0, 1)²；采样其正半球并返回立体角 PDF。

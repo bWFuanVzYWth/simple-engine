@@ -3,9 +3,15 @@
 #language slang 2026
 module "bsdf/openpbr/service/contract/components.slang";
 
-public struct PrimeBsdfComponents
+namespace openpbr
 {
-    public var diffuseResponse : float3;
-    public var specularResponse : float3;
+namespace kernel
+{
+public struct SurfaceComponents
+{
+    public var diffuse_response : float3;
+    public var specular_response : float3;
     public var pdf : float;
 };
+}
+}

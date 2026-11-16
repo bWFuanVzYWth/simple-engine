@@ -36,7 +36,10 @@ pub use slots::Slots;
 mod producer;
 mod quads;
 pub use producer::{Producer, ProducerError};
-pub use quads::{PackedQuads, ProjectedRectangle, QuadEncoder, QuadSurface, ResidentQuads};
+pub use quads::{
+    PackedQuads, ProjectedRectangle, QUAD_ATTRIBUTE_BYTES, QuadAttributes, QuadEncoder,
+    QuadSurface, ResidentQuads,
+};
 mod geometry;
 pub use geometry::{
     GeometryDirectory, GeometryPublication, GeometryRecord, GeometrySource, GeometryUpdate,
@@ -216,7 +219,7 @@ impl<T> Cache<T> {
         let mut next = Vec::new();
         next.try_reserve_exact(capacity)?;
         Ok(Update {
-            slots: self.slots.copy()?,
+            slots: self.slots.fork_for_update()?,
             identities: Identities {
                 next: self.identities.next,
                 next_quad: self.identities.next_quad,

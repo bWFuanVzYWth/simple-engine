@@ -1,6 +1,8 @@
 //! Slang 构建入口；入口、浮点模式和 capability 由各应用的 recipe 明确指定。
 //!
-//! 默认使用 `-std 2026 -O3`；SPIR-V 在 `release-lto` 使用 `-g0`，其他 profile 使用 `-g3`。
+//! 默认使用 `-std 2026 -O3`；SPIR-V 在 `release` 同次以 `-g3 -separate-debug-info`
+//! 生成运行产物及完整审计副本，发布前严格校验同核；开发profile保持inline g3。
+//! `release-lto` 保持 `-g0`；[`build_audited`]另编独立g3副本，不宣称两次编译同核。
 //! WGSL 始终使用 `-g0`，避免 Slang 调试保留的无效接口辅助类型。`Recipe::args` 可后置覆盖优化级别。
 //! 模块主文件显式声明 `module`，跨模块接口使用 `public`。
 //! native 直接生成 SPIR-V，固定启用 Slang 内部 SPIRV-Tools 验证，宿主环境不能关闭。
@@ -9,7 +11,7 @@
 //! # 编译器与增量构建
 //!
 //! 按 `SLANGC` → `VULKAN_SDK/Bin/slangc.exe`（其他平台为 `bin/slangc`）→ `PATH` 查找。
-//! `SLANGC` 可为路径或命令名，执行 canonical 路径。身份包含路径、`-version`、可执行文件、
+//! `SLANGC` 可为路径或命令名，执行规范化的绝对路径。身份包含路径、`-version`、可执行文件、
 //! bin/lib 内的 `slang*` / `libslang*` 组件与标准模块，以及动态库搜索目录中的 Slang 组件。
 //! 应使用完整发行包；Windows 依赖库置于 `slangc.exe` 同目录，见
 //! [Slang 安装说明](https://github.com/shader-slang/slang/blob/master/docs/user-guide/01-get-started.md)。
@@ -50,13 +52,13 @@
 //! | 字段 | 内容 |
 //! | --- | --- |
 //! | `SLANG_VERSION` | 编译器实际版本输出 |
-//! | `SLANG_COMPILER` | canonical 可执行路径 |
+//! | `SLANG_COMPILER` | 规范化的编译器绝对路径 |
 //! | `SLANG_COMPILER_BLAKE3` | 编译器及 Slang 组件身份 |
 //! | `SOURCE_BLAKE3` | 编译器、shader、构建工具及指定宿主源码 |
 //! | `SHADER_BUILD_BLAKE3` | 编译器、shader、构建工具及实际 recipe 参数 |
 //! | `SPIRV_BLAKE3` | native 各入口及实际字节；纯 WGSL 构建不提供 |
 //! | `SHADER_OUTPUT_BLAKE3` | 全部发布输出名及实际产物字节 |
-//! | `AUDIT_SPIRV_BLAKE3` | `build_audited` 额外审计副本的输出名和字节；没有副本时不提供 |
+//! | `AUDIT_SPIRV_BLAKE3` | 同次或独立审计副本的输出名和字节；没有副本时不提供 |
 //!
 //! # build.rs 示例
 //!
@@ -74,13 +76,15 @@
 //! ```
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env, fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
 
+mod audit;
 mod batch;
+pub use audit::verify_audit_pair;
 #[cfg(test)]
 mod profile;
 mod runtime;
@@ -156,6 +160,20 @@ pub enum Error {
     /// SPIR-V recipe 试图跳过验证或生成不适用于 Vulkan 验证的未链接库。
     #[error("SPIR-V 构建必须启用完整产物验证")]
     Validation,
+    /// 同次编译的运行SPIR-V与完整调试副本不能建立严格配对。
+    #[error("Slang调试副本配对失败：{0}")]
+    AuditPair(String),
+    /// 多个输出发布失败；已发布文件会恢复原内容，回滚失败另外保留来源。
+    #[error("shader输出发布失败 {path}：{source}；回滚错误：{rollback:?}")]
+    Publication {
+        /// 首次失败的目标路径。
+        path: PathBuf,
+        /// 首次发布IO失败。
+        #[source]
+        source: io::Error,
+        /// 外部文件系统变化同时阻止回滚时保留该错误，不宣称已恢复。
+        rollback: Option<io::Error>,
+    },
     /// 并行度、输出声明或缓存环境配置无效。
     #[error("shader 构建配置无效：{0}")]
     Configuration(String),
@@ -165,13 +183,42 @@ pub enum Error {
     /// 编译器执行成功启动，但返回非零状态。
     #[error("Slang {entry} 失败（{compiler}）：\n{diagnostic}")]
     Compile {
-        /// 实际执行的 canonical 编译器路径。
+        /// 实际执行的 canonical_path 编译器路径。
         compiler: PathBuf,
         /// 失败入口名称，版本查询失败时为 `-version`。
         entry: String,
         /// 退出状态、stdout 与 stderr 的完整诊断。
         diagnostic: String,
     },
+}
+
+/// 运行产物与用于源码归属审查的SPIR-V之间的真实关系。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditRelation {
+    /// 未分离；审计直接读取运行产物自身。
+    Inline,
+    /// 同次g3编译产生main/full sidecar，发布前已通过[`verify_audit_pair`]。
+    Paired,
+    /// release-lto独立g0运行产物与另一次g3审计编译；不宣称同核。
+    Independent,
+}
+
+/// 一批构建的审计位置与逐输出关系；不以路径是否不同推断同核。
+pub struct AuditedBuild {
+    directory: PathBuf,
+    relations: BTreeMap<String, AuditRelation>,
+}
+
+impl AuditedBuild {
+    /// 完整SPIR-V审计目录；文件名与对应recipe.output一致。
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// 查询已登记输出的关系；未知输出返回None。
+    pub fn relation(&self, output: &str) -> Option<AuditRelation> {
+        self.relations.get(output).copied()
+    }
 }
 
 /// 编译所有入口并向 Cargo 发布依赖跟踪、构建身份及实际产物。
@@ -188,19 +235,20 @@ pub fn build(
     build_inner(recipes, includes, source_roots, false).map(|_| ())
 }
 
-/// 构建实际产物，并在 `release-lto` 为 SPIR-V 另编同源 `-g3` 审计副本。
+/// 构建实际产物，并返回每个输出的审计关系与目录。
 ///
-/// 返回 SPIR-V 审计目录；普通 profile 直接复用输出目录，WGSL 只写入生产目录。
-/// 副本只位于 `OUT_DIR/audit`，不进入发布产物。
-/// 调用方对副本执行源码归属审查，对发布产物校验接口及阶段不变量；不宣称两者执行图相同。
-/// 两次编译的实际参数均进入构建身份和记录；审计副本另以 `AUDIT_SPIRV_BLAKE3` 标识。
+/// 普通release一次g3编译的完整sidecar位于`OUT_DIR/audit`，返回[`AuditRelation::Paired`]；
+/// 开发profile直接审查自身；release-lto为SPIR-V另编同源g3，返回[`AuditRelation::Independent`]。
+/// WGSL只写入生产目录。显式g0覆盖不会错误启用separate。
+/// 调用方对完整副本执行源码归属审查，对实际产物校验接口与阶段；独立LTO副本不保证同核。
+/// 全部实际参数及main/audit哈希写入记录；审计副本另以`AUDIT_SPIRV_BLAKE3`标识。
 /// # Errors
 /// 与 [`build`] 相同；任一次编译失败均停止构建。
 pub fn build_audited(
     recipes: &[Recipe<'_>],
     includes: &[&str],
     source_roots: &[&str],
-) -> Result<PathBuf, Error> {
+) -> Result<AuditedBuild, Error> {
     build_inner(recipes, includes, source_roots, true)
 }
 
@@ -209,7 +257,7 @@ fn build_inner(
     includes: &[&str],
     source_roots: &[&str],
     audited: bool,
-) -> Result<PathBuf, Error> {
+) -> Result<AuditedBuild, Error> {
     for recipe in recipes {
         validate_recipe(recipe)?;
     }
@@ -235,30 +283,30 @@ fn build_inner(
         tool.join("Cargo.toml"),
     ]);
     for path in &roots {
-        track(path);
+        track_cargo_input(path);
     }
-    let files = files(roots)?;
+    let files = collect_input_files(roots)?;
     let mut source_hash = blake3::Hasher::new();
     let mut build_hash = blake3::Hasher::new();
-    field(&mut source_hash, compiler.identity.as_bytes());
-    field(&mut build_hash, compiler.identity.as_bytes());
+    hash_field(&mut source_hash, compiler.identity.as_bytes());
+    hash_field(&mut build_hash, compiler.identity.as_bytes());
     for path in &files {
-        let contents = read(path)?;
+        let contents = read_file(path)?;
         let name = match path.strip_prefix(tool) {
             Ok(relative) => format!("@shader_build/{}", relative.display()),
             Err(_) => path.to_string_lossy().into_owned(),
         }
         .replace('\\', "/");
-        field(&mut source_hash, name.as_bytes());
-        field(&mut source_hash, &contents);
+        hash_field(&mut source_hash, name.as_bytes());
+        hash_field(&mut source_hash, &contents);
         if path
             .extension()
             .is_some_and(|extension| extension == "slang")
             || path == Path::new("build.rs")
             || path.starts_with(tool)
         {
-            field(&mut build_hash, name.as_bytes());
-            field(&mut build_hash, &contents);
+            hash_field(&mut build_hash, name.as_bytes());
+            hash_field(&mut build_hash, &contents);
         }
     }
     let mut spirv_hash = blake3::Hasher::new();
@@ -271,18 +319,19 @@ fn build_inner(
         compiler.identity,
     );
     let audit = audited && release_lto();
-    let audit_output = if audit {
+    let paired = recipes.iter().any(|recipe| separate_debug(recipe));
+    let audit_output = if audit || paired {
         output.join("audit")
     } else {
         output.clone()
     };
-    if audit {
+    if audit || paired {
         fs::create_dir_all(&audit_output).map_err(|source| Error::Io {
             path: audit_output.clone(),
             source,
         })?;
     }
-    field(
+    hash_field(
         &mut build_hash,
         if audit {
             b"audit=g3"
@@ -291,53 +340,42 @@ fn build_inner(
         },
     );
     let mut has_spirv = false;
+    let mut relations = BTreeMap::new();
     let mut tasks = Vec::new();
     for recipe in recipes {
         let destination = output.join(recipe.output);
-        let mut arguments = vec![
+        let mut arguments = compiler_arguments(
+            recipe,
             recipe.source.to_owned(),
-            "-std".into(),
-            "2026".into(),
-            "-O3".into(),
-            debug_argument(recipe.target).into(),
-        ];
-        for include in includes {
-            arguments.extend(["-I".into(), (*include).into()]);
-        }
-        match recipe.target {
-            Target::Spirv(profile) => arguments.extend([
-                "-target".into(),
-                "spirv".into(),
-                "-profile".into(),
-                profile.into(),
-                "-emit-spirv-directly".into(),
-                "-fvk-use-entrypoint-name".into(),
-            ]),
-            Target::Wgsl => arguments.extend(["-target".into(), "wgsl".into()]),
-        }
-        arguments.extend([
-            "-entry".into(),
-            recipe.entry.into(),
-            "-stage".into(),
-            recipe.stage.into(),
-        ]);
-        arguments.extend(recipe.args.iter().map(|argument| (*argument).to_owned()));
-        if matches!(recipe.target, Target::Wgsl) {
-            arguments.push("-g0".into());
-        }
+            includes.iter().map(|include| (*include).to_owned()),
+        );
         for argument in &arguments {
-            field(&mut build_hash, argument.as_bytes());
+            hash_field(&mut build_hash, argument.as_bytes());
         }
-        field(&mut build_hash, recipe.output.as_bytes());
+        hash_field(&mut build_hash, recipe.output.as_bytes());
         manifest.push_str(&format!(
             "{} {:?} -> {}\n",
             recipe.entry, arguments, recipe.output
         ));
-        tasks.push(batch::Task::new(
-            recipe.entry,
-            arguments.clone(),
-            destination,
-        )?);
+        let mut task = batch::Task::new(recipe.entry, arguments.clone(), destination)?;
+        let relation = if audit && matches!(recipe.target, Target::Spirv(_)) {
+            AuditRelation::Independent
+        } else if task.audit.is_some() {
+            task.audit = Some(audit_output.join(recipe.output));
+            AuditRelation::Paired
+        } else {
+            AuditRelation::Inline
+        };
+        relations.insert(recipe.output.to_owned(), relation);
+        if relation == AuditRelation::Paired {
+            hash_field(&mut build_hash, b"same-invocation-audit");
+            manifest.push_str(&format!(
+                "paired_audit {} -> {}\n",
+                recipe.entry,
+                task.audit.as_ref().expect("Paired拥有审计目标").display()
+            ));
+        }
+        tasks.push(task);
         if audit && matches!(recipe.target, Target::Spirv(_)) {
             // 审计反射同样留在副本目录，ABI 消费者只读取实际发布产物的反射。
             let reflection = audit_output.join(format!("{}.json", recipe.output));
@@ -352,7 +390,7 @@ fn build_inner(
             }
             arguments.push("-g3".into());
             for argument in &arguments {
-                field(&mut build_hash, argument.as_bytes());
+                hash_field(&mut build_hash, argument.as_bytes());
             }
             let destination = audit_output.join(recipe.output);
             manifest.push_str(&format!(
@@ -365,38 +403,57 @@ fn build_inner(
     let statistics = batch::compile(&compiler, &scheduler, &output, &tasks, &files)?;
     manifest.push_str(&statistics);
     for recipe in recipes {
-        let bytes = read(&output.join(recipe.output))?;
-        field(&mut output_hash, recipe.output.as_bytes());
-        field(&mut output_hash, &bytes);
+        let bytes = read_file(&output.join(recipe.output))?;
+        hash_field(&mut output_hash, recipe.output.as_bytes());
+        hash_field(&mut output_hash, &bytes);
         if matches!(recipe.target, Target::Spirv(_)) {
             has_spirv = true;
-            field(&mut spirv_hash, recipe.entry.as_bytes());
-            field(&mut spirv_hash, &bytes);
-            if audit {
-                field(&mut audit_hash, recipe.output.as_bytes());
-                field(&mut audit_hash, &read(&audit_output.join(recipe.output))?);
+            hash_field(&mut spirv_hash, recipe.entry.as_bytes());
+            hash_field(&mut spirv_hash, &bytes);
+            if audit || paired {
+                if relations[recipe.output] == AuditRelation::Inline {
+                    batch::publish_file(&audit_output.join(recipe.output), &bytes)?;
+                }
+                let audit_bytes = read_file(&audit_output.join(recipe.output))?;
+                hash_field(&mut audit_hash, recipe.output.as_bytes());
+                hash_field(&mut audit_hash, &audit_bytes);
+                hash_field(
+                    &mut output_hash,
+                    format!("audit/{}", recipe.output).as_bytes(),
+                );
+                hash_field(&mut output_hash, &audit_bytes);
+                manifest.push_str(&format!(
+                    "artifact {} main_blake3={} audit_blake3={} relation={:?}\n",
+                    recipe.output,
+                    blake3::hash(&bytes),
+                    blake3::hash(&audit_bytes),
+                    relations[recipe.output]
+                ));
             }
         }
     }
-    if audit && has_spirv {
-        emit("AUDIT_SPIRV_BLAKE3", &audit_hash.finalize().to_hex());
+    if (audit || paired) && has_spirv {
+        emit_cargo_env("AUDIT_SPIRV_BLAKE3", &audit_hash.finalize().to_hex());
         manifest.push_str(&format!(
             "audit_spirv_blake3={}\n",
             audit_hash.finalize().to_hex()
         ));
     }
-    emit("SLANG_VERSION", &compiler.version);
-    emit("SLANG_COMPILER", &compiler.path.to_string_lossy());
-    emit("SLANG_COMPILER_BLAKE3", &compiler.identity);
-    emit("SOURCE_BLAKE3", &source_hash.finalize().to_hex());
-    emit("SHADER_BUILD_BLAKE3", &build_hash.finalize().to_hex());
-    emit("SHADER_OUTPUT_BLAKE3", &output_hash.finalize().to_hex());
+    emit_cargo_env("SLANG_VERSION", &compiler.version);
+    emit_cargo_env("SLANG_COMPILER", &compiler.path.to_string_lossy());
+    emit_cargo_env("SLANG_COMPILER_BLAKE3", &compiler.identity);
+    emit_cargo_env("SOURCE_BLAKE3", &source_hash.finalize().to_hex());
+    emit_cargo_env("SHADER_BUILD_BLAKE3", &build_hash.finalize().to_hex());
+    emit_cargo_env("SHADER_OUTPUT_BLAKE3", &output_hash.finalize().to_hex());
     if has_spirv {
-        emit("SPIRV_BLAKE3", &spirv_hash.finalize().to_hex());
+        emit_cargo_env("SPIRV_BLAKE3", &spirv_hash.finalize().to_hex());
     }
     let path = output.join("shader-build.txt");
     fs::write(&path, manifest).map_err(|source| Error::Io { path, source })?;
-    Ok(audit_output)
+    Ok(AuditedBuild {
+        directory: audit_output,
+        relations,
+    })
 }
 
 struct Compiler {
@@ -411,9 +468,9 @@ impl Compiler {
     }
 
     fn find(track_cargo: bool) -> Result<Self, Error> {
-        let track = |path: &Path| {
+        let track_input = |path: &Path| {
             if track_cargo {
-                crate::track(path);
+                crate::track_cargo_input(path);
             }
         };
         for variable in [
@@ -442,7 +499,7 @@ impl Compiler {
                     .join(if cfg!(windows) { "Bin" } else { "bin" })
                     .join(name);
                 if let Some(parent) = path.parent().filter(|parent| parent.is_dir()) {
-                    track(parent);
+                    track_input(parent);
                 }
                 path.is_file().then_some(path)
             })
@@ -459,17 +516,17 @@ impl Compiler {
             env::split_paths(&paths)
                 .inspect(|directory| {
                     if directory.is_dir() {
-                        track(directory);
+                        track_input(directory);
                     }
                 })
                 .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
                 .find(|path| path.is_file())
                 .ok_or_else(|| Error::Compiler(requested.clone()))?
         };
-        Self::inspect(&resolved, track)
+        Self::inspect(&resolved, track_input)
     }
 
-    fn inspect(resolved: &Path, track: impl Fn(&Path)) -> Result<Self, Error> {
+    fn inspect(resolved: &Path, track_input: impl Fn(&Path)) -> Result<Self, Error> {
         let path = fs::canonicalize(resolved).map_err(|source| Error::Io {
             path: resolved.to_owned(),
             source,
@@ -480,12 +537,12 @@ impl Compiler {
                 path.display()
             )));
         }
-        track(resolved);
+        track_input(resolved);
         if let Some(parent) = resolved.parent().filter(|parent| parent.is_dir()) {
-            track(parent);
+            track_input(parent);
         }
-        track(&path);
-        let parent = path.parent().expect("canonical 文件拥有父目录");
+        track_input(&path);
+        let parent = path.parent().expect("canonical_path 文件拥有父目录");
         // 安装目录跟踪组件增删；只将 Slang 组件纳入身份，避免无关 SDK 二进制影响指纹。
         let mut directories = BTreeSet::from([parent.to_owned()]);
         if let Some(root) = parent.parent() {
@@ -505,7 +562,7 @@ impl Compiler {
         }
         let mut components = BTreeSet::from([path.clone()]);
         for directory in directories {
-            track(&directory);
+            track_input(&directory);
             for entry in fs::read_dir(&directory).map_err(|source| Error::Io {
                 path: directory.clone(),
                 source,
@@ -523,17 +580,17 @@ impl Compiler {
                 }
             }
         }
-        let version = run(validated_command(&path).arg("-version"), "-version", &path)?;
+        let version = run_compiler(validated_command(&path).arg("-version"), "-version", &path)?;
         let version = String::from_utf8_lossy(&version)
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
         let mut hash = blake3::Hasher::new();
-        field(&mut hash, path.to_string_lossy().as_bytes());
-        field(&mut hash, version.as_bytes());
-        field(&mut hash, b"SLANG_RUN_SPIRV_VALIDATION=1");
-        for component in files(components)? {
-            field(&mut hash, component.to_string_lossy().as_bytes());
+        hash_field(&mut hash, path.to_string_lossy().as_bytes());
+        hash_field(&mut hash, version.as_bytes());
+        hash_field(&mut hash, b"SLANG_RUN_SPIRV_VALIDATION=1");
+        for component in collect_input_files(components)? {
+            hash_field(&mut hash, component.to_string_lossy().as_bytes());
             hash_file(&mut hash, &component)?;
         }
         Ok(Self {
@@ -551,7 +608,96 @@ fn validated_command(path: &Path) -> Command {
     command
 }
 
+fn compiler_arguments(
+    recipe: &Recipe<'_>,
+    source: String,
+    includes: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut arguments = vec![
+        source,
+        "-std".into(),
+        "2026".into(),
+        "-O3".into(),
+        debug_argument(recipe.target).into(),
+    ];
+    for include in includes {
+        arguments.extend(["-I".into(), include]);
+    }
+    match recipe.target {
+        Target::Spirv(profile) => arguments.extend([
+            "-target".into(),
+            "spirv".into(),
+            "-profile".into(),
+            profile.into(),
+            "-emit-spirv-directly".into(),
+            "-fvk-use-entrypoint-name".into(),
+        ]),
+        Target::Wgsl => arguments.extend(["-target".into(), "wgsl".into()]),
+    }
+    arguments.extend([
+        "-entry".into(),
+        recipe.entry.into(),
+        "-stage".into(),
+        recipe.stage.into(),
+    ]);
+    arguments.extend(recipe.args.iter().map(|argument| (*argument).to_owned()));
+    if separate_debug(recipe) {
+        arguments.push("-separate-debug-info".into());
+    }
+    if matches!(recipe.target, Target::Wgsl) {
+        arguments.push("-g0".into());
+    }
+    arguments
+}
+
+fn separate_debug(recipe: &Recipe<'_>) -> bool {
+    separate_debug_for(recipe, cfg!(shader_release))
+}
+
+fn separate_debug_for(recipe: &Recipe<'_>, release: bool) -> bool {
+    if !release || !matches!(recipe.target, Target::Spirv(_)) {
+        return false;
+    }
+    recipe
+        .args
+        .iter()
+        .copied()
+        .rev()
+        .find(|argument| matches!(*argument, "-g" | "-g0" | "-g1" | "-g2" | "-g3"))
+        .is_none_or(|argument| argument == "-g3")
+}
+
+fn canonical_path(path: &Path) -> Result<PathBuf, Error> {
+    fs::canonicalize(path).map_err(|source| Error::Io {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn command_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    // Slang 的 include 拼接不接受 Windows verbatim 前缀；文件身份仍使用 canonical_path 路径。
+    if cfg!(windows) {
+        if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
+            return format!("\\\\{unc}");
+        }
+        if let Some(absolute) = text.strip_prefix("\\\\?\\") {
+            return absolute.to_owned();
+        }
+    }
+    text.into_owned()
+}
+
 fn validate_recipe(recipe: &Recipe<'_>) -> Result<(), Error> {
+    if recipe
+        .args
+        .iter()
+        .any(|argument| argument.starts_with("-separate-debug-info"))
+    {
+        return Err(Error::Configuration(
+            "separate-debug输出由请求所有者管理".into(),
+        ));
+    }
     if matches!(recipe.target, Target::Spirv(_))
         && recipe.args.iter().any(|argument| {
             argument.starts_with("-skip-spirv-validation")
@@ -563,7 +709,7 @@ fn validate_recipe(recipe: &Recipe<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-fn run(command: &mut Command, entry: &str, compiler: &Path) -> Result<Vec<u8>, Error> {
+fn run_compiler(command: &mut Command, entry: &str, compiler: &Path) -> Result<Vec<u8>, Error> {
     let result = command.output().map_err(|source| Error::Io {
         path: compiler.to_owned(),
         source,
@@ -587,16 +733,18 @@ fn run(command: &mut Command, entry: &str, compiler: &Path) -> Result<Vec<u8>, E
     })
 }
 
-fn files(roots: impl IntoIterator<Item = PathBuf>) -> Result<BTreeSet<PathBuf>, Error> {
+fn collect_input_files(
+    roots: impl IntoIterator<Item = PathBuf>,
+) -> Result<BTreeSet<PathBuf>, Error> {
     let mut pending: BTreeSet<_> = roots.into_iter().collect();
     let mut visited = BTreeSet::new();
     let mut result = BTreeSet::new();
     while let Some(path) = pending.pop_first() {
-        let canonical = fs::canonicalize(&path).map_err(|source| Error::Io {
+        let canonical_path = fs::canonicalize(&path).map_err(|source| Error::Io {
             path: path.clone(),
             source,
         })?;
-        if !visited.insert(canonical) {
+        if !visited.insert(canonical_path) {
             continue;
         }
         if path.is_dir() {
@@ -620,7 +768,7 @@ fn files(roots: impl IntoIterator<Item = PathBuf>) -> Result<BTreeSet<PathBuf>, 
     Ok(result)
 }
 
-fn read(path: &Path) -> Result<Vec<u8>, Error> {
+fn read_file(path: &Path) -> Result<Vec<u8>, Error> {
     fs::read(path).map_err(|source| Error::Io {
         path: path.to_owned(),
         source,
@@ -640,22 +788,73 @@ fn hash_file(hash: &mut blake3::Hasher, path: &Path) -> Result<(), Error> {
     })
 }
 
-fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
+fn hash_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(&(bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
 }
 
-fn track(path: &Path) {
+fn track_cargo_input(path: &Path) {
     println!("cargo::rerun-if-changed={}", path.display());
 }
 
-fn emit(name: &str, value: &str) {
+fn emit_cargo_env(name: &str, value: &str) {
     println!("cargo::rustc-env={name}={value}");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separate_debug_respects_target_profile_and_last_override() {
+        let recipe = |target, args| Recipe {
+            source: "unused.slang",
+            entry: "main",
+            stage: "compute",
+            output: "unused",
+            target,
+            args,
+        };
+        for (arguments, expected) in [
+            (&[][..], true),
+            (&["-g0"][..], false),
+            (&["-g3", "-g0"][..], false),
+            (&["-g0", "-g3"][..], true),
+            (&["-g1"][..], false),
+        ] {
+            assert_eq!(
+                separate_debug_for(&recipe(Target::Spirv("spirv_1_4"), arguments), true),
+                expected
+            );
+            assert!(!separate_debug_for(
+                &recipe(Target::Spirv("spirv_1_4"), arguments),
+                false
+            ));
+            assert!(!separate_debug_for(&recipe(Target::Wgsl, arguments), true));
+        }
+    }
+
+    #[test]
+    fn recipe_cannot_override_the_owned_sidecar_output() {
+        for argument in [
+            "-separate-debug-info",
+            "-separate-debug-info-output",
+            "-separate-debug-info-output=x",
+        ] {
+            let recipe = Recipe {
+                source: "unused.slang",
+                entry: "main",
+                stage: "compute",
+                output: "unused",
+                target: Target::Spirv("spirv_1_4"),
+                args: &[argument],
+            };
+            assert!(matches!(
+                validate_recipe(&recipe),
+                Err(Error::Configuration(_))
+            ));
+        }
+    }
 
     #[test]
     fn compiler_process_fixes_the_validation_policy() {

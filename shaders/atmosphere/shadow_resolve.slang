@@ -37,40 +37,41 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
     let slices : uint = terrain_full(f) ? TERRAIN_SLICES : TERRAIN_SLICES / 8u;
     if (id.z == 0 && id.x < TERRAIN_RADIAL && id.y < slices)
     {
-        let slice : uint = terrain_slice_index(f, id.y);
-        let sample : uint = slice * TERRAIN_RADIAL + id.x;
-        let camera
-            : RayDesc = { f.source.camera.xyz, 0, terrain_ray(f, id.x, slice), TERRAIN_RANGE_M };
+        let slice = terrain_slice_index(f, id.y);
+        let sample = slice * TERRAIN_RADIAL + id.x;
+        let camera : RayDesc = { f.source.camera_position, 0, terrain_ray(f, id.x, slice),
+                                 TERRAIN_RANGE_M };
         let bits : uint = asuint(terrain_hit_distance<C, false>(scene, camera));
         let changed : bool = terrain_full(f) || (first_hits[sample] & 0x7fffffffu) != bits;
         first_hits[sample] = bits | (uint(changed) << 31u);
     }
-    let index : uint = (id.z * 512u + id.y) * 512u + id.x;
-    let cell : uint4 = cells[index];
+    let index = (id.z * 512u + id.y) * 512u + id.x;
+    let cell = cells[index];
     if ((cell.x & 0x80000000u) == 0)
         return;
     let last : uint = cell.x & 0x7fffffffu;
-    let size : float = sunShadowTexelSize(int(id.z));
-    let lo : int2 = int2(floor(f.source.grid.xy / size)) - 256;
-    let localCell : int2 = lo + ((int2(id.xy) - lo) & 511);
-    let tag : uint2 = terrain_column(f, int(id.z), int2(id.xy));
+    let size = shadow_texel_size(int(id.z));
+    let lo = int2(floor(f.source.wrapped_grid / size)) - 256;
+    let local_cell = lo + ((int2(id.xy) - lo) & 511);
+    let tag = terrain_column(f, int(id.z), int2(id.xy));
     // 重叠切片在四个已提交活跃帧内复用同一列。局部场景发布不清理相邻格。
-    if (all(cell.yz == tag) && cell.w != 0 && ((f.source.state.x - last) & 0x7fffffffu) < 4u)
+    if (all(cell.yz == tag) && cell.w != 0 && ((f.source.refresh_clock - last) & 0x7fffffffu) < 4u)
     {
         cells[index].x = last;
         return;
     }
-    let delta : float2 = (float2(localCell) + 0.5) * size - f.source.grid.xy;
-    let origin : float3 = f.source.camera.xyz + f.source.sun.xyz * (f.source.basisU.w + 4096.0) +
-                          f.source.basisU.xyz * delta.x + f.source.basisV.xyz * delta.y;
-    let ray : RayDesc = { origin, 0, -f.source.sun.xyz, 8192.0 };
-    let distance : float = terrain_hit_distance<C, true>(scene, ray);
+    let delta = (float2(local_cell) + 0.5) * size - f.source.wrapped_grid;
+    let origin = f.source.camera_position +
+                 f.source.sun_direction * (f.source.sun_depth_offset + 4096.0) +
+                 f.source.basis_u * delta.x + f.source.basis_v * delta.y;
+    let ray : RayDesc = { origin, 0, -f.source.sun_direction, 8192.0 };
+    let distance = terrain_hit_distance<C, true>(scene, ray);
     var blocker : float = -1e20;
     if (distance < ray.TMax)
     {
-        blocker = f.source.basisV.w + 4096.0 - distance;
+        blocker = f.source.wrapped_shadow_plane_depth + 4096.0 - distance;
         blocker -= floor(blocker * (1.0 / 32768.0)) * 32768.0;
     }
-    cells[index] = uint4(f.source.state.x, tag, blocker == 0 ? 0x80000000u : asuint(blocker));
+    cells[index] = uint4(f.source.refresh_clock, tag, blocker == 0 ? 0x80000000u : asuint(blocker));
 }
 }

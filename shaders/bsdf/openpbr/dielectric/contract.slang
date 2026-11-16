@@ -3,38 +3,41 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/contract.slang";
 
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/contract/sample.slang";
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.contract.sample;
 
-public static const let PRIME_FULL_COMPACT_TRANSMISSION_WAVELENGTHS_NM =
-    float3(630.0, 532.0, 467.0);
-
-public struct PrimeFullCompactTransmissionState
+namespace openpbr
 {
-    public var onb : PrimeFullOpenPbrOnb;
-    public var geometryThinWalled : uint;
+namespace kernel
+{
+public static const let FULL_COMPACT_TRANSMISSION_WAVELENGTHS_NM = float3(630.0, 532.0, 467.0);
+
+public struct TransmissionState
+{
+    public var frame : Frame;
+    public var geometry_thin_walled : uint;
     public var entering : uint;
-    public var rayT : float;
-    public var originalIor : float;
-    public var transmissionColor : float3;
-    public var specularMicrofacet : PrimeFullOpenPbrMicrofacet;
-    public var specularFresnel : PrimeFullOpenPbrSpecularFresnel;
-    public var transmissionMicrofacet : PrimeFullOpenPbrMicrofacet;
-    public var transmissionTint : float3;
-    public var transmissionVolume : PrimeFullOpenPbrVolume;
-    public var transmissionMultipleScattering : float3;
+    public var ray_t : float;
+    public var original_ior : float;
+    public var transmission_color : float3;
+    public var specular_microfacet : Microfacet;
+    public var specular_fresnel : SpecularFresnel;
+    public var transmission_microfacet : Microfacet;
+    public var transmission_tint : float3;
+    public var transmission_volume : Volume;
+    public var transmission_multiple_scattering : float3;
 };
 
-public struct PrimeFullCompactTransmissionEvaluation
+public struct TransmissionEvaluation
 {
-    public var throughput : PrimeFullOpenPbrThroughput;
+    public var response : Response;
     public var pdf : float;
 };
 
-public func primeFullCompactTransmissionMaterialFrame(w: float3,
-                                                      state: PrimeFullCompactTransmissionState)
-    ->float3
+public func transmission_material_frame(w: float3, state: TransmissionState)->float3
 {
     return state.entering != 0u ? w : float3(-w.x, w.y, -w.z);
+}
+}
 }

@@ -3,25 +3,30 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/sample.slang";
 
-import "bsdf/openpbr/contract/volume_sample.slang";
-import "bsdf/openpbr/dielectric/contract.slang";
-import "bsdf/openpbr/dielectric/refract.slang";
-import "bsdf/openpbr/dielectric/state.slang";
-import "bsdf/openpbr/dielectric/volume.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/contract/sample.slang";
+import bsdf.openpbr.contract.volume_sample;
+import bsdf.openpbr.dielectric.contract;
+import bsdf.openpbr.dielectric.refract;
+import bsdf.openpbr.dielectric.state;
+import bsdf.openpbr.dielectric.volume;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.contract.sample;
 
-public func primeFullCompactTransmissionSample(wi: float3, randomValue: float3,
-                                               state: PrimeFullCompactTransmissionState,
-                                               samplingFlags: uint, medium: PrimeFullOpenPbrVolume)
-    ->PrimeFullOpenPbrSampleResult
+namespace openpbr
 {
-    var result : PrimeFullOpenPbrSampleResult;
+namespace kernel
+{
+public func transmission_sample(wi: float3, random_value: float3, state: TransmissionState,
+                                sampling_flags: uint, medium: Volume)
+    ->SampleResult
+{
+    var result : SampleResult;
     result.medium = medium;
-    result.rayT = state.rayT;
-    result.bsdfSample = primeFullCompactTransmissionSampleRaw(
-        wi, randomValue, primeFullCompactTransmissionClosureState(state), samplingFlags);
-    primeFullCompactApplyTransmissionVolumeTransition(state, result);
+    result.ray_t = state.ray_t;
+    result.proposal = transmission_sample_raw(wi, random_value, transmission_closure_state(state),
+                                              sampling_flags);
+    apply_transmission_volume_transition(state, result);
     return result;
+}
+}
 }

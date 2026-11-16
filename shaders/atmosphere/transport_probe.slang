@@ -14,9 +14,9 @@ func transport_probe(uint3 id: SV_DispatchThreadID)->void
     probe_queries.GetDimensions(rows, stride);
     if (id.x >= (rows >> 1u))
         return;
-    let ray : float4 = probe_queries[2 * id.x];
-    let sun : float4 = probe_queries[2 * id.x + 1];
-    let result : Transport = integrate_at(ray.xyz, sun.xyz, sun.w, ray.w, p.size_steps.z);
+    let ray = probe_queries[2 * id.x];
+    let sun = probe_queries[2 * id.x + 1];
+    let result = integrate_at(ray.xyz, sun.xyz, sun.w, ray.w, p.integration_steps);
     probe_outputs[2 * id.x] = result.light;
     probe_outputs[2 * id.x + 1] = result.transmittance;
 }

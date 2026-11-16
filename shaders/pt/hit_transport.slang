@@ -16,8 +16,8 @@ public interface IHitScene : IScene
 };
 
 /// 只调度下一段主射线，材质closest-hit独占每次命中的解码和完整路径状态更新。
-/// miss保留公共环境处理；辅助量观察独立于照明路径。Reorder 在编译期选择 SER。
-public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let Reorder : bool>(
+/// miss保留公共环境处理；辅助量观察独立于照明路径。reorder 在编译期选择 SER。
+public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder : bool>(
     provider: Scene, guides: Guides, inout data: TransportCall)
     ->float
 {
@@ -48,7 +48,7 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let Reorder :
         found.SetShaderTableIndex(program + 1u);
         var call : MaterialCall = MaterialCall::input(data);
         // SBT记录已选择最终材质入口；让驱动按真实命中程序重排，不再把槽号当通用hint。
-        if (Reorder)
+        if (reorder)
             ReorderThread(found);
         HitObject::Invoke(found, call);
         data.path = call.result();

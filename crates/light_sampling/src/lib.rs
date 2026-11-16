@@ -24,7 +24,7 @@ pub use light_bvh as bvh;
 pub use quad::QuadArea;
 
 /// CPU 与 shader 共享的均匀整数选择器总数。
-pub const SELECTORS: u32 = 1 << 24;
+pub use bvh::SELECTORS;
 
 /// 沿几何法线正侧发射，对应 shader `LIGHT_FRONT`。
 pub const FRONT_SIDE: u32 = 1;

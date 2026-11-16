@@ -1,5 +1,6 @@
 /// 单位轴的均匀立体角圆锥；半角属于 (0,pi]，方向与轴须为单位向量。
 module cone;
+import math.constants;
 import geometry.frame;
 
 namespace geometry
@@ -7,13 +8,13 @@ namespace geometry
 /// 球面弦长平方；小角度下仍保留有效位，不计算 1-cos(angle)。
 public func cone_chord_squared(angle: float)->float
 {
-    let halfAngle : float = 0.5 * angle;
+    let half_angle = 0.5 * angle;
     // GPU sin 的绝对误差保证不足以约束微小圆盘的相对误差；此区间的余项低于 f32 舍入。
-    let squared : float = halfAngle * halfAngle;
-    let halfSine : float = halfAngle < 0.1
-                               ? halfAngle * (1 + squared * (-1.0 / 6.0 + squared * (1.0 / 120.0)))
-                               : sin(halfAngle);
-    return 4 * halfSine * halfSine;
+    let squared = half_angle * half_angle;
+    let half_sine = half_angle < 0.1
+                        ? half_angle * (1 + squared * (-1.0 / 6.0 + squared * (1.0 / 120.0)))
+                        : sin(half_angle);
+    return 4 * half_sine * half_sine;
 }
 
 public func uniform_cone_pdf(angle: float)->float
@@ -24,7 +25,7 @@ public func uniform_cone_pdf(angle: float)->float
 /// chord_squared为同一合法圆锥的弦长平方，可在CPU或采样所有者处预计算并共享。
 public func uniform_cone_pdf_chord(chord_squared: float)->float
 {
-    return (1.0 / 3.141592653589793) / chord_squared;
+    return math::frac_1_pi / chord_squared;
 }
 
 /// 发光域和反向 PDF 共用此谓词；避免单位向量点积的末位误差放大小角度边界。
@@ -49,10 +50,10 @@ public func sample_uniform_cone(axis: float3, angle: float, u: float2)->float3
 /// axis须为单位向量，u属于[0,1)²；chord_squared须对应同一圆锥，属于(0,4]。
 public func sample_uniform_cone_chord(axis: float3, chord_squared: float, u: float2)->float3
 {
-    let offset : float = 0.5 * chord_squared * u.x;
-    let z : float = 1 - offset;
+    let offset = 0.5 * chord_squared * u.x;
+    let z = 1 - offset;
     let radius : float = sqrt(offset * (2 - offset));
-    let phi : float = 6.283185307179586 * u.y;
+    let phi = math::tau * u.y;
     let tangent = unit_tangent(axis);
     var sine : float;
     var cosine : float;

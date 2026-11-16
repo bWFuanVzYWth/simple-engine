@@ -3,22 +3,27 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/volume.slang";
 
-import "bsdf/openpbr/contract/volume_sample.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/contract/volume.slang";
-import "bsdf/openpbr/dielectric/contract.slang";
+import bsdf.openpbr.contract.volume_sample;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.contract.volume;
+import bsdf.openpbr.dielectric.contract;
 
-public func primeFullCompactApplyTransmissionVolumeTransition(
-    state: PrimeFullCompactTransmissionState, inout result: PrimeFullOpenPbrSampleResult)
+namespace openpbr
+{
+namespace kernel
+{
+public func apply_transmission_volume_transition(state: TransmissionState,
+                                                 inout result: SampleResult)
     ->void
 {
-    if (state.geometryThinWalled != 0u ||
-        !primeFullOpenPbrIsTransmissive(result.bsdfSample.throughput.flags))
+    if (state.geometry_thin_walled != 0u || !is_transmissive(result.proposal.response.flags))
     {
         return;
     }
-    result.medium = state.transmissionVolume;
+    result.medium = state.transmission_volume;
     if (state.entering == 0u)
-        result.rayT = 0.0;
+        result.ray_t = 0.0;
+}
+}
 }

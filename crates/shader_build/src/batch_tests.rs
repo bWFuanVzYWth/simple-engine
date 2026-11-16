@@ -21,8 +21,8 @@ impl Fixture {
     fn new() -> Self {
         let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/shader-batch-tests");
         fs::create_dir_all(&parent).unwrap();
-        let root = Temporary::new(&parent).unwrap();
-        let root_path = root.0.clone();
+        let root = TemporaryDirectory::new(&parent).unwrap();
+        let root_path = root.path.clone();
         std::mem::forget(root);
         let source = root_path.join("source");
         fs::create_dir(&source).unwrap();
@@ -71,6 +71,17 @@ impl Fixture {
         }
         Task::new("main", args, output.join(format!("{value}.spv"))).unwrap()
     }
+    fn paired_task(&self, output: &Path, value: u32) -> Task {
+        let task = self.task(output, value, true);
+        let mut args = task.arguments;
+        for arg in &mut args {
+            if arg == "-g0" {
+                *arg = "-g3".into();
+            }
+        }
+        args.push("-separate-debug-info".into());
+        Task::new("main", args, task.destination).unwrap()
+    }
     fn run(&self, output: &Path, tasks: &[Task], jobs: usize) -> String {
         static COMPILER: OnceLock<Compiler> = OnceLock::new();
         let compiler = COMPILER.get_or_init(|| Compiler::find(false).unwrap());
@@ -86,6 +97,74 @@ impl Fixture {
             &self.root.join("cache"),
         )
         .unwrap()
+    }
+}
+
+#[test]
+fn publication_prepares_the_whole_group_before_replacing_outputs() {
+    let fixture = Fixture::new();
+    let main = fixture.root.join("main");
+    let invalid = fixture.root.join("directory");
+    fs::write(&main, b"old").unwrap();
+    fs::create_dir(&invalid).unwrap();
+    assert!(publish_files(&[(&main, b"new"), (&invalid, b"audit")]).is_err());
+    assert_eq!(fs::read(main).unwrap(), b"old");
+}
+
+#[test]
+#[ignore = "需要Slang；不创建GPU"]
+fn paired_cache_restores_both_outputs_in_a_new_slot() {
+    let fixture = Fixture::new();
+    let first = fixture.output("first");
+    let second = fixture.output("second");
+    assert!(
+        fixture
+            .run(&first, &[fixture.paired_task(&first, 1)], 1)
+            .contains("compiled=1")
+    );
+    assert!(
+        fixture
+            .run(&second, &[fixture.paired_task(&second, 1)], 1)
+            .contains("cache_hits=1")
+    );
+    for file in ["1.spv", "1.audit.spv", "1.json"] {
+        assert_eq!(
+            fs::read(first.join(file)).unwrap(),
+            fs::read(second.join(file)).unwrap()
+        );
+    }
+    super::super::verify_audit_pair(
+        &fs::read(second.join("1.spv")).unwrap(),
+        &fs::read(second.join("1.audit.spv")).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "需要Slang；不创建GPU"]
+fn missing_or_corrupt_cached_sidecar_recompiles_the_pair() {
+    let fixture = Fixture::new();
+    let output = fixture.output("out");
+    fixture.run(&output, &[fixture.paired_task(&output, 1)], 1);
+    for missing in [true, false] {
+        for object in fs::read_dir(fixture.root.join("cache/objects")).unwrap() {
+            let audit = object.unwrap().path().join("audit.spv");
+            if missing {
+                fs::remove_file(audit).unwrap();
+            } else {
+                fs::write(audit, b"corrupt").unwrap();
+            }
+        }
+        assert!(
+            fixture
+                .run(&output, &[fixture.paired_task(&output, 1)], 1)
+                .contains("compiled=1")
+        );
+        super::super::verify_audit_pair(
+            &fs::read(output.join("1.spv")).unwrap(),
+            &fs::read(output.join("1.audit.spv")).unwrap(),
+        )
+        .unwrap();
     }
 }
 impl Drop for Fixture {
@@ -122,12 +201,12 @@ fn cached_reflection_survives_a_different_output_slot() {
             .contains("cache_hits=1")
     );
     assert_eq!(
-        read(&a.join("1.spv")).unwrap(),
-        read(&b.join("1.spv")).unwrap()
+        read_file(&a.join("1.spv")).unwrap(),
+        read_file(&b.join("1.spv")).unwrap()
     );
     assert_eq!(
-        read(&a.join("1.json")).unwrap(),
-        read(&b.join("1.json")).unwrap()
+        read_file(&a.join("1.json")).unwrap(),
+        read_file(&b.join("1.json")).unwrap()
     );
 }
 
@@ -169,14 +248,14 @@ fn new_generated_include_shadows_the_cached_module() {
         task
     };
     f.run(&out, &[task()], 1);
-    let first = read(&out.join("1.spv")).unwrap();
+    let first = read_file(&out.join("1.spv")).unwrap();
     fs::write(
         out.join("constant.slang"),
         "module constant; public func value() -> uint { return 23; }",
     )
     .unwrap();
     assert!(f.run(&out, &[task()], 1).contains("compiled=1"));
-    assert_ne!(first, read(&out.join("1.spv")).unwrap());
+    assert_ne!(first, read_file(&out.join("1.spv")).unwrap());
 }
 
 #[test]
@@ -198,7 +277,7 @@ fn corrupted_cache_is_repaired_instead_of_published() {
     let f = Fixture::new();
     let out = f.output("out");
     f.run(&out, &[f.task(&out, 1, false)], 1);
-    let before = read(&out.join("1.spv")).unwrap();
+    let before = read_file(&out.join("1.spv")).unwrap();
     for object in fs::read_dir(f.root.join("cache/objects")).unwrap() {
         fs::write(object.unwrap().path().join("shader"), b"corrupt").unwrap();
     }
@@ -206,7 +285,7 @@ fn corrupted_cache_is_repaired_instead_of_published() {
         f.run(&out, &[f.task(&out, 1, false)], 1)
             .contains("compiled=1")
     );
-    assert_eq!(before, read(&out.join("1.spv")).unwrap());
+    assert_eq!(before, read_file(&out.join("1.spv")).unwrap());
 }
 
 #[test]
@@ -231,8 +310,8 @@ fn generated_module_content_disambiguates_output_slots() {
     .unwrap();
     assert!(f.run(&b, &[f.task(&b, 1, false)], 1).contains("compiled=1"));
     assert_ne!(
-        read(&a.join("1.spv")).unwrap(),
-        read(&b.join("1.spv")).unwrap()
+        read_file(&a.join("1.spv")).unwrap(),
+        read_file(&b.join("1.spv")).unwrap()
     );
 }
 
@@ -279,8 +358,8 @@ fn measure_cold_serial_parallel_and_warm_batches() {
     let warm = parallel.run(&b, &tasks_b, 4);
     for value in 0..16 {
         assert_eq!(
-            read(&a.join(format!("{value}.spv"))).unwrap(),
-            read(&b.join(format!("{value}.spv"))).unwrap()
+            read_file(&a.join(format!("{value}.spv"))).unwrap(),
+            read_file(&b.join(format!("{value}.spv"))).unwrap()
         );
     }
     println!("serial\n{one}parallel\n{many}warm\n{warm}");
@@ -292,9 +371,9 @@ fn restoring_a_previous_source_version_reuses_its_artifact() {
     let f = Fixture::new();
     let out = f.output("out");
     let path = f.source.join("constant.slang");
-    let original = read(&path).unwrap();
+    let original = read_file(&path).unwrap();
     f.run(&out, &[f.task(&out, 1, true)], 1);
-    let first = read(&out.join("1.spv")).unwrap();
+    let first = read_file(&out.join("1.spv")).unwrap();
     fs::write(
         &path,
         "module constant; public func value() -> uint { return 18; }",
@@ -309,7 +388,7 @@ fn restoring_a_previous_source_version_reuses_its_artifact() {
         f.run(&out, &[f.task(&out, 1, true)], 1)
             .contains("cache_hits=1")
     );
-    assert_eq!(first, read(&out.join("1.spv")).unwrap());
+    assert_eq!(first, read_file(&out.join("1.spv")).unwrap());
 }
 #[test]
 #[ignore = "需要 Slang；不创建 GPU"]
@@ -326,11 +405,11 @@ fn concurrent_output_slots_publish_one_shared_cache_entry() {
         usize::from(one.contains("cache_hits=1")) + usize::from(two.contains("cache_hits=1"));
     assert_eq!(hits, 1, "{one}\n{two}");
     assert_eq!(
-        read(&a.join("1.spv")).unwrap(),
-        read(&b.join("1.spv")).unwrap()
+        read_file(&a.join("1.spv")).unwrap(),
+        read_file(&b.join("1.spv")).unwrap()
     );
     assert_eq!(
-        read(&a.join("1.json")).unwrap(),
-        read(&b.join("1.json")).unwrap()
+        read_file(&a.join("1.json")).unwrap(),
+        read_file(&b.join("1.json")).unwrap()
     );
 }

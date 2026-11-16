@@ -1,7 +1,9 @@
 /// 首表面重建启发式；只改变提案概率，不改变物理响应。单一有效通道退化为概率1。
 module primary_policy;
 
-namespace openpbr_primary
+namespace openpbr
+{
+namespace primary
 {
 public func reflection_probability(reflection: float, interior: float)->float
 {
@@ -13,5 +15,6 @@ public func reflection_probability(reflection: float, interior: float)->float
 public func selection(random: float, samples: uint, lane: uint)->float
 {
     return (float(lane) + random) / float(samples);
+}
 }
 }

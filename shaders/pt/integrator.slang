@@ -15,16 +15,12 @@ import "bsdf/openpbr/contract/material.slang";
 
 namespace pt
 {
-public func finite3(value: float3)->bool
-{
-    return all(isfinite(value));
-}
-
 public func finish(inout path: PathState, status: uint)->void
 {
     path.depth += 1;
-    path.status = finite3(path.throughput) && finite3(path.radiance) ? status : PATH_INVALID;
-    let active : bool = path.status == PATH_ACTIVE;
+    path.status =
+        all(isfinite(path.throughput)) && all(isfinite(path.radiance)) ? status : PATH_INVALID;
+    let active = path.status == PATH_ACTIVE;
     path.origin = select(active, path.origin, float3(0));
     path.previous = select(active, path.previous, float3(0));
     path.previous_pdf = select(active, path.previous_pdf, 0.0);
@@ -60,10 +56,9 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
     path.dielectric_events = data.path.dielectric_events;
     let hit : Hit = data.hit;
     path.throughput *= segment_transmittance(path.medium.yzw, hit.distance);
-    let view : float3 = -path.direction;
-    let continuation : bool = path.depth < settings.budget;
-    let sampler : PathSampler =
-                      path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
+    let view = -path.direction;
+    let continuation = path.depth < settings.budget;
+    let sampler = path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     if (!continuation)
     {
         finish(path, PATH_DONE);
@@ -78,16 +73,15 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
         return;
     }
     let boundary : DeltaInterface = scene.delta_interface(hit, path.medium);
-    let frame : PrimeFullOpenPbrOnb =
+    let frame : openpbr::kernel::Frame =
                     openpbr::specialized_frame<openpbr::CAP_DELTA_SOLID_DIELECTRIC>(
                         boundary.normal, view, path.medium, boundary.transmitted);
-    let ior : float = path.medium.x > boundary.transmitted.x
-                          ? path.medium.x / boundary.transmitted.x
-                          : boundary.transmitted.x / path.medium.x;
+    let ior = path.medium.x > boundary.transmitted.x ? path.medium.x / boundary.transmitted.x
+                                                     : boundary.transmitted.x / path.medium.x;
     let scattered
         : openpbr::Sample = openpbr::specialized_result<openpbr::CAP_DELTA_SOLID_DIELECTRIC, false>(
-              openpbr_composition::SolidDelta.sample(primeFullOpenPbrOnbToLocal(frame, view),
-                                                     sampler.bsdf(path.depth), ior),
+              openpbr::closure::SolidDelta.sample(openpbr::kernel::to_local(frame, view),
+                                                  sampler.bsdf(path.depth), ior),
               frame, view, path.medium, boundary.transmitted);
     if (scattered.events == 0)
     {
@@ -111,8 +105,8 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
         status = PATH_DONE;
     else if (path.depth + 1 >= 2)
     {
-        let survival : float = roulette_probability(path.throughput, path.eta_scale,
-                                                    settings.square_root_roulette);
+        let survival =
+            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)
@@ -127,7 +121,7 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
     data.path = path;
 }
 
-func visible_flow<let Flow : uint, Scene, let Deferred : bool = false>(scene: Scene, hit: Hit,
+func visible_flow<let flow : uint, Scene, let deferred : bool = false>(scene: Scene, hit: Hit,
                                                                        material: SurfaceMaterial,
                                                                        view: float3,
                                                                        light: LightSample,
@@ -136,9 +130,9 @@ func visible_flow<let Flow : uint, Scene, let Deferred : bool = false>(scene: Sc
     where Scene : IFlowScene
 {
     return light.pdf > 0 &&
-           openpbr::may_evaluate_flow<Flow>(material.pbr, shading_normal(hit, material), view,
+           openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
                                             light.direction, medium, material.transmitted) &&
-           (Deferred || !scene.occluded(light.visibility));
+           (deferred || !scene.occluded(light.visibility));
 }
 
 /// 不含光源辐射的两族贡献；材质阶段已折叠BSDF、MIS、介质和路径吞吐量。
@@ -149,13 +143,13 @@ public struct DirectWeights
     public var lamp : float3;
 };
 
-func direct_weight<let Flow : uint>(point_value: geometry::SurfacePoint, view: float3,
+func direct_weight<let flow : uint>(point_value: geometry::SurfacePoint, view: float3,
                                     incident: float4, transmitted: float4, light: LightSample,
                                     evaluated: float4, throughput: float3)
     ->float3
 {
     var extinction : float3 = incident.yzw;
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
+    if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
         dot(view, point_value.normal) * dot(light.direction, point_value.normal) < 0)
         extinction = transmitted.yzw;
     return throughput * triple_product(evaluated.xyz,
@@ -171,7 +165,7 @@ func direct_evaluation(evaluated: openpbr::Evaluation, light_pdf: float, continu
                   power_heuristic_over_pdf(light_pdf, continuation ? evaluated.pdf : 0));
 }
 
-func direct_contribution<let Flow : uint, Scene>(scene: Scene, point_value: geometry::SurfacePoint,
+func direct_contribution<let flow : uint, Scene>(scene: Scene, point_value: geometry::SurfacePoint,
                                                  view: float3, incident: float4,
                                                  transmitted: float4, light: LightSample,
                                                  evaluated: float4, solar: bool, throughput: float3)
@@ -179,16 +173,16 @@ func direct_contribution<let Flow : uint, Scene>(scene: Scene, point_value: geom
     where Scene : IFlowScene
 {
     var extinction : float3 = incident.yzw;
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
+    if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
         dot(view, point_value.normal) * dot(light.direction, point_value.normal) < 0)
         extinction = transmitted.yzw;
-    let t : float3 = segment_transmittance(extinction, light.distance);
-    let emission : float3 = scene.light_emission(point_value, light, solar);
+    let t = segment_transmittance(extinction, light.distance);
+    let emission = scene.light_emission(point_value, light, solar);
     return throughput * triple_product(evaluated.xyz, emission * t, evaluated.w);
 }
 
 // 太阳只折叠 MIS，面灯立即形成最终贡献；大气求值始终在共享 BSDF 状态结束之后。
-struct FlowLighting<let Flow : uint, Scene, let Deferred : bool = false>
+struct FlowLighting<let flow : uint, Scene, let deferred : bool = false>
     : openpbr::IFlowEvaluationConsumer
     where Scene : IFlowScene
 {
@@ -213,15 +207,15 @@ struct FlowLighting<let Flow : uint, Scene, let Deferred : bool = false>
             sun_evaluated = direct_evaluation(evaluated, sun.pdf, continuation);
         else
         {
-            let response : float4 = direct_evaluation(evaluated, light.pdf, continuation);
+            let response = direct_evaluation(evaluated, light.pdf, continuation);
             if (any(response.xyz > 0))
             {
-                if (Deferred)
-                    lamp_weight = direct_weight<Flow>(point, view, incident, transmitted, light,
+                if (deferred)
+                    lamp_weight = direct_weight<flow>(point, view, incident, transmitted, light,
                                                       response, throughput);
                 else
                     lamp_radiance =
-                        direct_contribution<Flow>(scene, point, view, incident, transmitted, light,
+                        direct_contribution<flow>(scene, point, view, incident, transmitted, light,
                                                   response, false, throughput);
                 lamp_valid = true;
             }
@@ -230,30 +224,30 @@ struct FlowLighting<let Flow : uint, Scene, let Deferred : bool = false>
 };
 
 /// 一次 callable 消费完整组合顶点；分量不再嵌套调用 callable。
-/// Flow 由资源世代证明，运行时仅翻译参数、查询可见性和采样实际分量。
-/// CompleteTransport=false由调用方先消费命中段Beer，返回后执行统一RR和finish；
+/// flow 由资源世代证明，运行时仅翻译参数、查询可见性和采样实际分量。
+/// complete_transport=false由调用方先消费命中段Beer，返回后执行统一RR和finish；
 /// 此时depth不递增，status为材质顶点结果，不能直接送入下一次追踪。
-public func process_flow<let Flow : uint, Scene, let LightMask : uint = 3,
-                         let CompleteTransport : bool = true>(scene: Scene,
-                                                              inout data: TransportCall,
-                                                              settings: Settings)
+public func process_flow<let flow : uint, Scene, let light_mask : uint = 3,
+                         let complete_transport : bool = true>(scene: Scene,
+                                                               inout data: TransportCall,
+                                                               settings: Settings)
     ->void
     where Scene : IFlowScene
 {
     var unused : DirectWeights;
-    process_flow_vertex<Flow, Scene, LightMask, CompleteTransport, false>(scene, data, settings,
-                                                                          unused);
+    process_flow_vertex<flow, Scene, light_mask, complete_transport, false>(scene, data, settings,
+                                                                            unused);
 }
 
-/// Deferred=true时不在材质叶子中追踪阴影或读取光源辐射；调用者消费weights。
-public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3,
-                                let CompleteTransport : bool = true, let Deferred : bool = true>(
+/// deferred=true时不在材质叶子中追踪阴影或读取光源辐射；调用者消费weights。
+public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 3,
+                                let complete_transport : bool = true, let deferred : bool = true>(
     scene: Scene, inout data: TransportCall, settings: Settings, out weights: DirectWeights)
     ->void
     where Scene : IFlowScene
 {
     weights = {};
-    static_assert((LightMask & ~3u) == 0u, "unknown light strategy mask");
+    static_assert((light_mask & ~3u) == 0u, "unknown light strategy mask");
     var path : PathState = {};
     path.direction = data.path.direction;
     path.throughput = data.path.throughput;
@@ -262,50 +256,49 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
     path.eta_scale = data.path.eta_scale;
     path.depth = data.path.depth;
     path.dielectric_events = data.path.dielectric_events;
-    if ((Flow & openpbr::FLOW_EMISSION) != 0u)
+    if ((flow & openpbr::FLOW_EMISSION) != 0u)
     {
         path.previous = data.path.previous;
         path.previous_pdf = data.path.previous_pdf;
     }
     let hit : Hit = data.hit;
-    if (CompleteTransport)
+    if (complete_transport)
         path.throughput *= segment_transmittance(path.medium.yzw, hit.distance);
-    let material : SurfaceMaterial = scene.resolve_flow(hit, Flow, path.medium);
-    if ((Flow & openpbr::FLOW_EMISSION) != 0u)
+    let material : SurfaceMaterial = scene.resolve_flow(hit, flow, path.medium);
+    if ((flow & openpbr::FLOW_EMISSION) != 0u)
         accumulate_emission(scene, hit, material.emission, path);
     var view : float3 = -path.direction;
     var continuation : bool = path.depth < settings.budget;
-    let sampler : PathSampler =
-                      path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
+    let sampler = path_sampler(data.pixel, data.sample, settings.resolution, settings.seed);
     var sun : LightSample = {};
     var light : LightSample = {};
     var evaluation_mask : uint = 0;
-    if (((Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
+    if (((flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
                   openpbr::FLOW_CONTINUOUS_REFLECTION | openpbr::FLOW_CONTINUOUS_TRANSMISSION)) !=
          0u))
     {
-        if ((LightMask & 1u) != 0u)
+        if ((light_mask & 1u) != 0u)
         {
             sun = scene.sample_sun(hit.surface, sampler.sun(path.depth));
-            if (visible_flow<Flow, Scene, Deferred>(scene, hit, material, view, sun, path.medium))
+            if (visible_flow<flow, Scene, deferred>(scene, hit, material, view, sun, path.medium))
                 evaluation_mask |= 1u;
         }
-        if ((LightMask & 2u) != 0u)
+        if ((light_mask & 2u) != 0u)
         {
             light = scene.sample_light(hit.surface, sampler.light(path.depth));
-            if (visible_flow<Flow, Scene, Deferred>(scene, hit, material, view, light, path.medium))
+            if (visible_flow<flow, Scene, deferred>(scene, hit, material, view, light, path.medium))
                 evaluation_mask |= 2u;
         }
     }
-    let limited : bool = (Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
+    let limited : bool = (flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
                          path.dielectric_events + 1 > settings.dielectric_limit;
     var bsdf_sample = float3(0.0);
-    if ((Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
+    if ((flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
                  openpbr::FLOW_DIELECTRIC_REFLECTION | openpbr::FLOW_CONDUCTOR_REFLECTION |
                  openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0u &&
         continuation && !limited)
         bsdf_sample = sampler.bsdf(path.depth);
-    var lighting : FlowLighting<Flow, Scene, Deferred> = {};
+    var lighting : FlowLighting<flow, Scene, deferred> = {};
     lighting.scene = scene;
     lighting.point = hit.surface;
     lighting.view = view;
@@ -315,47 +308,48 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
     lighting.light = light;
     lighting.throughput = path.throughput;
     lighting.continuation = continuation;
-    let scattered : openpbr::Sample =
-                        openpbr::shade_flow_consume<Flow, openpbr::Energy,
-                                                    FlowLighting<Flow, Scene, Deferred>, LightMask>(
-                            scene.energy(), material.pbr, shading_normal(hit, material), view,
-                            sun.direction, light.direction, evaluation_mask, bsdf_sample,
-                            continuation && !limited, path.medium, material.transmitted, lighting);
-    if (((Flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
+    let scattered
+        : openpbr::Sample =
+              openpbr::shade_flow_consume<flow, openpbr::Energy,
+                                          FlowLighting<flow, Scene, deferred>, light_mask>(
+                  scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
+                  light.direction, evaluation_mask, bsdf_sample, continuation && !limited,
+                  path.medium, material.transmitted, lighting);
+    if (((flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
                   openpbr::FLOW_CONTINUOUS_REFLECTION | openpbr::FLOW_CONTINUOUS_TRANSMISSION)) !=
          0u))
     {
-        if ((LightMask & 1u) != 0u && any(lighting.sun_evaluated.xyz > 0))
+        if ((light_mask & 1u) != 0u && any(lighting.sun_evaluated.xyz > 0))
         {
-            if (Deferred)
+            if (deferred)
                 weights.sun =
-                    direct_weight<Flow>(hit.surface, view, path.medium, material.transmitted, sun,
+                    direct_weight<flow>(hit.surface, view, path.medium, material.transmitted, sun,
                                         lighting.sun_evaluated, path.throughput);
             else
-                path.radiance += direct_contribution<Flow>(
+                path.radiance += direct_contribution<flow>(
                     scene, hit.surface, view, path.medium, material.transmitted, sun,
                     lighting.sun_evaluated, true, path.throughput);
         }
-        if (Deferred)
+        if (deferred)
             weights.lamp = lighting.lamp_weight;
-        else if ((LightMask & 2u) != 0u && lighting.lamp_valid)
+        else if ((light_mask & 2u) != 0u && lighting.lamp_valid)
             path.radiance += lighting.lamp_radiance;
     }
     if (!continuation)
     {
-        if (CompleteTransport)
+        if (complete_transport)
             finish(path, PATH_DONE);
         else
             path.status = PATH_DONE;
         data.path = path;
         return;
     }
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u)
+    if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u)
     {
         path.dielectric_events += 1;
         if (path.dielectric_events > settings.dielectric_limit)
         {
-            if (CompleteTransport)
+            if (complete_transport)
                 finish(path, PATH_DIELECTRIC_LIMIT);
             else
                 path.status = PATH_DIELECTRIC_LIMIT;
@@ -365,7 +359,7 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
     }
     if (scattered.events == 0)
     {
-        if (CompleteTransport)
+        if (complete_transport)
             finish(path, PATH_DONE);
         else
             path.status = PATH_DONE;
@@ -373,13 +367,13 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
         return;
     }
     var response : float3 = scattered.response;
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
+    if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u &&
         (scattered.events & openpbr::DISCRETE) != 0u &&
         dot(view, hit.surface.normal) * dot(scattered.direction, hit.surface.normal) < 0)
         response *= material.boundary_filter;
     path.direction = scattered.direction;
     path.throughput = product_over(path.throughput, response, scattered.pdf);
-    if ((Flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u)
+    if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0u)
     {
         let transmission : bool = (scattered.events & openpbr::TRANSMISSION) != 0;
         path.eta_scale =
@@ -387,19 +381,20 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
         path.medium = scattered.medium;
     }
     path.previous_pdf =
-        (Flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) == 0u
+        (flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) == 0u
             ? scattered.pdf
         : (scattered.events & openpbr::DISCRETE) != 0u ? 0.0
                                                        : scattered.pdf;
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);
     var status : uint = PATH_ACTIVE;
-    if (CompleteTransport && max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
+    if (complete_transport &&
+        max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
-    else if (CompleteTransport && path.depth + 1 >= 2)
+    else if (complete_transport && path.depth + 1 >= 2)
     {
-        let survival : float = roulette_probability(path.throughput, path.eta_scale,
-                                                    settings.square_root_roulette);
+        let survival =
+            roulette_probability(path.throughput, path.eta_scale, settings.square_root_roulette);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0)
@@ -410,7 +405,7 @@ public func process_flow_vertex<let Flow : uint, Scene, let LightMask : uint = 3
                 path.throughput = roulette_reweight(path.throughput, survival);
         }
     }
-    if (CompleteTransport)
+    if (complete_transport)
         finish(path, status);
     else
         path.status = status;
@@ -423,11 +418,11 @@ public func escape<Scene>(scene: Scene, inout path: PathState)->void
 {
     path.throughput *= segment_transmittance(path.medium.yzw, FAR);
     let environment : Environment = scene.environment(path.direction, path.previous, path.depth);
-    let weight : float = path.previous_pdf > 0 && environment.sun_pdf > 0
-                             ? power_heuristic(path.previous_pdf, environment.sun_pdf)
-                             : 1;
+    let weight = path.previous_pdf > 0 && environment.sun_pdf > 0
+                     ? power_heuristic(path.previous_pdf, environment.sun_pdf)
+                     : 1;
     path.radiance += path.throughput * (environment.sky + environment.sun * weight);
-    path.status = finite3(path.radiance) ? PATH_DONE : PATH_INVALID;
+    path.status = all(isfinite(path.radiance)) ? PATH_DONE : PATH_INVALID;
     path.origin = 0;
     path.previous = 0;
     path.previous_pdf = 0;

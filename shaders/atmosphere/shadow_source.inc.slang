@@ -2,38 +2,38 @@
 // Request epoch, world X/Y and blocker depth per cell.
 groupshared var terrain_segment_endpoints : float4;
 
-func shadowIndex(cascade: int, cell: int2)->uint
+func shadow_index(cascade: int, cell: int2)->uint
 {
-    let wrapped : uint2 = uint2(cell) & 511u;
+    let wrapped = uint2(cell) & 511u;
     return uint(cascade) * 512u * 512u + wrapped.y * 512u + wrapped.x;
 }
-struct ShadowSource<let Demand : bool> : IPrimeSunShadowProfileSource
+struct ShadowSource<let demand : bool> : IShadowProfileSource
 {
-    func texelSize(cascade: int)->float
+    func texel_size(cascade: int)->float
     {
-        return sunShadowTexelSize(cascade);
+        return shadow_texel_size(cascade);
     }
-    func blockerDepth(cascade: int, worldNode: int2)->float
+    func blocker_depth(cascade: int, world_node: int2)->float
     {
         var depth : float = -1e20;
         for (var y: int = -1; y <= 1; y++)
             for (var x: int = -1; x <= 1; x++)
             {
-                let index : uint = shadowIndex(cascade, worldNode + int2(x, y));
-                if (Demand)
+                let index = shadow_index(cascade, world_node + int2(x, y));
+                if (demand)
                 {
                     var previous : uint;
-                    InterlockedOr(shadowCells[index].x, 0x80000000u, previous);
+                    InterlockedOr(shadow_cells[index].x, 0x80000000u, previous);
                 }
                 else
                 {
-                    let cell : uint4 = shadowCells[index];
+                    let cell = shadow_cells[index];
                     let f : TerrainFrame = frames[0];
-                    let tag : uint2 = terrain_column(f, cascade, worldNode + int2(x, y));
+                    let tag = terrain_column(f, cascade, world_node + int2(x, y));
                     var h : float = asfloat(cell.w);
                     if (h > -1e19)
                     {
-                        h -= f.source.basisV.w;
+                        h -= f.source.wrapped_shadow_plane_depth;
                         h -= floor((h + 16384.0) * (1.0 / 32768.0)) * 32768.0;
                     }
                     depth = max(depth, all(cell.yz == tag) && cell.w != 0 ? h : 1e20);
@@ -42,26 +42,26 @@ struct ShadowSource<let Demand : bool> : IPrimeSunShadowProfileSource
         return depth;
     }
 };
-func shadowSource<let Demand : bool>()->ShadowSource<Demand>
+func shadow_source<let demand : bool>()->ShadowSource<demand>
 {
     return {};
 }
 
-func terrain_slice<let Demand : bool>(lane: uint, slice: uint)->void
+func terrain_slice<let demand : bool>(lane: uint, slice: uint)->void
 {
     if (lane == 0)
     {
         let f : TerrainFrame = frames[0];
-        let segment = atmEpipolarSliceSegment(f.projection.xy, terrain_range(f), int(slice),
-                                              int(TERRAIN_SLICES));
-        if (!Demand)
+        let segment = epipolar_slice_segment(f.projection.xy, terrain_range(f), int(slice),
+                                             int(TERRAIN_SLICES));
+        if (!demand)
             terrain_segment_endpoints = float4(segment.entry, segment.exit);
-        primeInitializeSunShadowProfile(f.source.sun.xyz, f.source.grid.xy, -f.source.basisU.w,
-                                        terrain_ray(f, 127, segment), f.source.basisU.xyz,
-                                        f.source.basisV.xyz);
+        initialize_shadow_profile(f.source.sun_direction, f.source.wrapped_grid,
+                                  -f.source.sun_depth_offset, terrain_ray(f, 127, segment),
+                                  f.source.basis_u, f.source.basis_v);
     }
     GroupMemoryBarrierWithGroupSync();
     if (lane < SUN_SHADOW_CASCADE_COUNT)
-        sunShadowBuildProfileCascade(shadowSource<Demand>(), int(lane));
+        build_shadow_profile_cascade(shadow_source<demand>(), int(lane));
     GroupMemoryBarrierWithGroupSync();
 }

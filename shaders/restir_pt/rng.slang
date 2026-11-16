@@ -69,35 +69,35 @@ public struct TinyUniformSampleGenerator
         return state;
     }
     [mutating]
-    public func next1D()->float
+    public func next_1d()->float
     {
         return float(next() >> 8) * 0x1p-24f;
     }
     [mutating]
-    public func next2D()->float2
+    public func next_2d()->float2
     {
         var value : float2;
-        value.x = next1D();
-        value.y = next1D();
+        value.x = next_1d();
+        value.y = next_1d();
         return value;
     }
     [mutating]
-    public func next3D()->float3
+    public func next_3d()->float3
     {
         var value : float3;
-        value.x = next1D();
-        value.y = next1D();
-        value.z = next1D();
+        value.x = next_1d();
+        value.y = next_1d();
+        value.z = next_1d();
         return value;
     }
     [mutating]
-    public func next4D()->float4
+    public func next4_d()->float4
     {
         var value : float4;
-        value.x = next1D();
-        value.y = next1D();
-        value.z = next1D();
-        value.w = next1D();
+        value.x = next_1d();
+        value.y = next_1d();
+        value.z = next_1d();
+        value.w = next_1d();
         return value;
     }
 };
@@ -110,9 +110,9 @@ public func rng_from_seed(seed: uint)->TinyUniformSampleGenerator
     return result;
 }
 
-/// NV像素/样本播种：TEA(interleave32(pixel),sampleNumber).x，随后才开始LCG。
-public func rng_for_pixel(pixel: uint2, sampleNumber: uint)->TinyUniformSampleGenerator
+/// NV像素/样本播种：TEA(interleave32(pixel),sample_number).x，随后才开始LCG。
+public func rng_for_pixel(pixel: uint2, sample_number: uint)->TinyUniformSampleGenerator
 {
-    return rng_from_seed(block_cipher_tea(interleave32(pixel), sampleNumber).x);
+    return rng_from_seed(block_cipher_tea(interleave32(pixel), sample_number).x);
 }
 }

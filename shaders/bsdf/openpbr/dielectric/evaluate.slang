@@ -3,25 +3,28 @@
 #language slang 2026
 module "bsdf/openpbr/dielectric/evaluate.slang";
 
-import "bsdf/openpbr/dielectric/contract.slang";
-import "bsdf/openpbr/dielectric/refract.slang";
-import "bsdf/openpbr/dielectric/state.slang";
+import bsdf.openpbr.dielectric.contract;
+import bsdf.openpbr.dielectric.refract;
+import bsdf.openpbr.dielectric.state;
 
-public func primeFullCompactTransmissionEvaluate(wi: float3, wo: float3,
-                                                 state: PrimeFullCompactTransmissionState,
-                                                 samplingFlags: uint)
-    ->PrimeFullCompactTransmissionEvaluation
+namespace openpbr
 {
-    let closure : PrimeFullCompactTransmissionState =
-                      primeFullCompactTransmissionClosureState(state);
-    return primeFullCompactTransmissionEvaluateRaw(wi, wo, closure, samplingFlags);
+namespace kernel
+{
+public func transmission_evaluate(wi: float3, wo: float3, state: TransmissionState,
+                                  sampling_flags: uint)
+    ->TransmissionEvaluation
+{
+    let closure : TransmissionState = transmission_closure_state(state);
+    return transmission_evaluate_raw(wi, wo, closure, sampling_flags);
 }
 
-public func primeFullCompactTransmissionEvaluateSolidContinuous(
-    wi: float3, wo: float3, state: PrimeFullCompactTransmissionState, samplingFlags: uint)
-    ->PrimeFullCompactTransmissionEvaluation
+public func transmission_evaluate_solid_continuous(wi: float3, wo: float3, state: TransmissionState,
+                                                   sampling_flags: uint)
+    ->TransmissionEvaluation
 {
-    let closure : PrimeFullCompactTransmissionState =
-                      primeFullCompactTransmissionClosureState(state);
-    return primeFullCompactTransmissionEvaluateRawSolidContinuous(wi, wo, closure, samplingFlags);
+    let closure : TransmissionState = transmission_closure_state(state);
+    return transmission_evaluate_raw_solid_continuous(wi, wo, closure, sampling_flags);
+}
+}
 }

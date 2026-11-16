@@ -16,15 +16,31 @@ public interface IPixelTransport
     func start_path(inout data: TransportCall, lane: uint)->float2;
     func trace(inout data: TransportCall, film: float2)->float;
 };
-public struct PixelTransportInput
-{
-    public var coordinate : uint2;
-};
 public struct PixelTransportResult
 {
     public var radiance : float4;
     public var distance : float;
 };
+
+/// 新样本重置顶点身份，保留同像素已累计的radiance及适配器建立的射线方向。
+public func begin_pixel_path(inout data: TransportCall)->void
+{
+    data.path.status = PATH_ACTIVE;
+    data.path.depth = 0;
+    data.path.dielectric_events = 0;
+    data.path.previous = 0;
+    data.path.previous_pdf = 0;
+}
+
+/// 共享合并与分离lane的平均和粘滞错误编码；不重新调度路径。
+public func pixel_result(radiance: float3, status: uint, paths: uint, distance: float)
+    ->PixelTransportResult
+{
+    return { float4(radiance / float(paths), status == PATH_INVALID            ? -1
+                                             : status == PATH_DIELECTRIC_LIMIT ? -3
+                                                                               : 0),
+             distance };
+}
 /// 离线累计计数和随机样本基数独立；实时 lane 使用连续的样本身份。
 public func pixel_sample_index(base: uint, lane: uint, realtime: bool, accumulated: uint,
                                batch_begin: uint)
@@ -33,19 +49,20 @@ public func pixel_sample_index(base: uint, lane: uint, realtime: bool, accumulat
     return base + (realtime ? lane : (accumulated >= batch_begin ? accumulated - batch_begin : 0u));
 }
 /// 实时1／2样本与离线由受控入口固定；Lane为-1时合并，0／1选择分离lane。
-/// 实时Samples须为1或2，分离Lane须小于Samples；离线固定Samples=1、Lane=-1。
+/// 实时Samples须为1或2，分离Lane须小于Samples；离线固定Samples=1、lane=-1。
 /// previous 仅在分离 lane1 时消费；失败 lane0 不启动下一条路径。
 /// 同一加法顺序和除数用于合并与分离调度，不创建嵌套调度。
-public func integrate_pixel<A : IPixelTransport, let Realtime : bool, let Samples : uint,
-                            let Lane : int>(adapter: A, p: PixelTransportInput, previous: float4)
+public func integrate_pixel<A : IPixelTransport, let realtime : bool, let samples : uint,
+                            let selected_lane : int>(adapter: A, coordinate: uint2,
+                                                     previous: float4)
     ->PixelTransportResult
 {
     var adapter = adapter;
-    let paths = Lane >= 0 ? (Lane == 0 ? 1u : 2u) : (Realtime ? Samples : 1u);
-    let first = Lane >= 0 ? uint(Lane) : 0u;
-    let end = Lane >= 0 ? uint(Lane) + 1u : paths;
+    let paths = selected_lane >= 0 ? (selected_lane == 0 ? 1u : 2u) : (realtime ? samples : 1u);
+    let first = selected_lane >= 0 ? uint(selected_lane) : 0u;
+    let end = selected_lane >= 0 ? uint(selected_lane) + 1u : paths;
     var data : TransportCall = {};
-    if (Lane == 1)
+    if (selected_lane == 1)
     {
         if (previous.w < 0)
             return { float4(previous.xyz * 0.5, previous.w), FAR };
@@ -54,12 +71,8 @@ public func integrate_pixel<A : IPixelTransport, let Realtime : bool, let Sample
     var distance : float = FAR;
     for (var lane: uint = first; lane < end; lane++)
     {
-        data.path.status = PATH_ACTIVE;
-        data.path.depth = 0;
-        data.path.dielectric_events = 0;
-        data.path.previous = 0;
-        data.path.previous_pdf = 0;
-        data.pixel = p.coordinate;
+        begin_pixel_path(data);
+        data.pixel = coordinate;
         data.sample = adapter.sample_index(lane);
         data.path.origin = adapter.origin();
         data.path.throughput = 1;
@@ -70,10 +83,6 @@ public func integrate_pixel<A : IPixelTransport, let Realtime : bool, let Sample
         if (data.path.status == PATH_INVALID || data.path.status == PATH_DIELECTRIC_LIMIT)
             break;
     }
-    return { float4(data.path.radiance / float(paths), data.path.status == PATH_INVALID ? -1
-                                                       : data.path.status == PATH_DIELECTRIC_LIMIT
-                                                           ? -3
-                                                           : 0),
-             distance };
+    return pixel_result(data.path.radiance, data.path.status, paths, distance);
 }
 }

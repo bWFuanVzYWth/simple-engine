@@ -3,57 +3,57 @@
 #language slang 2026
 module "bsdf/openpbr/math/microfacet_distribution.slang";
 
-import "bsdf/openpbr/math/microfacet_energy.slang";
-import "bsdf/openpbr/math/microfacet_measure.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.math.microfacet_energy;
+import bsdf.openpbr.math.microfacet_measure;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.contract.material;
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.math.spectrum;
 
+import math.constants;
 // Exact production-reachable microfacet subset. Generic full-state entry points
 // outside the compact opaque and transmission topologies are intentionally absent.
 
-public func primeFullOpenPbrMicrofacetLambda(microfacet: PrimeFullOpenPbrMicrofacet, value: float3)
-    ->float
+namespace openpbr
+{
+namespace kernel
+{
+public func ggx_lambda(microfacet: Microfacet, value: float3)->float
 {
     return (length(float3(microfacet.alpha * value.xy, value.z)) / abs(value.z) - sign(value.z)) *
            0.5;
 }
 
-public func primeFullOpenPbrMicrofacetD<let Isotropic : bool = false>(
-    microfacet: PrimeFullOpenPbrMicrofacet, halfVector: float3)
+public func ggx_distribution<let isotropic : bool = false>(microfacet: Microfacet,
+                                                           half_vector: float3)
     ->float
 {
-    if (Isotropic)
+    if (isotropic)
     {
         let alpha2 = microfacet.alpha.x * microfacet.alpha.x;
-        let d = dot(halfVector.xy, halfVector.xy) + alpha2 * halfVector.z * halfVector.z;
-        let value = alpha2 / (PRIME_FULL_OPENPBR_PI * d * d);
-        return value * halfVector.z > 1.0e-20 ? value : 0.0;
+        let d = dot(half_vector.xy, half_vector.xy) + alpha2 * half_vector.z * half_vector.z;
+        let value = alpha2 / (math::pi * d * d);
+        return value * half_vector.z > 1.0e-20 ? value : 0.0;
     }
     let denominator
-        : float =
-              primeFullOpenPbrReduceSum(primeFullOpenPbrSquare(halfVector.xy / microfacet.alpha)) +
-              primeFullOpenPbrSquare(halfVector.z);
-    let result : float = 1.0 / (PRIME_FULL_OPENPBR_PI * microfacet.alpha.x * microfacet.alpha.y *
-                                primeFullOpenPbrSquare(denominator));
-    return result * halfVector.z > 1.0e-20 ? result : 0.0;
+        : float = reduce_sum(square(half_vector.xy / microfacet.alpha)) + square(half_vector.z);
+    let result
+        : float = 1.0 / (math::pi * microfacet.alpha.x * microfacet.alpha.y * square(denominator));
+    return result * half_vector.z > 1.0e-20 ? result : 0.0;
 }
 
 /// G2/(4|cos_i|) 的约分形式；避免掠射时先产生无穷 lambda 再计算 0/0。
-public func primeFullOpenPbrReflectionFactor(microfacet: PrimeFullOpenPbrMicrofacet, wi: float3,
-                                             wo: float3)
-    ->float
+public func reflection_factor(microfacet: Microfacet, wi: float3, wo: float3)->float
 {
     let incident : float = abs(wi.z);
     let outgoing : float = abs(wo.z);
-    let projectedIncident : float = length(float3(microfacet.alpha * wi.xy, wi.z));
-    let projectedOutgoing : float = length(float3(microfacet.alpha * wo.xy, wo.z));
-    let denominator : float = incident * projectedOutgoing + outgoing * projectedIncident;
+    let projected_incident : float = length(float3(microfacet.alpha * wi.xy, wi.z));
+    let projected_outgoing : float = length(float3(microfacet.alpha * wo.xy, wo.z));
+    let denominator : float = incident * projected_outgoing + outgoing * projected_incident;
     return denominator > 0 ? 0.5 * outgoing / denominator : 0;
 }
 
-func primeFullOpenPbrStirlingCorrection(value: float)->float
+func stirling_correction(value: float)->float
 {
     // 原连分式的同一有理函数；生产 value>=6，正系数分母不会相消。
     let inverse = 1.0 / value;
@@ -65,19 +65,12 @@ func primeFullOpenPbrStirlingCorrection(value: float)->float
     return (1.0 / 12.0) * inverse * numerator / denominator;
 }
 
-func primeFullOpenPbrLogGamma(value: float)->float
+func log_gamma(value: float)->float
 {
-    return 0.5 * log(2.0 * PRIME_FULL_OPENPBR_PI) - value + (value - 0.5) * log(value) +
-           primeFullOpenPbrStirlingCorrection(value);
+    return 0.5 * log(math::tau) - value + (value - 0.5) * log(value) + stirling_correction(value);
 }
 
-func primeFullOpenPbrGamma(value: float)->float
-{
-    return exp(primeFullOpenPbrLogGamma(value + 5.0)) /
-           (value * (value + 1.0) * (value + 2.0) * (value + 3.0) * (value + 4.0));
-}
-
-func primeFullOpenPbrBeta(first: float, second: float)->float
+func beta(first: float, second: float)->float
 {
     let a : float = min(first, second);
     let b : float = max(first, second);
@@ -89,22 +82,18 @@ func primeFullOpenPbrBeta(first: float, second: float)->float
         let pa = a * (a + 1) * (a + 2) * (a + 3) * (a + 4);
         let pb = b * (b + 1) * (b + 2) * (b + 3) * (b + 4);
         let ps = sum * (sum + 1) * (sum + 2) * (sum + 3) * (sum + 4);
-        return exp(primeFullOpenPbrLogGamma(a + 5) + primeFullOpenPbrLogGamma(b + 5) -
-                   primeFullOpenPbrLogGamma(sum + 5)) *
-               (ps / (pa * pb));
+        return exp(log_gamma(a + 5) + log_gamma(b + 5) - log_gamma(sum + 5)) * (ps / (pa * pb));
     }
     // log Γ(b)-log Γ(a+b) 先代数约分，既不构造 Γ，也不相减两个巨大的 log Γ。
     let r : float = a / b;
     let log1p : float = r < 0.001 ? r * (1 - r * (0.5 - r * (1.0 / 3.0))) : log(1 + r);
-    let logGammaA : float = primeFullOpenPbrLogGamma(a + 5) -
-                            (log(a) + log(a + 1) + log(a + 2) + log(a + 3) + log(a + 4));
-    return exp(logGammaA - a * log(b) - (a + b - 0.5) * log1p + a +
-               primeFullOpenPbrStirlingCorrection(b) - primeFullOpenPbrStirlingCorrection(a + b));
+    let log_gamma_a
+        : float = log_gamma(a + 5) - (log(a) + log(a + 1) + log(a + 2) + log(a + 3) + log(a + 4));
+    return exp(log_gamma_a - a * log(b) - (a + b - 0.5) * log1p + a + stirling_correction(b) -
+               stirling_correction(a + b));
 }
 
-public func primeFullOpenPbrMicrofacetG2t(microfacet: PrimeFullOpenPbrMicrofacet, wi: float3,
-                                          wo: float3)
-    ->float
+public func ggx_transmission_masking(microfacet: Microfacet, wi: float3, wo: float3)->float
 {
     var wi = wi;
     var wo = wo;
@@ -113,18 +102,17 @@ public func primeFullOpenPbrMicrofacetG2t(microfacet: PrimeFullOpenPbrMicrofacet
         wi = -wi;
         wo = -wo;
     }
-    return primeFullOpenPbrBeta(primeFullOpenPbrMicrofacetLambda(microfacet, -wi),
-                                primeFullOpenPbrMicrofacetLambda(microfacet, wo));
+    return beta(ggx_lambda(microfacet, -wi), ggx_lambda(microfacet, wo));
 }
 
-public func primeFullOpenPbrMicrofacetSample(microfacet: PrimeFullOpenPbrMicrofacet, wi: float3,
-                                             sampleValue: float2, reflectOnly: bool)
+public func sample_ggx_vndf(microfacet: Microfacet, wi: float3, sample_value: float2,
+                            reflect_only: bool)
     ->float3
 {
-    let visibleHalf : float3 = normalize(float3(microfacet.alpha * wi.xy, wi.z));
-    let phi : float = 2.0 * PRIME_FULL_OPENPBR_PI * sampleValue.x;
+    let visible_half : float3 = normalize(float3(microfacet.alpha * wi.xy, wi.z));
+    let phi : float = math::tau * sample_value.x;
     var k = 1.0;
-    if (reflectOnly)
+    if (reflect_only)
     {
         let a : float = clamp(min(microfacet.alpha.x, microfacet.alpha.y), 0.0, 1.0);
         let s : float = 1.0 + length(wi.xy);
@@ -132,30 +120,27 @@ public func primeFullOpenPbrMicrofacetSample(microfacet: PrimeFullOpenPbrMicrofa
         let s2 : float = s * s;
         k = (s2 - a2 * s2) / (s2 + a2 * wi.z * wi.z);
     }
-    let z : float = lerp(1.0, -k * visibleHalf.z, sampleValue.y);
+    let z : float = lerp(1.0, -k * visible_half.z, sample_value.y);
     let sine : float = sqrt(clamp(1.0 - z * z, 0.0, 1.0));
-    let halfVector : float3 = float3(sine * cos(phi), sine * sin(phi), z) + visibleHalf;
-    return normalize(float3(microfacet.alpha * halfVector.xy, max(0.0, halfVector.z)));
+    let half_vector : float3 = float3(sine * cos(phi), sine * sin(phi), z) + visible_half;
+    return normalize(float3(microfacet.alpha * half_vector.xy, max(0.0, half_vector.z)));
 }
 
-public func primeFullOpenPbrMicrofacetPdf(microfacet: PrimeFullOpenPbrMicrofacet, wi: float3,
-                                          halfVector: float3, reflectOnly: bool)
+public func ggx_pdf(microfacet: Microfacet, wi: float3, half_vector: float3, reflect_only: bool)
     ->float
 {
-    return primeFullOpenPbrMicrofacetPdfFromDistribution(
-        microfacet, wi, halfVector, reflectOnly,
-        primeFullOpenPbrMicrofacetD(microfacet, halfVector));
+    return ggx_pdf_from_distribution(microfacet, wi, half_vector, reflect_only,
+                                     ggx_distribution(microfacet, half_vector));
 }
 
 /// 已有 D 时保留原 PDF 算序，避免同方向求值再次计算分布。
-public func primeFullOpenPbrMicrofacetPdfFromDistribution(microfacet: PrimeFullOpenPbrMicrofacet,
-                                                          wi: float3, halfVector: float3,
-                                                          reflectOnly: bool, distribution: float)
+public func ggx_pdf_from_distribution(microfacet: Microfacet, wi: float3, half_vector: float3,
+                                      reflect_only: bool, distribution: float)
     ->float
 {
-    let lengthV : float = length(float3(microfacet.alpha * wi.xy, wi.z));
+    let length_v : float = length(float3(microfacet.alpha * wi.xy, wi.z));
     var k = 1.0;
-    if (reflectOnly)
+    if (reflect_only)
     {
         let a : float = clamp(min(microfacet.alpha.x, microfacet.alpha.y), 0.0, 1.0);
         let s : float = 1.0 + length(wi.xy);
@@ -163,16 +148,16 @@ public func primeFullOpenPbrMicrofacetPdfFromDistribution(microfacet: PrimeFullO
         let s2 : float = s * s;
         k = (s2 - a2 * s2) / (s2 + a2 * wi.z * wi.z);
     }
-    return 2.0 * distribution * dot(wi, halfVector) / (k * wi.z + lengthV);
+    return 2.0 * distribution * dot(wi, half_vector) / (k * wi.z + length_v);
 }
 
 /// 反射方向 PDF；消去微法线到方向的 Jacobian 中共同的 dot(wi,h)，包括其零极限。
-public func primeFullOpenPbrReflectionPdf(microfacet: PrimeFullOpenPbrMicrofacet, wi: float3,
-                                          reflectOnly: bool, distribution: float)
+public func ggx_reflection_pdf(microfacet: Microfacet, wi: float3, reflect_only: bool,
+                               distribution: float)
     ->float
 {
     var k : float = 1;
-    if (reflectOnly)
+    if (reflect_only)
     {
         let a : float = min(microfacet.alpha.x, microfacet.alpha.y);
         let s : float = 1 + length(wi.xy);
@@ -183,134 +168,127 @@ public func primeFullOpenPbrReflectionPdf(microfacet: PrimeFullOpenPbrMicrofacet
     return distribution / (2 * (k * wi.z + length(float3(microfacet.alpha * wi.xy, wi.z))));
 }
 
-public struct PrimeFullOpenPbrReflectiveEvalBase
+public struct ReflectionEvaluation
 {
     public var factor : float;
-    public var microCosine : float;
+    public var micro_cosine : float;
     public var flags : uint;
     public var pdf : float;
 };
 
-public struct PrimeFullOpenPbrReflectiveSampleBase
+public struct ReflectionProposal
 {
-    public var bsdfSample : PrimeFullOpenPbrSample;
-    public var microCosine : float;
+    public var proposal : Proposal;
+    public var micro_cosine : float;
 };
 
-public func primeFullOpenPbrReflectiveEvalBase(wi: float3, wo: float3,
-                                               microfacet: PrimeFullOpenPbrMicrofacet,
-                                               samplingFlags: uint, checkFlags: uint)
-    ->PrimeFullOpenPbrReflectiveEvalBase
+public func evaluate_reflection(wi: float3, wo: float3, microfacet: Microfacet,
+                                sampling_flags: uint, check_flags: uint)
+    ->ReflectionEvaluation
 {
-    return primeFullOpenPbrReflectiveEvalBaseImpl<false>(wi, wo, microfacet, samplingFlags,
-                                                         checkFlags);
+    return evaluate_reflection_impl<false>(wi, wo, microfacet, sampling_flags, check_flags);
 }
 
-public func primeFullOpenPbrReflectiveEvalBaseImpl<
-    let Continuous : bool, let Isotropic : bool = false>(wi: float3, wo: float3,
-                                                         microfacet: PrimeFullOpenPbrMicrofacet,
-                                                         samplingFlags: uint, checkFlags: uint)
-    ->PrimeFullOpenPbrReflectiveEvalBase
+public func evaluate_reflection_impl<let continuous : bool, let isotropic : bool = false>(
+    wi: float3, wo: float3, microfacet: Microfacet, sampling_flags: uint, check_flags: uint)
+    ->ReflectionEvaluation
 {
-    var result : PrimeFullOpenPbrReflectiveEvalBase;
+    var result : ReflectionEvaluation;
     result.factor = 0.0;
-    result.microCosine = 0.0;
-    result.flags = PRIME_FULL_OPENPBR_FLAG_NONE;
+    result.micro_cosine = 0.0;
+    result.flags = LOBE_NONE;
     result.pdf = 0.0;
-    if ((!Continuous && primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet)) || wi.z < 0.0 ||
-        wo.z <= 0.0 || (samplingFlags & (checkFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR)) == 0u)
+    if ((!continuous && microfacet_effectively_smooth(microfacet)) || wi.z < 0.0 || wo.z <= 0.0 ||
+        (sampling_flags & (check_flags & LOBE_SPECULAR)) == 0u)
     {
         return result;
     }
-    var halfVector : float3 = wi + wo;
-    let lengthSquared : float = dot(halfVector, halfVector);
-    if (lengthSquared == 0.0)
+    var half_vector : float3 = wi + wo;
+    let length_squared : float = dot(half_vector, half_vector);
+    if (length_squared == 0.0)
     {
         return result;
     }
-    halfVector *= rsqrt(lengthSquared);
-    result.microCosine = dot(wi, halfVector);
-    let distribution : float = primeFullOpenPbrMicrofacetD<Isotropic>(microfacet, halfVector);
-    result.factor = distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo);
-    result.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
-    result.pdf = primeFullOpenPbrReflectionPdf(microfacet, wi, true, distribution);
+    half_vector *= rsqrt(length_squared);
+    result.micro_cosine = dot(wi, half_vector);
+    let distribution : float = ggx_distribution<isotropic>(microfacet, half_vector);
+    result.factor = distribution * reflection_factor(microfacet, wi, wo);
+    result.flags = LOBE_SPECULAR_REFLECTION;
+    result.pdf = ggx_reflection_pdf(microfacet, wi, true, distribution);
     return result;
 }
 
-public func primeFullOpenPbrReflectiveSampleBase(wi: float3, randomValue: float3,
-                                                 microfacet: PrimeFullOpenPbrMicrofacet,
-                                                 samplingFlags: uint, checkFlags: uint)
-    ->PrimeFullOpenPbrReflectiveSampleBase
+public func sample_reflection(wi: float3, random_value: float3, microfacet: Microfacet,
+                              sampling_flags: uint, check_flags: uint)
+    ->ReflectionProposal
 {
-    return primeFullOpenPbrReflectiveSampleBaseImpl<false>(wi, randomValue, microfacet,
-                                                           samplingFlags, checkFlags);
+    return sample_reflection_impl<false>(wi, random_value, microfacet, sampling_flags, check_flags);
 }
 
-public func primeFullOpenPbrReflectiveSampleBaseImpl<
-    let Continuous : bool, let Isotropic : bool = false>(wi: float3, randomValue: float3,
-                                                         microfacet: PrimeFullOpenPbrMicrofacet,
-                                                         samplingFlags: uint, checkFlags: uint)
-    ->PrimeFullOpenPbrReflectiveSampleBase
+public func sample_reflection_impl<let continuous : bool, let isotropic : bool = false>(
+    wi: float3, random_value: float3, microfacet: Microfacet, sampling_flags: uint,
+    check_flags: uint)
+    ->ReflectionProposal
 {
-    var result : PrimeFullOpenPbrReflectiveSampleBase;
-    result.bsdfSample = primeFullOpenPbrZeroSample();
-    result.microCosine = 0.0;
+    var result : ReflectionProposal;
+    result.proposal = empty_proposal();
+    result.micro_cosine = 0.0;
     if (wi.z < 0.0)
     {
         return result;
     }
-    var halfVector = float3(0.0, 0.0, 1.0);
+    var half_vector = float3(0.0, 0.0, 1.0);
     var distribution = 1.0;
-    if (Continuous || !primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet))
+    if (continuous || !microfacet_effectively_smooth(microfacet))
     {
-        if ((samplingFlags & (checkFlags & PRIME_FULL_OPENPBR_FLAG_SPECULAR)) == 0u)
+        if ((sampling_flags & (check_flags & LOBE_SPECULAR)) == 0u)
         {
             return result;
         }
-        halfVector = primeFullOpenPbrMicrofacetSample(microfacet, wi, randomValue.xy, true);
-        distribution = primeFullOpenPbrMicrofacetD<Isotropic>(microfacet, halfVector);
+        half_vector = sample_ggx_vndf(microfacet, wi, random_value.xy, true);
+        distribution = ggx_distribution<isotropic>(microfacet, half_vector);
     }
-    else if ((samplingFlags & (checkFlags & PRIME_FULL_OPENPBR_FLAG_DELTA)) == 0u)
+    else if ((sampling_flags & (check_flags & LOBE_DELTA)) == 0u)
     {
         return result;
     }
-    var wo : float3 = reflect(-wi, halfVector);
+    var wo : float3 = reflect(-wi, half_vector);
     if (wo.z <= 0.0)
     {
         return result;
     }
-    result.microCosine = dot(halfVector, wi);
-    result.bsdfSample.wo = wo;
-    if (!Continuous && primeFullOpenPbrMicrofacetEffectivelySmooth(microfacet))
+    result.micro_cosine = dot(half_vector, wi);
+    result.proposal.wo = wo;
+    if (!continuous && microfacet_effectively_smooth(microfacet))
     {
-        result.bsdfSample.throughput.value = float3(1.0);
-        result.bsdfSample.throughput.flags = PRIME_FULL_OPENPBR_FLAG_DELTA_REFLECTION;
-        result.bsdfSample.pdf = 1.0;
+        result.proposal.response.value = float3(1.0);
+        result.proposal.response.flags = LOBE_DELTA_REFLECTION;
+        result.proposal.pdf = 1.0;
     }
     else
     {
-        result.bsdfSample.throughput.value =
-            float3(distribution * primeFullOpenPbrReflectionFactor(microfacet, wi, wo));
-        result.bsdfSample.throughput.flags = PRIME_FULL_OPENPBR_FLAG_SPECULAR_REFLECTION;
-        result.bsdfSample.pdf = primeFullOpenPbrReflectionPdf(microfacet, wi, true, distribution);
+        result.proposal.response.value =
+            float3(distribution * reflection_factor(microfacet, wi, wo));
+        result.proposal.response.flags = LOBE_SPECULAR_REFLECTION;
+        result.proposal.pdf = ggx_reflection_pdf(microfacet, wi, true, distribution);
     }
     return result;
 }
 
-public func primeFullOpenPbrReflectivePdf(wi: float3, wo: float3,
-                                          microfacet: PrimeFullOpenPbrMicrofacet,
-                                          samplingFlags: uint, checkFlags: uint)
+public func reflection_pdf(wi: float3, wo: float3, microfacet: Microfacet, sampling_flags: uint,
+                           check_flags: uint)
     ->float
 {
-    return primeFullOpenPbrReflectivePdfImpl<false>(wi, wo, microfacet, samplingFlags, checkFlags);
+    return reflection_pdf_impl<false>(wi, wo, microfacet, sampling_flags, check_flags);
 }
 
-public func primeFullOpenPbrReflectivePdfImpl<let Continuous : bool>(
-    wi: float3, wo: float3, microfacet: PrimeFullOpenPbrMicrofacet, samplingFlags: uint,
-    checkFlags: uint)
+public func reflection_pdf_impl<let continuous : bool>(wi: float3, wo: float3,
+                                                       microfacet: Microfacet, sampling_flags: uint,
+                                                       check_flags: uint)
     ->float
 {
-    return primeFullOpenPbrReflectiveEvalBaseImpl<Continuous>(wi, wo, microfacet, samplingFlags,
-                                                              checkFlags)
+    return evaluate_reflection_impl<continuous>(wi, wo, microfacet, sampling_flags, check_flags)
         .pdf;
+}
+}
 }

@@ -9,6 +9,11 @@ pub(crate) struct BuildBuffers {
     pub(crate) scratch: Option<Buffer>,
 }
 
+const _: () = {
+    assert!(!std::mem::needs_drop::<BuildBuffers>());
+    assert!(!std::mem::needs_drop::<Structure>());
+};
+
 impl BuildBuffers {
     pub(crate) fn destroy(mut self, device: &Device) {
         for buffer in [&mut self.input, &mut self.expanded, &mut self.scratch]
@@ -55,8 +60,7 @@ struct Resources<'a> {
 impl Drop for Resources<'_> {
     fn drop(&mut self) {
         if self.device.is_quarantined() {
-            std::mem::forget(self.structure.take());
-            std::mem::forget(std::mem::take(&mut self.buffers));
+            // 这些记录只保存需显式销毁的句柄；隔离后不归池或调用destroy。
             return;
         }
         if let Some(structure) = self.structure.take() {

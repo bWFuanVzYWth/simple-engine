@@ -5,8 +5,28 @@ pub const SELECTORS: u32 = 1 << 24;
 /// child 的叶标记；其余 bits 为原输入 quad 索引。
 pub const LEAF: u32 = 1 << 31;
 
+const PACKET_WORDS: usize = 10;
+const LEAF_WORDS: usize = 8;
+const LEAF_ALIGNMENT_MASK: usize = 7;
+
+/// 指定灯容量的完整编码word数；零容量返回0，usize溢出返回None。
+///
+/// 包含按协议对齐的内部packet和叶目录，不分配或校验灯的采样数量上限。
+/// 实际构树仍须遵循[`SELECTORS`]；容量预留与[`super::Tree::words`]使用同一布局。
+#[inline]
+pub const fn storage_words(lights: usize) -> Option<usize> {
+    let Some(packets) = lights.saturating_sub(1).checked_mul(PACKET_WORDS) else {
+        return None;
+    };
+    let Some(aligned) = packets.checked_add(LEAF_ALIGNMENT_MASK) else {
+        return None;
+    };
+    // packet的乘10已成功，所以相同lights乘8不会溢出。
+    (aligned & !LEAF_ALIGNMENT_MASK).checked_add(lights * LEAF_WORDS)
+}
+
 pub(super) const fn leaf_offset(lights: usize) -> usize {
-    ((lights - 1) * 10 + 7) & !7
+    ((lights - 1) * PACKET_WORDS + LEAF_ALIGNMENT_MASK) & !LEAF_ALIGNMENT_MASK
 }
 
 pub(super) const fn packet_offset(packet: usize) -> usize {

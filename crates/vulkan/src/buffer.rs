@@ -10,6 +10,9 @@ pub(crate) struct Buffer {
     allocated_bytes: u64,
 }
 
+// 销毁由显式owner执行；隔离分支可以丢弃这些描述值而保留设备分配。
+const _: () = assert!(!std::mem::needs_drop::<Buffer>());
+
 impl Buffer {
     pub(crate) const fn allocation_bytes(&self) -> u64 {
         self.allocated_bytes

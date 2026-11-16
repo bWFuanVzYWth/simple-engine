@@ -56,6 +56,20 @@ fn empty_and_single_light_need_no_internal_branch() -> Result<(), Error> {
 }
 
 #[test]
+fn storage_capacity_matches_the_encoded_tree() -> Result<(), Error> {
+    for count in [0, 1, 2, 4, 5, 16, 17, 64] {
+        let quads = (0..count)
+            .map(|index| quad(index as f32, 1.0))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            storage_words(count),
+            Some(Tree::build(&quads)?.words().len())
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn topology_and_paths_cover_each_input_exactly_once() -> Result<(), Error> {
     for l in [2, 3, 4, 5, 6, 7, 8, 9, 127, 128] {
         let quads: Vec<_> = (0..l)

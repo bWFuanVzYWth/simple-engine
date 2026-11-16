@@ -4,205 +4,220 @@ import bsdf.openpbr.selection;
 import bsdf.openpbr.composition;
 import bsdf.openpbr.primary_policy;
 import bsdf.openpbr.api;
-import "bsdf/openpbr/math/microfacet_energy.slang";
-import "bsdf/openpbr/contract/flags.slang";
-import "bsdf/openpbr/opaque/state.slang";
-import "bsdf/openpbr/opaque/lobes.slang";
-import "bsdf/openpbr/math/microfacet_distribution.slang";
+import bsdf.openpbr.math.microfacet_energy;
+import bsdf.openpbr.contract.flags;
+import bsdf.openpbr.opaque.state;
+import bsdf.openpbr.opaque.lobes;
+import bsdf.openpbr.math.microfacet_distribution;
 
-namespace openpbr_composition
+namespace openpbr
 {
-public struct PrimaryLayer<G : IMeasure, B : IBase> : IClosure
+namespace closure
 {
-    public typedef DielectricLayer<G, B> Closure;
+public struct PrimaryLayer<Measure : IMeasure, Base : IBase> : IClosure
+{
+    public typedef DielectricLayer<Measure, Base> Closure;
     public typedef Closure.State State;
     public static func has_delta()->bool
     {
-        return G.has_delta();
+        return Measure.has_delta();
     }
-    public static func prepare<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        energy: P, material: openpbr::Material, wi: float3, incident: float)
+    public static func prepare<EnergyLut : IEnergyLut>(energy: EnergyLut,
+                                                       material: openpbr::Material, wi: float3,
+                                                       incident: float)
         ->State
     {
-        var s : State = Closure.prepare(energy, material, wi, incident);
-        let available : bool = s.mixture.specularSampleWeight + s.mixture.baseSampleWeight > 0;
-        let q : float = openpbr_primary::reflection_probability(s.mixture.specularSampleWeight,
-                                                                s.mixture.baseSampleWeight);
-        s.mixture.specularSampleWeight = available ? q : 0;
-        s.mixture.baseSampleWeight = available ? 1 - q : 0;
-        return s;
+        var state : State = Closure.prepare(energy, material, wi, incident);
+        let available
+            : bool = state.mixture.specular_sample_weight + state.mixture.base_sample_weight > 0;
+        let q : float = openpbr::primary::reflection_probability(
+                    state.mixture.specular_sample_weight, state.mixture.base_sample_weight);
+        state.mixture.specular_sample_weight = available ? q : 0;
+        state.mixture.base_sample_weight = available ? 1 - q : 0;
+        return state;
     }
-    public static func evaluate(wi: float3, wo: float3, s: State)->Value
+    public static func evaluate(wi: float3, wo: float3, state: State)->LocalEvaluation
     {
-        return Closure.evaluate(wi, wo, s);
+        return Closure.evaluate(wi, wo, state);
     }
-    public static func sample(wi: float3, u: float3, s: State)->Proposal
+    public static func sample(wi: float3, random: float3, state: State)->Proposal
     {
-        return Closure.sample(wi, u, s);
+        return Closure.sample(wi, random, state);
     }
-    public static func delta_response(wi: float3, s: State)->float3
+    public static func delta_response(wi: float3, state: State)->float3
     {
-        return Closure.delta_response(wi, s);
+        return Closure.delta_response(wi, state);
     }
-    public static func delta_pdf(s: State)->float
+    public static func delta_pdf(state: State)->float
     {
-        return Closure.delta_pdf(s);
+        return Closure.delta_pdf(state);
     }
-    public static func marginal_flags(s: State)->bool
+    public static func marginal_flags(state: State)->bool
     {
         return false;
     }
-    public static func marginal_required(s: State)->bool
+    public static func marginal_required(state: State)->bool
     {
         return true;
     }
 };
 
 /// 同一微表面分布上的金属／介电反射合并为一个提案。metalness只参与响应，不冒充提案概率。
-public struct PrimaryMetalLayer<G : IMeasure, B : IBase> : IClosure
+public struct PrimaryMetalLayer<Measure : IMeasure, Base : IBase> : IClosure
 {
-    public typedef DielectricLayer<G, B> Dielectric;
-    public typedef SharedMetalBlend<G, Dielectric> Closure;
+    public typedef DielectricLayer<Measure, Base> Dielectric;
+    public typedef SharedMetalBlend<Measure, Dielectric> Closure;
     public typedef Closure.State State;
     public static func has_delta()->bool
     {
-        return G.has_delta();
+        return Measure.has_delta();
     }
-    public static func prepare<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        energy: P, material: openpbr::Material, wi: float3, incident: float)
+    public static func prepare<EnergyLut : IEnergyLut>(energy: EnergyLut,
+                                                       material: openpbr::Material, wi: float3,
+                                                       incident: float)
         ->State
     {
         return Closure.prepare(energy, material, wi, incident);
     }
-    public static func probability(s: State)->float
+    public static func probability(state: State)->float
     {
-        return openpbr_primary::reflection_probability(
-            s.metalness + (1 - s.metalness) * s.dielectric.mixture.specularSampleWeight,
-            (1 - s.metalness) * s.dielectric.mixture.baseSampleWeight);
+        return openpbr::primary::reflection_probability(
+            state.metalness +
+                (1 - state.metalness) * state.dielectric.mixture.specular_sample_weight,
+            (1 - state.metalness) * state.dielectric.mixture.base_sample_weight);
     }
-    public static func evaluate(wi: float3, wo: float3, s: State)->Value
+    public static func evaluate(wi: float3, wo: float3, state: State)->LocalEvaluation
     {
-        let reflected : PrimeFullOpenPbrReflectiveEvalBase =
-                            G.evaluate(wi, wo, s.conductor.geometry);
-        let base = B.evaluate(wi, wo, s.dielectric.base);
-        let a : Value = Dielectric.from_base(base, s.dielectric, reflected);
-        let b : Value = Conductor<G>.from_reflection(wi, wo, s.conductor, reflected);
-        let q : float = probability(s);
+        let reflected : kernel::ReflectionEvaluation =
+                            Measure.evaluate(wi, wo, state.conductor.geometry);
+        let base = Base.evaluate(wi, wo, state.dielectric.base);
+        let a : LocalEvaluation = Dielectric.from_base(base, state.dielectric, reflected);
+        let b : LocalEvaluation =
+                    Conductor<Measure>.from_reflection(wi, wo, state.conductor, reflected);
+        let q : float = probability(state);
         let pdf : float = q * reflected.pdf + (1 - q) * base.pdf;
-        return { primeFullCompactMixEval(a.throughput, b.throughput, s.metalness), pdf };
+        return { kernel::mix_eval(a.response, b.response, state.metalness), pdf };
     }
-    public static func sample(wi: float3, u: float3, s: State)->Proposal
+    public static func sample(wi: float3, random: float3, state: State)->Proposal
     {
-        let q : float = probability(s);
-        var p : Proposal;
-        if (q > 0 && u.z < q)
+        let q : float = probability(state);
+        var proposal : Proposal;
+        if (q > 0 && random.z < q)
         {
-            p = G.sample(wi, float3(u.xy, u.z / q), s.conductor.geometry).bsdfSample;
-            if (G.has_delta() && primeFullOpenPbrIsDelta(p.throughput.flags))
+            proposal = Measure.sample(wi, float3(random.xy, random.z / q), state.conductor.geometry)
+                           .proposal;
+            if (Measure.has_delta() && kernel::is_delta(proposal.response.flags))
             {
-                p.throughput.value = Closure.delta_response(wi, s);
-                p.pdf *= q;
+                proposal.response.value = Closure.delta_response(wi, state);
+                proposal.pdf *= q;
             }
         }
         else
-            p = B.sample(wi, float3(u.xy, (u.z - q) / (1 - q)), s.dielectric.base);
-        return p;
+            proposal =
+                Base.sample(wi, float3(random.xy, (random.z - q) / (1 - q)), state.dielectric.base);
+        return proposal;
     }
-    public static func delta_response(wi: float3, s: State)->float3
+    public static func delta_response(wi: float3, state: State)->float3
     {
-        return Closure.delta_response(wi, s);
+        return Closure.delta_response(wi, state);
     }
-    public static func delta_pdf(s: State)->float
+    public static func delta_pdf(state: State)->float
     {
-        return probability(s);
+        return probability(state);
     }
-    public static func marginal_flags(s: State)->bool
+    public static func marginal_flags(state: State)->bool
     {
         return true;
     }
-    public static func marginal_required(s: State)->bool
+    public static func marginal_required(state: State)->bool
     {
         return true;
     }
 };
 
-public struct PrimaryMetalBase<G : IMeasure, B : IBase> : IClosure
+public struct PrimaryMetalBase<Measure : IMeasure, Base : IBase> : IClosure
 {
-    public typedef MetalBlend<BaseClosure<B>, Conductor<G>> Closure;
+    public typedef MetalBlend<BaseClosure<Base>, Conductor<Measure>> Closure;
     public typedef Closure.State State;
     public static func has_delta()->bool
     {
-        return G.has_delta();
+        return Measure.has_delta();
     }
-    public static func prepare<P : IPrimeFullOpenPbrTransmissionGgxEnergy>(
-        energy: P, material: openpbr::Material, wi: float3, incident: float)
+    public static func prepare<EnergyLut : IEnergyLut>(energy: EnergyLut,
+                                                       material: openpbr::Material, wi: float3,
+                                                       incident: float)
         ->State
     {
         return Closure.prepare(energy, material, wi, incident);
     }
-    public static func probability(wi: float3, s: State)->float
+    public static func probability(wi: float3, state: State)->float
     {
-        let base = B.energy(wi, s.dielectric);
-        return openpbr_primary::reflection_probability(
-            s.metalness, (1 - s.metalness) * max(base.x, max(base.y, base.z)));
+        let base = Base.energy(wi, state.dielectric);
+        return openpbr::primary::reflection_probability(
+            state.metalness, (1 - state.metalness) * max(base.x, max(base.y, base.z)));
     }
-    public static func evaluate(wi: float3, wo: float3, s: State)->Value
+    public static func evaluate(wi: float3, wo: float3, state: State)->LocalEvaluation
     {
-        let a : Value = B.evaluate(wi, wo, s.dielectric);
-        let b : Value = Conductor<G>.evaluate(wi, wo, s.conductor);
-        return { primeFullCompactMixEval(a.throughput, b.throughput, s.metalness),
-                 lerp(a.pdf, b.pdf, probability(wi, s)) };
+        let a : LocalEvaluation = Base.evaluate(wi, wo, state.dielectric);
+        let b : LocalEvaluation = Conductor<Measure>.evaluate(wi, wo, state.conductor);
+        return { kernel::mix_eval(a.response, b.response, state.metalness),
+                 lerp(a.pdf, b.pdf, probability(wi, state)) };
     }
-    public static func sample(wi: float3, u: float3, s: State)->Proposal
+    public static func sample(wi: float3, random: float3, state: State)->Proposal
     {
-        let q : float = probability(wi, s);
-        var p : Proposal;
-        if (q > 0 && u.z < q)
+        let q : float = probability(wi, state);
+        var proposal : Proposal;
+        if (q > 0 && random.z < q)
         {
-            p = Conductor<G>.sample(wi, float3(u.xy, u.z / q), s.conductor);
-            if (G.has_delta() && primeFullOpenPbrIsDelta(p.throughput.flags))
+            proposal =
+                Conductor<Measure>.sample(wi, float3(random.xy, random.z / q), state.conductor);
+            if (Measure.has_delta() && kernel::is_delta(proposal.response.flags))
             {
-                p.throughput.value *= s.metalness;
-                p.pdf *= q;
+                proposal.response.value *= state.metalness;
+                proposal.pdf *= q;
             }
         }
         else
-            p = B.sample(wi, float3(u.xy, (u.z - q) / (1 - q)), s.dielectric);
-        return p;
+            proposal =
+                Base.sample(wi, float3(random.xy, (random.z - q) / (1 - q)), state.dielectric);
+        return proposal;
     }
-    public static func delta_response(wi: float3, s: State)->float3
+    public static func delta_response(wi: float3, state: State)->float3
     {
-        return Closure.delta_response(wi, s);
+        return Closure.delta_response(wi, state);
     }
     // 不由采样器消费：此组合直接在离散样本处写入依赖wi的概率。
-    public static func delta_pdf(s: State)->float
+    public static func delta_pdf(state: State)->float
     {
         return 0;
     }
-    public static func marginal_flags(s: State)->bool
+    public static func marginal_flags(state: State)->bool
     {
         return true;
     }
-    public static func marginal_required(s: State)->bool
+    public static func marginal_required(state: State)->bool
     {
         return true;
     }
 };
 
-static const let PrimaryHasLayer : bool = (SelectedFlow & 2) != 0 && (SelectedFlow & 9) != 0;
-static const let PrimaryHasReflection : bool = (SelectedFlow & 2) != 0;
-static const let PrimaryHasBaseMixture : bool =
-                                             (SelectedFlow & 2048) != 0 && (SelectedFlow & 9) != 0;
-static const let PrimaryHasMetalMixture : bool = (SelectedFlow & 2048) != 0;
-static const let PrimaryHasMetal : bool = (SelectedFlow & 4) != 0;
+static const let primary_has_layer : bool = (selected_flow & FLOW_DIELECTRIC_REFLECTION) != 0 &&
+                                            (selected_flow & (FLOW_DIFFUSE | FLOW_SUBSURFACE)) != 0;
+static const let primary_has_reflection : bool = (selected_flow & FLOW_DIELECTRIC_REFLECTION) != 0;
+static const let primary_has_base_mixture
+    : bool = (selected_flow & FLOW_METAL_MIX) != 0 &&
+             (selected_flow & (FLOW_DIFFUSE | FLOW_SUBSURFACE)) != 0;
+static const let primary_has_metal_mixture : bool = (selected_flow & FLOW_METAL_MIX) != 0;
+static const let primary_has_metal : bool = (selected_flow & FLOW_CONDUCTOR_REFLECTION) != 0;
 public typealias PrimaryDielectric =
-    TypeSelect<PrimaryHasLayer, PrimaryLayer<SelectedMeasure, SelectedBase>, Dielectric>.Type;
+    TypeSelect<primary_has_layer, PrimaryLayer<SelectedMeasure, SelectedBase>, Dielectric>.Type;
 typealias PrimaryLayerMixture = PrimaryMetalLayer<SelectedMeasure, SelectedBase>;
 typealias PrimaryBaseOnlyMixture = PrimaryMetalBase<SelectedMeasure, SelectedBase>;
 typealias PrimaryBaseMixture =
-    TypeSelect<PrimaryHasReflection, PrimaryLayerMixture, PrimaryBaseOnlyMixture>.Type;
-typealias PrimaryUnmixed = TypeSelect<PrimaryHasMetal, Metal, PrimaryDielectric>.Type;
-typealias PrimaryWithoutBase = TypeSelect<PrimaryHasMetalMixture, Opaque, PrimaryUnmixed>.Type;
+    TypeSelect<primary_has_reflection, PrimaryLayerMixture, PrimaryBaseOnlyMixture>.Type;
+typealias PrimaryUnmixed = TypeSelect<primary_has_metal, Metal, PrimaryDielectric>.Type;
+typealias PrimaryWithoutBase = TypeSelect<primary_has_metal_mixture, Opaque, PrimaryUnmixed>.Type;
 public typealias PrimaryOpaque =
-    TypeSelect<PrimaryHasBaseMixture, PrimaryBaseMixture, PrimaryWithoutBase>.Type;
+    TypeSelect<primary_has_base_mixture, PrimaryBaseMixture, PrimaryWithoutBase>.Type;
+}
 }

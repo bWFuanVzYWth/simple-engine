@@ -139,9 +139,21 @@ impl Timeline {
 }
 
 /// 已校验的单帧计量与更新参数；不规定应用何时重置或冻结曝光。
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct Frame {
-    words: [u32; 8],
+    extent: [u32; 2],
+    linear_bt709: bool,
+    reset: bool,
+    delta_seconds: f32,
+    compensation: f32,
+    instant: bool,
+}
+
+/// 相等表示相同的上传位模式，保留有效输入中正负零的区别。
+impl PartialEq for Frame {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_words() == other.to_words()
+    }
 }
 
 impl Frame {
@@ -170,16 +182,12 @@ impl Frame {
             return Err(Error::Compensation);
         }
         Ok(Self {
-            words: [
-                extent[0],
-                extent[1],
-                linear709 as u32,
-                reset as u32,
-                delta_seconds.to_bits(),
-                compensation.to_bits(),
-                instant as u32,
-                0,
-            ],
+            extent,
+            linear_bt709: linear709,
+            reset,
+            delta_seconds,
+            compensation,
+            instant,
         })
     }
 
@@ -187,13 +195,30 @@ impl Frame {
     ///
     /// 仅数组内容定义 GPU ABI，Rust 类型布局不作为上传契约。
     pub const fn to_words(self) -> [u32; 8] {
-        self.words
+        [
+            self.extent[0],
+            self.extent[1],
+            self.linear_bt709 as u32,
+            self.reset as u32,
+            self.delta_seconds.to_bits(),
+            self.compensation.to_bits(),
+            self.instant as u32,
+            0,
+        ]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_equality_preserves_uploaded_zero_sign() -> Result<(), Error> {
+        let positive = Frame::new([1, 1], true, 0.0, false, false, 1.0)?;
+        let negative = Frame::new([1, 1], true, -0.0, false, false, 1.0)?;
+        assert_ne!(positive, negative);
+        Ok(())
+    }
 
     #[test]
     fn cancelled_exposure_frame_does_not_advance_adaptation() {

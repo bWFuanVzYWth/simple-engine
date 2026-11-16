@@ -12,12 +12,12 @@ namespace pt
 // 87=127-40；指数区间以无符号位模式检查，零因子也安全。其余输入保留指数拆分。
 func common_factor(value: float)->bool
 {
-    let bits : uint = asuint(value);
+    let bits = asuint(value);
     return (bits == 0) | (bits - (87u << 23u) <= (80u << 23u));
 }
 func common_factor(value: float3)->bool
 {
-    let bits : uint3 = asuint(value);
+    let bits = asuint(value);
     return all((bits == 0) | (bits - (87u << 23u) <= (80u << 23u)));
 }
 
@@ -67,10 +67,10 @@ public func power_heuristic(first: float, second: float)->float
         return 1.0;
     if (first >= second)
     {
-        let ratio : float = second / first;
+        let ratio = second / first;
         return 1.0 / (1.0 + ratio * ratio);
     }
-    let ratio : float = first / second;
+    let ratio = first / second;
     return ratio * ratio / (1.0 + ratio * ratio);
 }
 
@@ -86,10 +86,10 @@ public func power_heuristic_over_pdf(sampled: float, other: float)->float
         return sampled / (sampled * sampled + other * other);
     if (sampled >= other)
     {
-        let ratio : float = other / sampled;
+        let ratio = other / sampled;
         return (1.0 / sampled) / (1.0 + ratio * ratio);
     }
-    let ratio : float = sampled / other;
+    let ratio = sampled / other;
     return (ratio / other) / (1.0 + ratio * ratio);
 }
 

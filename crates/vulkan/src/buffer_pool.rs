@@ -131,7 +131,7 @@ impl BufferPool {
 
     pub(crate) fn give(&mut self, device: &Device, class: Class, mut buffer: Buffer) {
         if device.is_quarantined() {
-            std::mem::forget(buffer);
+            // Buffer没有Rust析构；跳过显式destroy即可保留设备分配。
             return;
         }
         let bytes = buffer.allocation_bytes();

@@ -13,7 +13,7 @@ pub struct Slots {
     maxima: Vec<u32>,
     released: Vec<Range<u32>>,
     searched: usize,
-    consumed: bool,
+    has_empty_ranges: bool,
     pub(super) owner: u64,
     pub(super) generation: u64,
 }
@@ -26,19 +26,22 @@ impl Slots {
             maxima: Vec::new(),
             released: Vec::new(),
             searched: 0,
-            consumed: false,
+            has_empty_ranges: false,
             owner,
             generation: 0,
         }
     }
 
-    pub(super) fn copy(&self) -> Result<Self, Error> {
-        let mut next = Self::new(self.owner);
-        next.end = self.end;
-        next.generation = self.generation;
-        next.free.try_reserve_exact(self.free.len())?;
-        next.free.extend(self.free.iter().cloned());
-        Ok(next)
+    pub(super) fn fork_for_update(&self) -> Result<Self, Error> {
+        let mut free = Vec::new();
+        free.try_reserve_exact(self.free.len())?;
+        free.extend(self.free.iter().cloned());
+        Ok(Self {
+            end: self.end,
+            free,
+            generation: self.generation,
+            ..Self::new(self.owner)
+        })
     }
 
     pub(super) const fn retained_bytes(&self) -> usize {
@@ -106,7 +109,7 @@ impl Slots {
         if let Some(index) = index {
             let start = self.free[index].start;
             self.free[index].start += count;
-            self.consumed |= self.free[index].is_empty();
+            self.has_empty_ranges |= self.free[index].is_empty();
             if !self.maxima.is_empty() {
                 let mut node = self.maxima.len() / 2 + index;
                 self.maxima[node] = self.free[index].end - self.free[index].start;
@@ -131,7 +134,7 @@ impl Slots {
     }
 
     pub(super) fn merge(&mut self) -> Result<(), Error> {
-        if self.released.is_empty() && !self.consumed {
+        if self.released.is_empty() && !self.has_empty_ranges {
             return Ok(());
         }
         self.free.try_reserve(self.released.len())?;
@@ -168,7 +171,7 @@ impl Slots {
         }
         self.maxima.clear();
         self.searched = 0;
-        self.consumed = false;
+        self.has_empty_ranges = false;
         Ok(())
     }
 

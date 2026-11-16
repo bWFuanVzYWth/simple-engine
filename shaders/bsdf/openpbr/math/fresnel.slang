@@ -3,157 +3,149 @@
 #language slang 2026
 module "bsdf/openpbr/math/fresnel.slang";
 
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/math/spectrum.slang";
+import bsdf.openpbr.contract.sample;
+import bsdf.openpbr.math.spectrum;
 
 // Exact Fresnel subset used by the supported OpenPBR topologies.
 // Thin film is omitted because the compact support predicate rejects it.
 
-public func primeFullOpenPbrDielectricRsRp(ior: float, cosineTheta: float)
-    ->PrimeFullOpenPbrFloatPair
+namespace openpbr
 {
-    var cosineTheta = cosineTheta;
+namespace kernel
+{
+public func dielectric_polarized_amplitude(ior: float, cosine_theta: float)->PolarizedValue
+{
+    var cosine_theta = cosine_theta;
     // Equal optical media have no interface. The general subtraction loses precision
     // near grazing incidence and is 0/0 at exactly zero cosine.
     if (ior == 1.0)
     {
-        let zero : PrimeFullOpenPbrFloatPair = { 0.0, 0.0 };
+        let zero : PolarizedValue = { 0.0, 0.0 };
         return zero;
     }
     var eta : float = ior;
-    if (cosineTheta < 0.0)
+    if (cosine_theta < 0.0)
     {
-        cosineTheta = -cosineTheta;
+        cosine_theta = -cosine_theta;
         eta = 1.0 / eta;
     }
     let eta2 : float = eta * eta;
-    let t0 : float = cosineTheta * cosineTheta + (eta - 1.0) * (eta + 1.0);
+    let t0 : float = cosine_theta * cosine_theta + (eta - 1.0) * (eta + 1.0);
     if (t0 <= 0)
         return { -1.0, 1.0 };
     let t1 : float = t0 > 0.0 ? sqrt(t0) : 0.0;
     // Multiply Rp's numerator and denominator by eta; IOR is strictly positive.
-    let t2 : float = eta2 * cosineTheta;
-    var result : PrimeFullOpenPbrFloatPair;
-    result.first = (cosineTheta - t1) / (cosineTheta + t1);
-    result.second = (t1 - t2) / (t1 + t2);
+    let t2 : float = eta2 * cosine_theta;
+    var result : PolarizedValue;
+    result.s = (cosine_theta - t1) / (cosine_theta + t1);
+    result.p = (t1 - t2) / (t1 + t2);
     return result;
 }
 
-public func primeFullOpenPbrDielectricReflectance(ior: float, cosineTheta: float)
-    ->PrimeFullOpenPbrFloatPair
+public func dielectric_polarized_reflectance(ior: float, cosine_theta: float)->PolarizedValue
 {
-    var result : PrimeFullOpenPbrFloatPair = primeFullOpenPbrDielectricRsRp(ior, cosineTheta);
-    result.first *= result.first;
-    result.second *= result.second;
+    var result : PolarizedValue = dielectric_polarized_amplitude(ior, cosine_theta);
+    result.s *= result.s;
+    result.p *= result.p;
     return result;
 }
 
-public func primeFullOpenPbrDielectricUnpolarized(ior: float, cosineTheta: float)->float
+public func dielectric_reflectance(ior: float, cosine_theta: float)->float
 {
-    let value : PrimeFullOpenPbrFloatPair = primeFullOpenPbrDielectricReflectance(ior, cosineTheta);
-    return 0.5 * (value.first + value.second);
+    let value : PolarizedValue = dielectric_polarized_reflectance(ior, cosine_theta);
+    return 0.5 * (value.s + value.p);
 }
 
-public func primeFullOpenPbrDielectricRefract(ior: float, wi: float3, normal: float3)
-    ->PrimeFullOpenPbrRefractResult
+public func dielectric_refract(ior: float, wi: float3, normal: float3)->RefractResult
 {
     var normal = normal;
-    var cosineTheta : float = dot(normal, wi);
-    var inverseEta : float;
-    if (cosineTheta < 0.0)
+    var cosine_theta : float = dot(normal, wi);
+    var inverse_eta : float;
+    if (cosine_theta < 0.0)
     {
-        inverseEta = 1.0 / ior;
+        inverse_eta = 1.0 / ior;
     }
     else
     {
-        cosineTheta = -cosineTheta;
+        cosine_theta = -cosine_theta;
         normal = -normal;
-        inverseEta = ior;
+        inverse_eta = ior;
     }
-    let etaDifference : float = (1.0 - inverseEta) * (1.0 + inverseEta);
-    let scaledCosine : float = inverseEta * cosineTheta;
-    let t0 : float = scaledCosine * scaledCosine + etaDifference;
-    var result : PrimeFullOpenPbrRefractResult;
+    let eta_difference : float = (1.0 - inverse_eta) * (1.0 + inverse_eta);
+    let scaled_cosine : float = inverse_eta * cosine_theta;
+    let t0 : float = scaled_cosine * scaled_cosine + eta_difference;
+    var result : RefractResult;
     result.valid = t0 > 0.0 ? 1u : 0u;
-    result.relativeIor = 1.0 / inverseEta;
+    result.relative_ior = 1.0 / inverse_eta;
     let root : float = sqrt(max(t0, 0.0));
-    let normalChange : float = t0 > 0 ? etaDifference / (root - scaledCosine) : scaledCosine;
-    result.wo = inverseEta == 1 ? wi : inverseEta * wi - normalChange * normal;
+    let normal_change : float = t0 > 0 ? eta_difference / (root - scaled_cosine) : scaled_cosine;
+    result.wo = inverse_eta == 1 ? wi : inverse_eta * wi - normal_change * normal;
     return result;
 }
 
 /// 单位入射／出射方向及实际折射半向量的 Snell 恒等式；ior!=1。
 /// 消去 cos_o+cos_i/eta 在近匹配 IOR 处的相消，保留折射 Jacobian 的真实尖峰。
-public func primeFullOpenPbrRefractionDenominator(eta: float, cosineIncident: float,
-                                                  cosineOutgoing: float)
+public func refraction_denominator(eta: float, cosine_incident: float, cosine_outgoing: float)
     ->float
 {
-    return ((1 - eta) * (1 + eta)) / (eta * eta * (cosineIncident / eta - cosineOutgoing));
+    return ((1 - eta) * (1 + eta)) / (eta * eta * (cosine_incident / eta - cosine_outgoing));
 }
 
-func primeFullOpenPbrSchlickF82Tint(f0: float3, f82: float3, f90: float3, weight: float,
-                                    cosineTheta: float)
+func schlick_f82_tint(f0: float3, f82: float3, f90: float3, weight: float, cosine_theta: float)
     ->float3
 {
-    let cosineThetaMax : float = 1.0 / 7.0;
-    let cosineThetaFactor : float =
-                                1.0 / (cosineThetaMax * primeFullOpenPbrPow6(1.0 - cosineThetaMax));
-    let a : float3 = lerp(f0, f90, primeFullOpenPbrPow5(1.0 - cosineThetaMax)) *
-                     (float3(1.0) - f82) * cosineThetaFactor;
-    return clamp((lerp(f0, f90, primeFullOpenPbrPow5(1.0 - cosineTheta)) -
-                  a * cosineTheta * primeFullOpenPbrPow6(1.0 - cosineTheta)) *
-                     weight,
-                 float3(0.0), float3(1.0));
+    let cosine_theta_max : float = 1.0 / 7.0;
+    let cosine_theta_factor : float = 1.0 / (cosine_theta_max * pow6(1.0 - cosine_theta_max));
+    let a : float3 = lerp(f0, f90, pow5(1.0 - cosine_theta_max)) * (float3(1.0) - f82) *
+                     cosine_theta_factor;
+    return clamp(
+        (lerp(f0, f90, pow5(1.0 - cosine_theta)) - a * cosine_theta * pow6(1.0 - cosine_theta)) *
+            weight,
+        float3(0.0), float3(1.0));
 }
 
-public func primeFullOpenPbrSpecularFresnelUnpolarized(fresnel: PrimeFullOpenPbrSpecularFresnel,
-                                                       cosineTheta: float)
-    ->float3
+public func specular_reflectance(fresnel: SpecularFresnel, cosine_theta: float)->float3
 {
-    return float3(primeFullOpenPbrDielectricUnpolarized(fresnel.energyIor, cosineTheta)) *
-           fresnel.color;
+    return float3(dielectric_reflectance(fresnel.energy_ior, cosine_theta)) * fresnel.color;
 }
 
-public func primeFullOpenPbrSpecularFresnelRt(fresnel: PrimeFullOpenPbrSpecularFresnel,
-                                              cosineTheta: float)
-    ->PrimeFullOpenPbrVecPair
+public func specular_interface_response(fresnel: SpecularFresnel, cosine_theta: float)
+    ->InterfaceResponse
 {
-    var cosineTheta = cosineTheta;
+    var cosine_theta = cosine_theta;
     var tint = true;
-    if (cosineTheta < 0.0)
+    if (cosine_theta < 0.0)
     {
-        let t0 : float = 1.0 - (1.0 - cosineTheta * cosineTheta) * fresnel.ior * fresnel.ior;
+        let t0 : float = 1.0 - (1.0 - cosine_theta * cosine_theta) * fresnel.ior * fresnel.ior;
         if (t0 > 0.0)
         {
-            cosineTheta = sqrt(t0);
+            cosine_theta = sqrt(t0);
         }
         else
         {
-            var totalInternalReflection : PrimeFullOpenPbrVecPair;
-            totalInternalReflection.first = float3(1.0);
-            totalInternalReflection.second = float3(0.0);
-            return totalInternalReflection;
+            var total_internal_reflection : InterfaceResponse;
+            total_internal_reflection.reflection = float3(1.0);
+            total_internal_reflection.transmission = float3(0.0);
+            return total_internal_reflection;
         }
         tint = false;
     }
-    let reflection = float3(primeFullOpenPbrDielectricUnpolarized(fresnel.energyIor, cosineTheta));
-    var result : PrimeFullOpenPbrVecPair;
-    result.second = float3(1.0) - reflection;
-    result.first = tint ? reflection * fresnel.color : reflection;
+    let reflection = float3(dielectric_reflectance(fresnel.energy_ior, cosine_theta));
+    var result : InterfaceResponse;
+    result.transmission = float3(1.0) - reflection;
+    result.reflection = tint ? reflection * fresnel.color : reflection;
     return result;
 }
 
-public func primeFullOpenPbrSpecularFresnelRefract(fresnel: PrimeFullOpenPbrSpecularFresnel,
-                                                   wi: float3, normal: float3)
-    ->PrimeFullOpenPbrRefractResult
+public func specular_fresnel_refract(fresnel: SpecularFresnel, wi: float3, normal: float3)
+    ->RefractResult
 {
-    return primeFullOpenPbrDielectricRefract(fresnel.ior, wi, normal);
+    return dielectric_refract(fresnel.ior, wi, normal);
 }
 
-public func primeFullOpenPbrConductorFresnelUnpolarized(fresnel: PrimeFullOpenPbrConductorFresnel,
-                                                        cosineTheta: float)
-    ->float3
+public func conductor_reflectance(fresnel: ConductorFresnel, cosine_theta: float)->float3
 {
-    return primeFullOpenPbrSchlickF82Tint(fresnel.f0, fresnel.f82, fresnel.f90, fresnel.weight,
-                                          cosineTheta);
+    return schlick_f82_tint(fresnel.f0, fresnel.f82, fresnel.f90, fresnel.weight, cosine_theta);
+}
+}
 }

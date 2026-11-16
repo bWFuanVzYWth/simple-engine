@@ -52,7 +52,7 @@ public struct PathSampler
 public func path_sampler(pixel: uint2, absolute_sample: uint, r: uint, seed: uint)->PathSampler
 {
     var result : PathSampler;
-    let scramble : uint = pt::pcg(seed ^ pt::pcg(absolute_sample >> 8));
+    let scramble = pt::pcg(seed ^ pt::pcg(absolute_sample >> 8));
     result.core = pt::binary_sobol_s8(pixel, absolute_sample & 255u, r, scramble);
     return result;
 }

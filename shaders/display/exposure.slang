@@ -44,12 +44,12 @@ public func exposure_bin(radiance: float3, linear709: bool)->int
         return -1;
     if (linear709)
         radiance = color::bt709_to_rec2020(radiance);
-    let brightness : float = exposure_brightness(radiance);
+    let brightness = exposure_brightness(radiance);
     if (isnan(brightness) || isinf(brightness))
         return -1;
-    let logarithm : float = clamp(log2(max(brightness, exp2(EXPOSURE_MIN_LOG_BRIGHTNESS))),
-                                  EXPOSURE_MIN_LOG_BRIGHTNESS, EXPOSURE_MAX_LOG_BRIGHTNESS);
-    let range : float = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
+    let logarithm = clamp(log2(max(brightness, exp2(EXPOSURE_MIN_LOG_BRIGHTNESS))),
+                          EXPOSURE_MIN_LOG_BRIGHTNESS, EXPOSURE_MAX_LOG_BRIGHTNESS);
+    let range = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
     return int(min(uint(floor((logarithm - EXPOSURE_MIN_LOG_BRIGHTNESS) *
                               (float(EXPOSURE_BIN_COUNT) / range))),
                    EXPOSURE_BIN_COUNT - 1u));
@@ -58,7 +58,7 @@ public func exposure_bin(radiance: float3, linear709: bool)->int
 /// 将0..255内的桶坐标仿射映射到log2亮度；允许传入保留样本的平均桶坐标。
 public func exposure_bin_log(bin: float)->float
 {
-    let range : float = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
+    let range = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
     return EXPOSURE_MIN_LOG_BRIGHTNESS + (bin + 0.5) * (range / float(EXPOSURE_BIN_COUNT));
 }
 /// 返回整数桶中心的log2亮度；桶须在0..255。
@@ -72,11 +72,9 @@ public func exposure_bin_log(bin: uint)->float
 public func exposure_target_ev(measured: float, minimum: float, maximum: float, compensation: float)
     ->float
 {
-    let range : float = maximum - minimum;
-    let bias : float =
-                   range > 0.0 ? 2.0 * (2.0 * measured - minimum - maximum) / max(range, 2.0) : 0.0;
-    let target : float =
-                     clamp(log2(EXPOSURE_KEY) - measured + bias, EXPOSURE_MIN_EV, EXPOSURE_MAX_EV);
+    let range = maximum - minimum;
+    let bias = range > 0.0 ? 2.0 * (2.0 * measured - minimum - maximum) / max(range, 2.0) : 0.0;
+    let target = clamp(log2(EXPOSURE_KEY) - measured + bias, EXPOSURE_MIN_EV, EXPOSURE_MAX_EV);
     return target * compensation;
 }
 
@@ -84,7 +82,7 @@ public func exposure_target_ev(measured: float, minimum: float, maximum: float, 
 public func exposure_adapt(previous: float, target: float, dt: float)->float
 {
     let rate : float = target < previous ? EXPOSURE_DARKEN_RATE : EXPOSURE_BRIGHTEN_RATE;
-    let blend : float = 1.0 - exp(-max(dt, 0.0) * rate);
+    let blend = 1.0 - exp(-max(dt, 0.0) * rate);
     return lerp(previous, target, clamp(blend, 0.0, 1.0));
 }
 }

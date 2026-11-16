@@ -20,54 +20,14 @@
 /// 上述实测退化的具体成因未完全隔离，不能把随机树差异当作全部退化的已证根因。
 /// 对齐块保证不能推及任意滑窗、运动重投影、拒绝历史或去噪后的误差。
 module binary_sobol;
+import pt.sobol_bits;
 
 namespace pt
 {
-func binary_hash(value: uint)->uint
-{
-    var value = value;
-    value ^= value >> 16;
-    value *= 0x7feb352du;
-    value ^= value >> 15;
-    value *= 0x846ca68bu;
-    return value ^ (value >> 16);
-}
-
-func binary_spread(value: uint)->uint
-{
-    var value = value;
-    value &= 0xffffu;
-    value = (value | (value << 8)) & 0x00ff00ffu;
-    value = (value | (value << 4)) & 0x0f0f0f0fu;
-    value = (value | (value << 2)) & 0x33333333u;
-    return (value | (value << 1)) & 0x55555555u;
-}
-
-func binary_owen(value: uint, seed: uint)->uint
-{
-    var value = value;
-    value ^= value * 0x3d20adeau;
-    value += seed;
-    value *= (seed >> 16) | 1u;
-    value ^= value * 0x05526c56u;
-    value ^= value * 0x53a22864u;
-    return reversebits(value);
-}
 
 func binary_permute(value: uint, key: uint)->uint
 {
-    return binary_owen(reversebits(value), key);
-}
-
-func binary_sobol_y(value: uint)->uint
-{
-    var value = value;
-    value ^= (value >> 1) & 0x55555555u;
-    value ^= (value >> 2) & 0x33333333u;
-    value ^= (value >> 4) & 0x0f0f0f0fu;
-    value ^= (value >> 8) & 0x00ff00ffu;
-    value ^= (value >> 16) & 0x0000ffffu;
-    return value;
+    return sobol_bits::owen_reversed(reversebits(value), key);
 }
 
 /// 无资源、64 位运算或隐式随机状态的 S8 值类型；domain 为固定语义身份。
@@ -85,7 +45,7 @@ public struct BinarySobolS8
             let mask : uint = ~0u >> (32 - bit_count);
             return uint2(binary_permute(morton.x, key) & mask, 0);
         }
-        let high_key : uint = binary_hash(morton.y ^ binary_hash(key ^ 0x632be59bu));
+        let high_key = sobol_bits::hash(morton.y ^ sobol_bits::hash(key ^ 0x632be59bu));
         let high_mask : uint = ~0u >> (64 - bit_count);
         return uint2(binary_permute(morton.x, high_key), binary_permute(morton.y, key) & high_mask);
     }
@@ -93,17 +53,18 @@ public struct BinarySobolS8
     /// 同域 Sobol/Owen 两坐标；保持原 whole 实验的二维序列及其已知缺陷。
     public func bits_2d(domain: uint)->uint2
     {
-        let key : uint = binary_hash(domain ^ seed);
-        let i : uint2 = index(key);
-        return uint2(binary_owen(i.x, binary_hash(key ^ 0xa511e9b3u)),
-                     binary_owen(binary_sobol_y(i.x ^ i.y), binary_hash(key ^ 0x63d83595u)));
+        let key = sobol_bits::hash(domain ^ seed);
+        let i = index(key);
+        return uint2(sobol_bits::owen_reversed(i.x, sobol_bits::hash(key ^ 0xa511e9b3u)),
+                     sobol_bits::owen_reversed(sobol_bits::reversed_y(i.x ^ i.y),
+                                               sobol_bits::hash(key ^ 0x63d83595u)));
     }
 
     /// 同域 bits_2d.x；保留两点分层，也保留普通 domain 间的同步翻转缺陷。
     public func bits_1d(domain: uint)->uint
     {
-        let key : uint = binary_hash(domain ^ seed);
-        return binary_owen(index(key).x, binary_hash(key ^ 0xa511e9b3u));
+        let key = sobol_bits::hash(domain ^ seed);
+        return sobol_bits::owen_reversed(index(key).x, sobol_bits::hash(key ^ 0xa511e9b3u));
     }
 
     /// xy 与 bits_2d(pair_domain) 相同；z 为 scalar_domain 索引交换低两 bit 后的 X。
@@ -118,10 +79,11 @@ public struct BinarySobolS8
     /// 先按材质／消费语义选映射，不能根据本次随机事件再选择映射。
     public func bits_3d(pair_domain: uint, scalar_domain: uint)->uint3
     {
-        let key : uint = binary_hash(scalar_domain ^ seed);
+        let key = sobol_bits::hash(scalar_domain ^ seed);
         var i : uint = index(key).x;
         i = (i & ~3u) | ((i & 1u) << 1) | ((i >> 1) & 1u);
-        return uint3(bits_2d(pair_domain), binary_owen(i, binary_hash(key ^ 0xa511e9b3u)));
+        return uint3(bits_2d(pair_domain),
+                     sobol_bits::owen_reversed(i, sobol_bits::hash(key ^ 0xa511e9b3u)));
     }
 
     /// bits_2d 的高 24 位量化为 [0,1)²；不提供连续实数或全部 32 位浮点精度。
@@ -148,7 +110,7 @@ public struct BinarySobolS8
 /// 只提供 S8，避免低两 bit 交换在 S<2 时跨越 sample/pixel 边界。
 public func binary_sobol_s8(pixel: uint2, sample_value: uint, r: uint, seed: uint)->BinarySobolS8
 {
-    let m : uint = binary_spread(pixel.x) | (binary_spread(pixel.y) << 1);
+    let m : uint = sobol_bits::spread(pixel.x) | (sobol_bits::spread(pixel.y) << 1);
     var result : BinarySobolS8;
     result.morton = uint2((m << 8) | sample_value, m >> 24);
     result.bit_count = 2 * r + 8;

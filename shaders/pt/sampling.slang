@@ -1,17 +1,16 @@
 /// 无资源绑定的 float32 采样内核；种子、随机流和样本维度顺序由调用方决定。
 /// PCG RXS-M-XS 来源：https://www.jcgt.org/published/0009/03/02/
 module sampling;
+import math.constants;
 import geometry.frame;
 
 namespace pt
 {
-/// 圆周率，按 float32 舍入。
-public static const let pi = 3.14159265358979323846;
 
 /// 对一个 32 位值执行 PCG RXS-M-XS hash，不保存或推进调用方状态。
 public func pcg(value: uint)->uint
 {
-    let state : uint = value * 747796405u + 2891336453u;
+    let state = value * 747796405u + 2891336453u;
     let word : uint = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
 }
@@ -26,13 +25,13 @@ public func random(inout state: uint)->float
 }
 
 /// normal 须为单位向量，u 属于 [0, 1)²；返回同坐标系内 normal 正半球的单位方向。
-/// PDF 为 cos(theta)/pi，采用立体角量度 sr^-1，不包含随机数生成。
+/// PDF 为 cos(theta)/math::pi，采用立体角量度 sr^-1，不包含随机数生成。
 /// 极坐标圆盘映射：https://pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
 public func cosine_hemisphere(normal: float3, u: float2)->float3
 {
-    let phi : float = 2.0 * pi * u.y;
+    let phi = math::tau * u.y;
     let tangent = geometry::unit_tangent(normal);
-    let bitangent : float3 = cross(normal, tangent);
+    let bitangent = cross(normal, tangent);
     var sine : float;
     var cosine : float;
     sincos(phi, sine, cosine);

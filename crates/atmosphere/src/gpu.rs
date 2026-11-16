@@ -22,6 +22,7 @@ use crate::{
 use std::num::NonZeroU64;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gpu_tests.rs"]
 mod tests;
 
 pub use crate::{SHADERS, ShaderBinary};
@@ -79,12 +80,17 @@ struct Bank {
 
 impl Bank {
     fn descriptors(p: &Parameters) -> [(&'static str, [u32; 3], wgpu::TextureFormat); 4] {
-        let [h, s, _, _] = p.dims;
-        let low = p.offsets1[1];
+        let [h, s, _, _] = [
+            p.source_height_count,
+            p.sun_state_count,
+            p.optical_height_count,
+            p.optical_angle_count,
+        ];
+        let low = p.low_height_count;
         [
             (
                 "atmosphere source",
-                [s * p.solve[1], low * p.solve[2], 1],
+                [s * p.phase_node_count, low * p.cone_node_count, 1],
                 wgpu::TextureFormat::Rgba16Float,
             ),
             (
@@ -118,9 +124,15 @@ impl Bank {
         )
     }
     fn bytes(p: &Parameters) -> u64 {
-        let [h, s, _, _] = p.dims.map(u64::from);
-        let low = u64::from(p.offsets1[1]);
-        low * s * u64::from(p.solve[1]) * u64::from(p.solve[2]) * 8
+        let [h, s, _, _] = [
+            p.source_height_count,
+            p.sun_state_count,
+            p.optical_height_count,
+            p.optical_angle_count,
+        ]
+        .map(u64::from);
+        let low = u64::from(p.low_height_count);
+        low * s * u64::from(p.phase_node_count) * u64::from(p.cone_node_count) * 8
             + (h - low + 1) * s * 5 * 16
             + h * s * 16
             + s * 16
@@ -620,8 +632,9 @@ impl Atmosphere {
     ) -> Result<Self, Error> {
         let p = model.parameters;
         let limits = device.limits();
-        let incident_bytes = 4 * u64::from(p.dims[1]) * u64::from(p.solve[0]) * 16;
-        if limits.max_texture_dimension_2d < p.dims[1] * p.solve[1]
+        let incident_bytes =
+            4 * u64::from(p.sun_state_count) * u64::from(p.incident_direction_count) * 16;
+        if limits.max_texture_dimension_2d < p.sun_state_count * p.phase_node_count
             || limits.max_texture_dimension_3d < AERIAL_SIZE
         {
             return Err(Error::Limit("texture dimension"));
@@ -717,7 +730,7 @@ impl Atmosphere {
         );
         let resident_bytes = Bank::bytes(&p)
             + model.data.len() as u64 * 16
-            + u64::from(p.dims[2]) * u64::from(p.dims[3]) * 8
+            + u64::from(p.optical_height_count) * u64::from(p.optical_angle_count) * 8
             + u64::from(SKY_SIZE).pow(2) * 16
             + u64::from(AERIAL_SIZE).pow(3) * 16
             + (MAPPING_ROWS * 16) as u64
@@ -762,7 +775,7 @@ impl Atmosphere {
         let device = &self.device;
         let p = self.base;
         let extra = Bank::new(device, &p);
-        let count = 4 * u64::from(p.dims[1]) * u64::from(p.solve[0]);
+        let count = 4 * u64::from(p.sun_state_count) * u64::from(p.incident_direction_count);
         let incoming = buffer(
             device,
             "atmosphere incident scratch",
@@ -778,7 +791,7 @@ impl Atmosphere {
         let moments = buffer(
             device,
             "atmosphere moments scratch",
-            4 * u64::from(p.dims[1]) * 7 * 16,
+            4 * u64::from(p.sun_state_count) * 7 * 16,
             wgpu::BufferUsages::STORAGE,
         );
         let initial = uniform(device, &self.queue, bytemuck::bytes_of(&p));
@@ -795,7 +808,11 @@ impl Atmosphere {
             encoder,
             &self.pipelines[Stage::Optical.index()],
             &optical,
-            [p.dims[3].div_ceil(8), p.dims[2].div_ceil(8), 1],
+            [
+                p.optical_angle_count.div_ceil(8),
+                p.optical_height_count.div_ceil(8),
+                1,
+            ],
         );
         let ground = group(
             device,
@@ -812,7 +829,7 @@ impl Atmosphere {
             encoder,
             &self.pipelines[Stage::GroundDirect.index()],
             &ground,
-            [p.dims[1].div_ceil(64), 1, 1],
+            [p.sun_state_count.div_ceil(64), 1, 1],
         );
         let mut uniforms = Vec::new();
         uniforms.try_reserve_exact(84)?;
@@ -821,14 +838,19 @@ impl Atmosphere {
         let mut current = 0;
         for iteration in 1..=8 {
             let next = 1 - current;
-            for first in (0..p.dims[0]).step_by(4) {
+            for first in (0..p.source_height_count).step_by(4) {
                 let mut params = p;
-                params.batch = [first, 4.min(p.dims[0] - first), 0, 0];
-                params.solve[3] = iteration;
+                [
+                    params.batch_height_start,
+                    params.batch_height_count,
+                    params.optical_row_start,
+                    params.optical_row_count,
+                ] = [first, 4.min(p.source_height_count - first), 0, 0];
+                params.scattering_iteration = iteration;
                 let uniform = uniform(device, &self.queue, bytemuck::bytes_of(&params));
                 let previous = banks[current];
                 let target = banks[next];
-                let states = params.batch[1] * p.dims[1];
+                let states = params.batch_height_count * p.sun_state_count;
                 let direction_group = group(
                     device,
                     &self.layouts[Stage::Directions.index()],
@@ -842,7 +864,7 @@ impl Atmosphere {
                     encoder,
                     &self.pipelines[Stage::Directions.index()],
                     &direction_group,
-                    [p.solve[0].div_ceil(64), states, 1],
+                    [p.incident_direction_count.div_ceil(64), states, 1],
                 );
                 let incident_stage = if iteration == 1 {
                     Stage::IncidentFirst
@@ -885,7 +907,7 @@ impl Atmosphere {
                     encoder,
                     &self.pipelines[incident_stage.index()],
                     &incident_group,
-                    [p.solve[0].div_ceil(64), states, 1],
+                    [p.incident_direction_count.div_ceil(64), states, 1],
                 );
                 let moments_group = group(
                     device,
@@ -923,8 +945,11 @@ impl Atmosphere {
                     &self.pipelines[Stage::Source.index()],
                     &source_group,
                     [
-                        (p.dims[1] * p.solve[1]).div_ceil(8),
-                        (p.offsets1[1].saturating_sub(first).min(params.batch[1]) * p.solve[2])
+                        (p.sun_state_count * p.phase_node_count).div_ceil(8),
+                        (p.low_height_count
+                            .saturating_sub(first)
+                            .min(params.batch_height_count)
+                            * p.cone_node_count)
                             .div_ceil(8),
                         1,
                     ],
@@ -946,7 +971,7 @@ impl Atmosphere {
                     encoder,
                     &self.pipelines[Stage::GroundMultiple.index()],
                     &ground_group,
-                    [p.dims[1].div_ceil(64), 1, 1],
+                    [p.sun_state_count.div_ceil(64), 1, 1],
                 );
                 uniforms.push(uniform);
             }
@@ -954,7 +979,7 @@ impl Atmosphere {
         }
         let bytes = Bank::bytes(&p)
             + count * 32
-            + 4 * u64::from(p.dims[1]) * 7 * 16
+            + 4 * u64::from(p.sun_state_count) * 7 * 16
             + uniforms.len() as u64 * 400;
         uniforms.extend([incoming, directions, moments]);
         self.scratch = Some(Scratch {
@@ -986,7 +1011,7 @@ impl Atmosphere {
         let update = self.frame.prepare(view, &self.calibration)?;
         if update.sky || previous_pending.sky {
             let mut sky_params = self.frame.parameters;
-            sky_params.sun[0] = 0.0;
+            sky_params.sun_azimuth = 0.0;
             self.queue
                 .write_buffer(&self.sky_uniform, 0, bytemuck::bytes_of(&sky_params));
             self.queue
