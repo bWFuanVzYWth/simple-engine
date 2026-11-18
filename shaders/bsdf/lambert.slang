@@ -28,9 +28,7 @@ public func lambertian_pdf(normal: float3, wi: float3)->float {
 /// normal 须为单位向量，u 属于 [0, 1)²；采样其正半球并返回立体角 PDF。
 /// 此分布下 f*cos(theta)/pdf 解析约消为 albedo，另一出射方向须位于同一正半球。
 public func lambertian_sample(normal: float3, u: float2)->DirectionSample {
-    var sample : DirectionSample;
-    sample.direction = sampling::cosine_hemisphere(normal, u);
-    sample.pdf = lambertian_pdf(normal, sample.direction);
-    return sample;
+    let direction = sampling::cosine_hemisphere(normal, u);
+    return { direction, lambertian_pdf(normal, direction) };
 }
 }

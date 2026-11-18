@@ -15,13 +15,22 @@ const OUTPUT_BYTES: usize = EXTENT[0] as usize * EXTENT[1] as usize * 16;
 const DISPATCHES: u32 = 8;
 const SEED: u32 = 0xdcc9_53b7;
 
-const KERNELS: &[(&str, Shader<'static>)] = &[(
-    "transport",
-    shader(
-        include_bytes!(concat!(env!("OUT_DIR"), "/bench-transport.spv")),
-        "mis_main",
+const KERNELS: &[(&str, Shader<'static>)] = &[
+    (
+        "transport",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-transport.spv")),
+            "mis_main",
+        ),
     ),
-)];
+    (
+        "bsdf",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-bsdf.spv")),
+            "lambert_main",
+        ),
+    ),
+];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {
     Shader {

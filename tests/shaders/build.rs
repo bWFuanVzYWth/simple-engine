@@ -95,6 +95,12 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-transport.spv",
         ),
         (
+            "shaders/bsdf_bench.slang",
+            "lambert_main",
+            "compute",
+            "bench-bsdf.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",
