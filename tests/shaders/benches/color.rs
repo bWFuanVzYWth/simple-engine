@@ -6,6 +6,9 @@
 //! 输入上传、管线构建及结果核验在 GPU 计时外，仍保留主机准备和提交时间。
 #![forbid(unsafe_code)]
 
+#[path = "support/compute.rs"]
+mod compute;
+
 use simple_engine::{
     display::{self, PrimeDrtSettings},
     gpu_test::{self, Capability, Gpu, Shader},
@@ -18,7 +21,6 @@ const WORKGROUP: [u32; 3] = [16, 16, 1];
 const GROUPS: [u32; 3] = [WIDTH / WORKGROUP[0], HEIGHT / WORKGROUP[1], 1];
 const FRAME_BYTES: usize = WIDTH as usize * HEIGHT as usize * size_of::<[f32; 4]>();
 const DISPATCHES: u32 = 16;
-const ROUNDS: usize = 9;
 const WORKLOADS: [Shader<'static>; 4] = [
     shader(
         include_bytes!(concat!(env!("OUT_DIR"), "/color-primaries.spv")),
@@ -48,8 +50,8 @@ enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("{0} 的 GPU 计时无效")]
-    Timing(&'static str),
+    #[error(transparent)]
+    Measurement(#[from] compute::Error),
     #[error("{0} 的 GPU 输出无效")]
     Output(&'static str),
 }
@@ -93,25 +95,8 @@ fn measure(
     shader: Shader<'static>,
     input: &[u8],
 ) -> Result<serde_json::Value, Error> {
-    for _ in 0..3 {
-        gpu.bench_compute(shader, input, FRAME_BYTES, GROUPS, DISPATCHES)?;
-    }
-    let mut samples = Vec::with_capacity(ROUNDS);
-    let mut frame_ms = [0.0; ROUNDS];
-    for elapsed in &mut frame_ms {
-        let sample = gpu.bench_compute(shader, input, FRAME_BYTES, GROUPS, DISPATCHES)?;
-        if !sample.gpu_seconds.is_finite() || sample.gpu_seconds <= 0.0 {
-            return Err(Error::Timing(shader.entry));
-        }
-        *elapsed = 1000.0 * sample.gpu_seconds / f64::from(DISPATCHES);
-        samples.push(serde_json::json!({
-            "gpu_seconds": sample.gpu_seconds,
-            "host_seconds": sample.host_seconds,
-            "prepare_seconds": sample.prepare_seconds,
-        }));
-    }
-    frame_ms.sort_unstable_by(f64::total_cmp);
-    let output = gpu.compute(shader, input, FRAME_BYTES, GROUPS)?;
+    let measurement = compute::measure(gpu, shader, input, FRAME_BYTES, GROUPS, DISPATCHES)?;
+    let output = measurement.output;
     if output.first_chunk::<16>() == output.last_chunk::<16>()
         || !output
             .as_chunks::<4>()
@@ -125,8 +110,8 @@ fn measure(
         "name": shader.entry,
         "spirv_blake3": blake3::hash(shader.spirv).to_hex().as_str(),
         "output_blake3": blake3::hash(&output).to_hex().as_str(),
-        "median_gpu_ms_per_frame": frame_ms[ROUNDS / 2],
-        "samples": samples,
+        "median_gpu_ms_per_frame": measurement.median_gpu_ms_per_frame,
+        "samples": measurement.samples,
     }))
 }
 

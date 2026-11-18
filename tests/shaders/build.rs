@@ -77,6 +77,18 @@ fn main() -> Result<(), shader_build::Error> {
             "denoise-spatial.spv",
         ),
         (
+            "shaders/camera_bench.slang",
+            "ray_main",
+            "compute",
+            "camera-ray.spv",
+        ),
+        (
+            "shaders/camera_bench.slang",
+            "project_main",
+            "compute",
+            "camera-project.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

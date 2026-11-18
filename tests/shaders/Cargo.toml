@@ -23,6 +23,10 @@ harness = false
 name = "denoise"
 harness = false
 
+[[bench]]
+name = "camera"
+harness = false
+
 [dev-dependencies]
 half = "2.7.1"
 

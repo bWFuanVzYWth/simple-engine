@@ -75,6 +75,14 @@ cargo bench --locked -p shader_tests --bench denoise
 
 输出 JSON 分别记录连续表面和含天空、材质边界及无效像素的场景，包含 GPU 派发时间、命令录制和结果指纹。
 
+测量 4K 主射线和前帧相机投影：
+
+```powershell
+cargo bench --locked -p shader_tests --bench camera
+```
+
+输出 JSON 包含主射线生成，以及沿每条射线重投影 32 个世界点的 GPU 时间和结果指纹。
+
 通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell

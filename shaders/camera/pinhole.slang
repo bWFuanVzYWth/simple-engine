@@ -77,20 +77,16 @@ public func camera_depth(camera: Camera, position: float3)->float {
 /// 投影世界方向，不含相机平移或帧 jitter；extent 为非零输入尺寸。
 public func camera_project_direction(camera: Camera, direction: float3, extent: uint2)
     ->CameraProjection {
-    var result : CameraProjection = {};
     let depth = dot(direction, camera.forward.xyz);
     let denominator = float2(camera.forward.w, 1) * (depth * camera.position.w);
-    if (!(depth > 1e-6) || !isfinite(depth) || any(denominator <= 0) || any(!isfinite(denominator)))
-        return result;
+    if (!all(bool3(depth > 1e-6, all(denominator > 0), all(isfinite(denominator)))))
+        return {};
     let screen =
         float2(dot(direction, camera.right.xyz), -dot(direction, camera.up.xyz)) / denominator;
-    var pixel : float2 = (screen * 0.5 + 0.5) * float2(extent);
-    if (any(!isfinite(pixel)))
-        return result;
-    result.pixel = pixel;
-    result.view_z = depth;
-    result.valid = true;
-    return result;
+    let pixel = (screen * 0.5 + 0.5) * float2(extent);
+    if (!all(isfinite(pixel)))
+        return {};
+    return { pixel, depth, true };
 }
 
 /// 无 jitter 的世界相对点投影；深度 <=1e-6 或数值不可表示返回 valid=false。
