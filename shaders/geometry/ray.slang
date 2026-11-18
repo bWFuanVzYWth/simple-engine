@@ -148,7 +148,7 @@ public func triangle_point(v0: float3, v1: float3, v2: float3, bary: float2)->Su
 /// point 须携带单位几何法线及有效非负 offset；不修改传入的表面点。
 public func offset_origin(point_value: SurfacePoint, direction: float3)->float3 {
     let offset =
-        dot(point_value.normal, direction) < 0.0 ? -point_value.offset : point_value.offset;
+        select(dot(point_value.normal, direction) < 0.0, -point_value.offset, point_value.offset);
     precise let origin = fma(float3(offset), point_value.normal, point_value.position);
     return origin;
 }
@@ -156,12 +156,7 @@ public func offset_origin(point_value: SurfacePoint, direction: float3)->float3 
 /// 从 offset_origin 选定侧生成散射射线，t_min=0，原样保留 direction 与 t_max。
 /// 不归一化方向或换算上界；仅单位方向时 t_max 是世界距离，调用方维持有效区间。
 public func spawn_ray(point_value: SurfacePoint, direction: float3, t_max: float)->Ray {
-    var ray : Ray;
-    ray.origin = offset_origin(point_value, direction);
-    ray.t_min = 0.0;
-    ray.direction = direction;
-    ray.t_max = t_max;
-    return ray;
+    return { offset_origin(point_value, direction), 0.0, direction, t_max };
 }
 
 /// 构造 source 到 target 的连接段，使用非单位方向与 [0, nextDown(1)]，避免归一化和距离换算。
@@ -172,11 +167,10 @@ public func connection_ray(source: SurfacePoint, target: TriangleEndpoint, out r
     let delta = target.position - source.position;
     ray.origin = offset_origin(source, delta);
     ray.t_min = 0.0;
-    precise var direction : float3 = target.position - ray.origin;
-    var offset : float = target.base_offset +
-                         dot(target.traversal_weight, abs(ray.origin) + abs(direction));
-    if (dot(target.normal, -direction) < 0.0)
-        offset = -offset;
+    precise let direction = target.position - ray.origin;
+    let magnitude =
+        target.base_offset + dot(target.traversal_weight, abs(ray.origin) + abs(direction));
+    let offset = select(dot(target.normal, -direction) < 0.0, -magnitude, magnitude);
     precise let adjusted = fma(float3(offset), target.normal, direction);
     ray.direction = adjusted;
     ray.t_max = asfloat(0x3f7fffffu);

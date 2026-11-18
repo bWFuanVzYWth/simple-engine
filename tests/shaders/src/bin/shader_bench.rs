@@ -200,6 +200,7 @@ fn run() -> Result<(), Error> {
             return Err(Error::Output);
         }
         workloads.push(serde_json::json!({ "name": name, "input_blake3": blake3::hash(&input).to_hex().as_str(),
+            "output_blake3": blake3::hash(&actual).to_hex().as_str(),
             "count": args.count, "dispatches": args.dispatches,
             "work_items": u64::from(args.count) * u64::from(args.dispatches), "samples": samples,
             "input_bytes": input.len(), "output_bytes": output_bytes,
