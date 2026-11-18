@@ -44,6 +44,13 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "identity_main",
         ),
     ),
+    (
+        "light_sampling",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-light_sampling.spv")),
+            "emitter_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {

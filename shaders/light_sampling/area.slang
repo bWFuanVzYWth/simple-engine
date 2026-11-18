@@ -113,15 +113,12 @@ public struct QuadAreaSample {
 public func sample_quad_area(area: uint4, sample_value: float2)->QuadAreaSample {
     let target = min(uint(sample_value.x * float(LIGHT_SELECTORS)), LIGHT_SELECTORS - 1u);
     let second = target >= area.x;
-    let start = second ? area.x : 0u;
-    let mass = second ? LIGHT_SELECTORS - area.x : area.x;
-    let u : float = min((float(target - start) + 0.5) / float(mass), 0.9999999403953552);
+    let start = select(second, area.x, 0u);
+    let mass = select(second, LIGHT_SELECTORS - area.x, area.x);
+    let u = min((float(target - start) + 0.5) / float(mass), 0.9999999403953552);
     let root = sqrt(u);
-    var result : QuadAreaSample;
-    result.half = uint(second);
-    result.bary = float2(root * (1.0 - sample_value.y), root * sample_value.y);
-    result.density = asfloat(second ? area.z : area.y);
-    return result;
+    let bary = root * float2(1.0 - sample_value.y, sample_value.y);
+    return { uint(second), bary, asfloat(select(second, area.z, area.y)) };
 }
 
 /// 片半编号来自实际硬件 primitive；包含片选择概率，不含离散灯选择概率。
@@ -133,18 +130,20 @@ public func quad_area_density(area: uint4, half: uint)->float {
 public func quad_endpoint(vertices_value: LightQuadVertices, sample_value: QuadAreaSample,
                           object_to_world: float3x4, world_to_object: float3x4)
     ->geometry::TriangleEndpoint {
-    return geometry::triangle_endpoint(
-        vertices_value.a, sample_value.half == 0u ? vertices_value.b : vertices_value.c,
-        sample_value.half == 0u ? vertices_value.c : vertices_value.d, sample_value.bary,
-        object_to_world, world_to_object);
+    let first = sample_value.half == 0u;
+    return geometry::triangle_endpoint(vertices_value.a,
+                                       select(first, vertices_value.b, vertices_value.c),
+                                       select(first, vertices_value.c, vertices_value.d),
+                                       sample_value.bary, object_to_world, world_to_object);
 }
 
 /// 输入已处于追踪坐标系时的重载；不代替有实例变换时的误差预算。
 public func quad_endpoint(vertices_value: LightQuadVertices, sample_value: QuadAreaSample)
     ->geometry::TriangleEndpoint {
+    let first = sample_value.half == 0u;
     return geometry::triangle_endpoint(
-        vertices_value.a, sample_value.half == 0u ? vertices_value.b : vertices_value.c,
-        sample_value.half == 0u ? vertices_value.c : vertices_value.d, sample_value.bary);
+        vertices_value.a, select(first, vertices_value.b, vertices_value.c),
+        select(first, vertices_value.c, vertices_value.d), sample_value.bary);
 }
 
 /// 将匹配的离散灯 PMF 与片面积密度换成实立体角 PDF。
