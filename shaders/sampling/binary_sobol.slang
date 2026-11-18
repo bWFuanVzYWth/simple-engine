@@ -72,10 +72,11 @@ public struct BinarySobolS8 {
     /// 先按材质／消费语义选映射，不能根据本次随机事件再选择映射。
     public func bits_3d(pair_domain: uint, scalar_domain: uint)->uint3 {
         let key = sobol_bits::hash(scalar_domain ^ seed);
-        var i : uint = index(key).x;
-        i = (i & ~3u) | ((i & 1u) << 1) | ((i >> 1) & 1u);
+        let i = index(key).x;
+        let low_bits_differ = (i ^ (i >> 1)) & 1u;
         return uint3(bits_2d(pair_domain),
-                     sobol_bits::owen_reversed(i, sobol_bits::hash(key ^ 0xa511e9b3u)));
+                     sobol_bits::owen_reversed(i ^ (low_bits_differ * 3u),
+                                               sobol_bits::hash(key ^ 0xa511e9b3u)));
     }
 
     /// bits_2d 的高 24 位量化为 [0,1)²；不提供连续实数或全部 32 位浮点精度。
@@ -98,7 +99,7 @@ public struct BinarySobolS8 {
 /// 一个完整 net 固定 R/seed/domain；应用每 256 样本换 seed 后是新 net，不是无限延长。
 /// 只提供 S8，避免低两 bit 交换在 S<2 时跨越 sample/pixel 边界。
 public func binary_sobol_s8(pixel: uint2, sample_value: uint, r: uint, seed: uint)->BinarySobolS8 {
-    let m : uint = sobol_bits::spread(pixel.x) | (sobol_bits::spread(pixel.y) << 1);
+    let m = sobol_bits::spread(pixel.x) | (sobol_bits::spread(pixel.y) << 1);
     var result : BinarySobolS8;
     result.morton = uint2((m << 8) | sample_value, m >> 24);
     result.bit_count = 2 * r + 8;

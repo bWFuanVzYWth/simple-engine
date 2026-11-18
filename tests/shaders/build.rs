@@ -101,6 +101,12 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-bsdf.spv",
         ),
         (
+            "shaders/sampling_bench.slang",
+            "sobol_4k_main",
+            "compute",
+            "bench-sampling.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

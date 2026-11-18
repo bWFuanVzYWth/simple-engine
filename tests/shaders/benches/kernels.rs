@@ -30,6 +30,13 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "lambert_main",
         ),
     ),
+    (
+        "sampling",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-sampling.spv")),
+            "sobol_4k_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {
