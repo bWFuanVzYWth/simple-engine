@@ -7,16 +7,14 @@ public func accumulate_sample(inout sum: float4, inout count: uint, radiance: fl
     ->void {
     if (sum.w < 0)
         return;
-    if (error < 0)
-        sum.w = error;
-    else if (!all(isfinite(radiance)))
-        sum.w = -1;
-    else {
-        sum.xyz += radiance;
-        count += 1u;
-        if (!all(isfinite(sum.xyz)))
-            sum.w = -1;
+    let failed = error < 0;
+    if (failed | !all(isfinite(radiance))) {
+        sum.w = select(failed, error, -1.0);
+        return;
     }
+    sum.xyz += radiance;
+    count += 1u;
+    sum.w = select(all(isfinite(sum.xyz)), sum.w, -1.0);
 }
 
 /// 有效计数须大于零；线性HDR保留BT.709工作空间，不引用显示变换参数。

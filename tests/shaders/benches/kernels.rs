@@ -72,6 +72,20 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "sky_segments_main",
         ),
     ),
+    (
+        "pt",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-pt-single.spv")),
+            "single_sample_main",
+        ),
+    ),
+    (
+        "pt",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-pt-dual.spv")),
+            "dual_sample_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {

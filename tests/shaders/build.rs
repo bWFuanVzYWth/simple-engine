@@ -137,6 +137,18 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-atmosphere-sky.spv",
         ),
         (
+            "shaders/pt_bench.slang",
+            "single_sample_main",
+            "compute",
+            "bench-pt-single.spv",
+        ),
+        (
+            "shaders/pt_bench.slang",
+            "dual_sample_main",
+            "compute",
+            "bench-pt-dual.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",
