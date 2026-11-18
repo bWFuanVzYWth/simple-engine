@@ -193,8 +193,8 @@ public func segment_transport(sigma: float4, dt: float)->SegmentTransport {
     let tau = sigma * dt;
     let transmittance = exp(-tau);
     let series = dt * fma(tau, fma(tau, float4(1.0 / 6.0), float4(-0.5)), float4(1.0));
-    return { transmittance, select(tau < float4(0.001), series,
-                                   (1.0 - transmittance) / max(sigma, float4(1e-30))) };
+    let integral = (1.0 - transmittance) / max(sigma, float4(1e-30));
+    return { transmittance, select(tau < 0.001, series, integral) };
 }
 /// 线性 Rec.2020 的有限距离 L/T；T 是太阳谱加权的 RGB 近似，不能代表任意背景光谱。
 public struct AerialSample {

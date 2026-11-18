@@ -58,6 +58,20 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "dda_main",
         ),
     ),
+    (
+        "atmosphere",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-atmosphere-terrain.spv")),
+            "terrain_segments_main",
+        ),
+    ),
+    (
+        "atmosphere",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-atmosphere-sky.spv")),
+            "sky_segments_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {

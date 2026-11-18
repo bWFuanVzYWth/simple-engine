@@ -125,6 +125,18 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-voxel.spv",
         ),
         (
+            "shaders/atmosphere_bench.slang",
+            "terrain_segments_main",
+            "compute",
+            "bench-atmosphere-terrain.spv",
+        ),
+        (
+            "shaders/atmosphere_bench.slang",
+            "sky_segments_main",
+            "compute",
+            "bench-atmosphere-sky.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",
