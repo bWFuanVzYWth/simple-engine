@@ -1,54 +1,48 @@
 /// 实际首面闭包：提案与求值一致性、物理响应和混合估计量。
 module primary_sampling_test;
-import bsdf.openpbr.api;
-import bsdf.openpbr.flow;
-import bsdf.openpbr.primary_policy;
+import openpbr.api;
+import openpbr.flow;
+import openpbr.primary_policy;
 import pt.path_sampler;
 import pt.integrator;
 import pt.scene;
-import pt.transport;
-import "bsdf/openpbr/math/microfacet_energy.slang";
+import "openpbr/math/microfacet_energy.slang";
+import transport.weights;
 
 [[vk::binding(0, 0)]]
 var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
 var outputs : RWStructuredBuffer<float4>;
 
-public struct Energy : openpbr::IEnergyLut
-{
-    public func lookup(uvw: float3)->float4
-    {
+public struct Energy : openpbr::IEnergyLut {
+    public func lookup(uvw: float3)->float4 {
         return float4(0.2, 0.3, 0.4, 0.5);
     }
 };
 
-func weight(s: openpbr::Sample)->float3
-{
+func weight(s: openpbr::Sample)->float3 {
     return s.events != 0 ? s.response / s.pdf : float3(0);
 }
 
-struct RadianceConsumer : openpbr::IFlowEvaluationConsumer
-{
+struct RadianceConsumer : openpbr::IFlowEvaluationConsumer {
     var radiance : float3;
     var continuation : bool;
     var sequence : uint;
 
     [mutating]
-    func consume(direction: uint, evaluated: openpbr::Evaluation)->void
-    {
+    func consume(direction: uint, evaluated: openpbr::Evaluation)->void {
         sequence = sequence * 4u + direction + 1u;
         let light = direction == 0 ? float4(0.3, 1.2, 0.7, 0.19) : float4(2.1, 0.4, 0.5, 0.37);
         if (any(evaluated.response > 0))
             radiance += float3(0.7, 1.3, 0.9) *
-                        pt::triple_product(evaluated.response, light.xyz,
-                                           pt::power_heuristic_over_pdf(
-                                               light.w, continuation ? evaluated.pdf : 0));
+                        transport::triple_product(evaluated.response, light.xyz,
+                                                  transport::power_heuristic_over_pdf(
+                                                      light.w, continuation ? evaluated.pdf : 0));
     }
 };
 
 [numthreads(64, 1, 1)]
-func primary_selection_main(uint3 id: SV_DispatchThreadID)->void
-{
+func primary_selection_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x >= uint(inputs[4].x))
         return;
     let sampler = pt::path_sampler(uint2(id.x & 255u, id.x >> 8u), 0, 8, 3721);
@@ -65,8 +59,7 @@ func primary_selection_main(uint3 id: SV_DispatchThreadID)->void
 
 // 掩码、最后一跳和介质限额均保留原来的评估、MIS和散射契约。
 [numthreads(64, 1, 1)]
-func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void
-{
+func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x >= uint(inputs[4].x))
         return;
     let m : openpbr::Material = { inputs[0], inputs[1], uint4(uint(inputs[4].y), 0, 0, 0) };
@@ -90,14 +83,14 @@ func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void
     var radiance = float3(0.13, 0.17, 0.23);
     if ((mask & 1u) != 0 && any(expected.first.response > 0))
         radiance += float3(0.7, 1.3, 0.9) *
-                    pt::triple_product(
-                        expected.first.response, float3(0.3, 1.2, 0.7),
-                        pt::power_heuristic_over_pdf(0.19, continuation ? expected.first.pdf : 0));
+                    transport::triple_product(expected.first.response, float3(0.3, 1.2, 0.7),
+                                              transport::power_heuristic_over_pdf(
+                                                  0.19, continuation ? expected.first.pdf : 0));
     if ((mask & 2u) != 0 && any(expected.second.response > 0))
         radiance += float3(0.7, 1.3, 0.9) *
-                    pt::triple_product(
-                        expected.second.response, float3(2.1, 0.4, 0.5),
-                        pt::power_heuristic_over_pdf(0.37, continuation ? expected.second.pdf : 0));
+                    transport::triple_product(expected.second.response, float3(2.1, 0.4, 0.5),
+                                              transport::power_heuristic_over_pdf(
+                                                  0.37, continuation ? expected.second.pdf : 0));
     let expected_sequence = mask == 3u ? 6u : mask;
     outputs[id.x * 5] = float4(actual.direction - expected.scattered.direction,
                                actual.relative_eta - expected.scattered.relative_eta);
@@ -110,8 +103,7 @@ func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void
 }
 
 [numthreads(64, 1, 1)]
-func primary_sampling_main(uint3 id: SV_DispatchThreadID)->void
-{
+func primary_sampling_main(uint3 id: SV_DispatchThreadID)->void {
     let n = uint(inputs[4].x);
     if (id.x >= n)
         return;
@@ -149,8 +141,8 @@ func primary_sampling_main(uint3 id: SV_DispatchThreadID)->void
                                 ? abs(proposed.pdf - one.pdf) / max(1.0, one.pdf)
                                 : 0;
     // 连续MIS的互补性同时消费新提案PDF；不混入delta质量。
-    let mis : float = proposed.pdf > 0 ? pt::power_heuristic(proposed.pdf, 0.37) +
-                                             pt::power_heuristic(0.37, proposed.pdf)
+    let mis : float = proposed.pdf > 0 ? transport::power_heuristic(proposed.pdf, 0.37) +
+                                             transport::power_heuristic(0.37, proposed.pdf)
                                        : 1;
     outputs[id.x * 5] = float4(weight(one), response_error);
     outputs[id.x * 5 + 1] = float4((weight(a) + weight(b)) * 0.5, pdf_error);

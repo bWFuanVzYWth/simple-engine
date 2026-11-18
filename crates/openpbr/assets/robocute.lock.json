@@ -19,7 +19,7 @@
   ],
   "productionScope": {
     "math": "exact OpenPBR supported-domain kernels, narrow current canonical vertex adaptation",
-    "sourceKernels": "shaders/bsdf/openpbr",
+    "sourceKernels": "shaders/openpbr",
     "thickSubsurface": "unsupported LabPBR thick or unproven source falls back to ordinary diffuse; only CPU-proven thin sheets support subsurface",
     "excluded": [
       "presets",

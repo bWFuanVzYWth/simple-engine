@@ -7,11 +7,9 @@ module scene;
 import restir_pt.types;
 import geometry.ray;
 
-namespace restir_pt
-{
+namespace restir_pt {
 /// 单次求值的表面；不写入 reservoir，材质闭包由宿主的专用 callable 处理。
-public struct Surface
-{
+public struct Surface {
     public var hit : HitInfo;
     public var point : geometry::SurfacePoint;
     public var wo : float3;
@@ -35,15 +33,13 @@ public struct Surface
 };
 
 /// 连续 BSDF 的 value 含出射方向余弦；pdf 为完整混合分布的立体角密度。
-public struct BsdfEvaluation
-{
+public struct BsdfEvaluation {
     public var value : float3;
     public var pdf : float;
 };
 
 /// 重连第一端的材质求值；介质选择在同一专用材质阶段完成，不留到公共shift状态机。
-public struct ConnectionEvaluation
-{
+public struct ConnectionEvaluation {
     public var bsdf : BsdfEvaluation;
     public var transmittance : float3;
     /// 第二端BSDF只消费连接段IOR；Beer已在transmittance中，固定后缀不重算。
@@ -51,8 +47,7 @@ public struct ConnectionEvaluation
 };
 
 /// 发光命中端的专用结果；反向灯PDF与该端的材质/alias键一并求值。
-public struct EmitterEvaluation
-{
+public struct EmitterEvaluation {
     public var emission : float3;
     public var pdf : float;
     public var position : float3;
@@ -60,8 +55,7 @@ public struct EmitterEvaluation
 };
 
 /// sample 的 weight 含 response / probability；delta 的 pdf 是离散概率质量。
-public struct BsdfSample
-{
+public struct BsdfSample {
     public var direction : float3;
     public var weight : float3;
     public var medium : float4;
@@ -76,8 +70,7 @@ public struct BsdfSample
 };
 
 /// 初采单次专用材质调用的输出；sample 与至多两个加性NEE共享同一闭包。
-public struct InitialShading
-{
+public struct InitialShading {
     public var sample : BsdfSample;
     public var nee : BsdfEvaluation;
     public var emission : float3;
@@ -85,8 +78,7 @@ public struct InitialShading
 };
 
 /// 光源样本；hit 保存可重建的几何光源身份，环境或方向光由 light_type 区分。
-public struct LightSample
-{
+public struct LightSample {
     public var hit : HitInfo;
     public var direction : float3;
     public var radiance : float3;
@@ -104,8 +96,7 @@ public static const let INITIAL_PRIMARY = 32u;
 public static const let INITIAL_POINT_LIGHT = 0x80000000u;
 
 /// 固定bounce身份与显式操作标记；材质阶段按需产生随机维，不携带已采样灯载荷。
-public struct InitialRequest
-{
+public struct InitialRequest {
     public var bounce_seed : uint;
     public var flags : uint;
     public var previous_position : float3;
@@ -117,8 +108,7 @@ public struct InitialRequest
 
 /// 80B数值NEE候选；pdf<=0表示无可见贡献。只保留RIS和重连实际消费的字段。
 /// lightType最高位表示有限point光，其余位保持LIGHT_*枚举；geometryFactor已在几何端计算。
-public struct InitialDirect
-{
+public struct InitialDirect {
     public var hit : HitInfo;
     public var direction : float3;
     public var radiance : float3;
@@ -131,8 +121,7 @@ public struct InitialDirect
 };
 
 /// 材质阶段更新路径内 RIS 权重并返回胜出的候选；调度器据此写入重连状态。
-public struct InitialVertex
-{
+public struct InitialVertex {
     public var sample : BsdfSample;
     public var emission : float3;
     public var emission_pdf : float;
@@ -145,8 +134,7 @@ public struct InitialVertex
 /// 重放以源 reservoir 的随机身份为准，previous 只选择几何/光照世代，不改变随机向量。
 /// ReconnectionData保存前缀实际携带的介质；loadSurface只提供表面元数据与默认侧面状态，
 /// 不能用表面的面朝向代替路径介质。任意嵌套体积仍须由场景适配器维护其边界契约。
-public interface IRestirScene
-{
+public interface IRestirScene {
     func load_surface(hit: HitInfo, wo: float3, previous: bool)->Surface;
     /// 从观察位置计算 wo；仅恢复一次几何，避免为未知端点重复解码。
     func load_surface_from_origin(hit: HitInfo, origin: float3, previous: bool)->Surface;

@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args: &["-fp-mode", "precise"],
             },
             shader_build::Recipe {
-                source: "../../shaders/pt/light_build.slang",
+                source: "../../shaders/light_bvh/build.slang",
                 entry: "build_level",
                 stage: "compute",
                 output: "light_build.spv",

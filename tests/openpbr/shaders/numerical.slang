@@ -1,13 +1,12 @@
 /// 无适配器拒绝的数值核；解析极限由 CPU f64 独立核对。
 module numerical_test;
-import bsdf.openpbr.api;
-import "bsdf/openpbr/math/microfacet_distribution.slang";
-import "bsdf/openpbr/contract/material.slang";
-import "bsdf/openpbr/contract/sample.slang";
-import "bsdf/openpbr/math/fresnel.slang";
-import "bsdf/openpbr/math/microfacet_energy.slang";
-struct Case
-{
+import openpbr.api;
+import "openpbr/math/microfacet_distribution.slang";
+import "openpbr/contract/material.slang";
+import "openpbr/contract/sample.slang";
+import "openpbr/math/fresnel.slang";
+import "openpbr/math/microfacet_energy.slang";
+struct Case {
     var material : openpbr::Material;
     var view : float4;
     var u : float4;
@@ -24,8 +23,7 @@ var energy_texture : Texture3D<float4>;
 var energy_sampler : SamplerState;
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func main(uint3 id: SV_DispatchThreadID)->void
-{
+func main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     inputs.GetDimensions(count, stride);
@@ -42,8 +40,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func math_main(uint3 id: SV_DispatchThreadID)->void
-{
+func math_main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     inputs.GetDimensions(count, stride);
@@ -61,8 +58,7 @@ func math_main(uint3 id: SV_DispatchThreadID)->void
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func purpose_main(uint3 id: SV_DispatchThreadID)->void
-{
+func purpose_main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     inputs.GetDimensions(count, stride);

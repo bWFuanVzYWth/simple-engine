@@ -8,7 +8,7 @@
 //!
 //! 正反向概率以同一个 24-bit 均匀整数选择器为准。正权至少获得一个选择器，
 //! 因而不会承诺与理想浮点权重完全成比例；MIS 须使用编码中的实际 PMF。
-//! 对应 shader 为 `shaders/pt/light_sampling.slang`，独立于场景和 BSDF。
+//! 对应 shader 为 `shaders/light_sampling/quad.slang`，独立于场景和 BSDF。
 //! [`emitter`]补充资源期纹理texel裁剪与静态alias；与 [`bvh`] 的位置提案组合；可见性仍由输运查询决定。
 
 #![forbid(unsafe_code)]
@@ -36,7 +36,7 @@ pub const BOTH_SIDES: u32 = FRONT_SIDE | BACK_SIDE;
 /// 圆锥半角对应的球面弦长平方，可供采样、PDF和发光支持域共享。
 ///
 /// angle为有限弧度，属于`[0,pi]`；正半角的PDF另要求结果非零且可表示。
-/// 与`geometry/cone.slang`共用小角Horner表达式，避免按帧常量在每次命中重复计算。
+/// 与 `sampling/cone.slang` 共用小角 Horner 表达式，避免按帧常量在每次命中重复计算。
 /// 计算只返回几何量，不校验或改变调用方已经建立的角度域。
 pub fn cone_chord_squared(angle: f32) -> f32 {
     let half = 0.5 * angle;

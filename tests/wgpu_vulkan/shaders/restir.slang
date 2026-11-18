@@ -17,8 +17,7 @@ var output : RWByteAddressBuffer;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func storage_roundtrip(uint3 id: SV_DispatchThreadID)->void
-{
+func storage_roundtrip(uint3 id: SV_DispatchThreadID)->void {
     let index = id.x;
     if (index >= 55u)
         return;
@@ -34,8 +33,7 @@ func storage_roundtrip(uint3 id: SV_DispatchThreadID)->void
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-func admission_cases()->void
-{
+func admission_cases()->void {
     let a : AdmissionSurface = { float3(0, 0, 1), 10.0, false };
     var b : AdmissionSurface = { float3(0, 0, -1), 10.0, true };
     output.Store(0, uint(spatial_candidate(a, b)));
@@ -59,8 +57,7 @@ func admission_cases()->void
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func selection_equivalence(uint3 id: SV_DispatchThreadID)->void
-{
+func selection_equivalence(uint3 id: SV_DispatchThreadID)->void {
     let index = id.x;
     let canonical = load_reservoir(source, 0);
     let neighbor = load_reservoir(source, 1);

@@ -5,8 +5,7 @@ var result : RWStructuredBuffer<uint>;
 var source : StructuredBuffer<uint>;
 
 [shader("raygeneration")]
-func reorder_raygen()->void
-{
+func reorder_raygen()->void {
     let index : uint = DispatchRaysIndex().x;
     let value : uint = source[index] ^ 0x13579bdf;
     ReorderThread(value & 7u, 3u);
@@ -15,12 +14,10 @@ func reorder_raygen()->void
 }
 
 [shader("miss")]
-func reorder_miss(inout payload_value: uint)->void
-{
+func reorder_miss(inout payload_value: uint)->void {
 }
 
 [shader("closesthit")]
 func reorder_closest(inout payload_value: uint, attributes: BuiltInTriangleIntersectionAttributes)
-    ->void
-{
+    ->void {
 }

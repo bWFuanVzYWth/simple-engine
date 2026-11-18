@@ -1,19 +1,18 @@
 module specialized_fixture;
-import bsdf.openpbr.api;
-import bsdf.openpbr.denoise;
-import bsdf.openpbr.flow;
-import bsdf.openpbr.composition;
-import bsdf.openpbr.selection;
-import bsdf.openpbr.transmission_composition;
-import "bsdf/openpbr/math/frame.slang";
-import "bsdf/openpbr/contract/material.slang";
+import openpbr.api;
+import openpbr.denoise;
+import openpbr.flow;
+import openpbr.composition;
+import openpbr.selection;
+import openpbr.transmission_composition;
+import "openpbr/math/frame.slang";
+import "openpbr/contract/material.slang";
 
 #ifndef OPENPBR_FLOW
 #error OPENPBR_FLOW must select one compile-time OpenPBR capability
 #endif
 
-struct Case
-{
+struct Case {
     var material : openpbr::Material;
     var view : float4;
     var u : float4;
@@ -32,8 +31,7 @@ var energy_sampler : SamplerState;
 func raw_opaque<C : openpbr::closure::IClosure>(c: Case, energy: openpbr::Energy,
                                                 out proposal: openpbr::closure::Proposal,
                                                 out evaluated: openpbr::closure::LocalEvaluation)
-    ->void
-{
+    ->void {
     let frame : openpbr::kernel::Frame = openpbr::specialized_frame<openpbr::CAP_OPAQUE_DIELECTRIC>(
                     float3(0, 0, 1), c.view.xyz, c.incident, c.incident);
     let wi : float3 = openpbr::kernel::to_local(frame, c.view.xyz);
@@ -47,8 +45,7 @@ func raw_opaque<C : openpbr::closure::IClosure>(c: Case, energy: openpbr::Energy
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func main(uint3 id: SV_DispatchThreadID)->void
-{
+func main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     cases.GetDimensions(count, stride);
@@ -57,12 +54,10 @@ func main(uint3 id: SV_DispatchThreadID)->void
     let c : Case = cases[id.x];
     let energy : openpbr::Energy = { energy_texture, energy_sampler };
     // 直接观察组合内核；不能让公开适配器的非有限值拒绝掩盖数值缺陷。
-    if (c.u.w == 6 || c.u.w == 7)
-    {
+    if (c.u.w == 6 || c.u.w == 7) {
         var proposal : openpbr::closure::Proposal;
         var evaluated : openpbr::closure::LocalEvaluation;
-        if ((OPENPBR_FLOW & 48) != 0)
-        {
+        if ((OPENPBR_FLOW & 48) != 0) {
             static const let capability : uint = (OPENPBR_FLOW & 32) != 0
                                                      ? openpbr::CAP_THIN_DIELECTRIC
                                                      : openpbr::CAP_SOLID_DIELECTRIC;
@@ -70,8 +65,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
                             float3(0, 0, 1), c.view.xyz, c.incident, c.transmitted);
             let wi : float3 = openpbr::kernel::to_local(frame, c.view.xyz);
             var ior : float = c.transmitted.x / c.incident.x;
-            if ((OPENPBR_FLOW & 16) != 0)
-            {
+            if ((OPENPBR_FLOW & 16) != 0) {
                 ior = max(c.incident.x, c.transmitted.x) / min(c.incident.x, c.transmitted.x);
             }
             let state : openpbr::closure::Transmission.State =
@@ -83,18 +77,13 @@ func main(uint3 id: SV_DispatchThreadID)->void
                 proposal = openpbr::closure::Transmission.sample(wi, c.u.xyz, state);
             evaluated = openpbr::closure::Transmission.evaluate(
                 wi, c.u.w == 7 ? openpbr::kernel::to_local(frame, c.u.xyz) : proposal.wo, state);
-        }
-        else
-        {
-            if ((openpbr::closure::selected_variant & 2048) != 0 && (OPENPBR_FLOW & 11) != 0)
-            {
+        } else {
+            if ((openpbr::closure::selected_variant & 2048) != 0 && (OPENPBR_FLOW & 11) != 0) {
                 if (c.material.surface.y == 1)
                     raw_opaque<openpbr::closure::Metal>(c, energy, proposal, evaluated);
                 else
                     raw_opaque<openpbr::closure::Dielectric>(c, energy, proposal, evaluated);
-            }
-            else
-            {
+            } else {
                 raw_opaque<openpbr::closure::Opaque>(c, energy, proposal, evaluated);
             }
         }
@@ -108,8 +97,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
         return;
     }
     let i : uint = id.x * 5;
-    if (c.u.w == 2.0)
-    {
+    if (c.u.w == 2.0) {
         let evaluated : openpbr::Evaluation = openpbr::evaluate_flow<OPENPBR_FLOW>(
                             energy, c.material, float3(0, 0, 1), c.view.xyz, c.u.xyz, c.incident,
                             c.transmitted);
@@ -121,8 +109,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
         output[i + 3] = float4(evaluated.response, evaluated.pdf);
         return;
     }
-    if (c.u.w == 3.0 || c.u.w == 4.0)
-    {
+    if (c.u.w == 3.0 || c.u.w == 4.0) {
         let control = uint(c.view.w);
         let shaded : openpbr::Batch = openpbr::shade_flow<OPENPBR_FLOW>(
                          energy, c.material, float3(0, 0, 1), c.view.xyz, float3(0.6, 0, 0.8),
@@ -153,8 +140,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
 // 导引单独编译；其 LUT 资源不属于纯闭包入口的绑定契约。
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func guide_main(uint3 id: SV_DispatchThreadID)->void
-{
+func guide_main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     cases.GetDimensions(count, stride);

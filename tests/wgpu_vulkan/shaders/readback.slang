@@ -6,8 +6,7 @@ var image : RWTexture2D<float4>;
 var pixels : RWStructuredBuffer<float4>;
 
 [numthreads(8, 8, 1)]
-func readback_main(uint3 id: SV_DispatchThreadID)->void
-{
+func readback_main(uint3 id: SV_DispatchThreadID)->void {
     var width : uint;
     var height : uint;
     image.GetDimensions(width, height);

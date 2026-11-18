@@ -31,33 +31,28 @@
 module reservoir;
 import restir_pt.types;
 
-namespace restir_pt
-{
+namespace restir_pt {
 /// NV默认标量target：BT.601 luminance；所有相关MIS target必须使用同一映射。
-public func target(integrand: float3)->float
-{
+public func target(integrand: float3)->float {
     return PathRISState::to_scalar(integrand);
 }
 
 /// 清空整份80B状态；空reservoir的M、weight和identity均为0。
-public func empty_reservoir()->PathReservoir
-{
+public func empty_reservoir()->PathReservoir {
     var result : PathReservoir = {};
     result.init();
     return result;
 }
 
 /// 第一个已完成路径候选；seed必须是阈值/散射随机流消费前的可重放状态。
-public func create_initial_reservoir(sample_value: PathRISState, seed: uint)->PathReservoir
-{
+public func create_initial_reservoir(sample_value: PathRISState, seed: uint)->PathReservoir {
     return PathReservoir::create_from_ris_state(sample_value, seed);
 }
 
 /// 加入后续初始路径；每个完成路径使M加1，返回其是否取代当前选中项。
 public func stream_ris(inout result: PathReservoir, sample_value: PathRISState, seed: uint,
                        u: float)
-    ->bool
-{
+    ->bool {
     return result.add(sample_value, seed, u);
 }
 
@@ -65,14 +60,12 @@ public func stream_ris(inout result: PathReservoir, sample_value: PathRISState, 
 /// 调用方须先把source.reconnectionJacobian更新为本次连接的目标几何因子。
 public func merge_reservoir(inout result: PathReservoir, source: PathReservoir, integrand: float3,
                             jacobian: float, mis_weight: float, u: float)
-    ->bool
-{
+    ->bool {
     return result.merge(integrand, jacobian, source, u, mis_weight);
 }
 
 /// 初始SPP结束：w_sum/(sample_mass*p_hat)，随后M设为1；与NV populateReservoir一致。
-public func finalize_initial(inout result: PathReservoir)->void
-{
+public func finalize_initial(inout result: PathReservoir)->void {
     let p_hat = target(result.integrand);
     result.weight = p_hat == 0.f ? 0.f : result.weight / (result.sample_mass * p_hat);
     result.sample_mass = 1.f;
@@ -80,8 +73,7 @@ public func finalize_initial(inout result: PathReservoir)->void
 
 /// GRIS轮结束：w_sum/p_hat；不再除M，MIS已包含各source的有效量。
 /// 无效/负的最终W清为0，保持NV重采样pass的最终数值处理。
-public func finalize_reuse(inout result: PathReservoir)->void
-{
+public func finalize_reuse(inout result: PathReservoir)->void {
     result.finalize_reservoir_weight();
     result.weight = isnan(result.weight) || isinf(result.weight) ? 0.f : max(0.f, result.weight);
 }

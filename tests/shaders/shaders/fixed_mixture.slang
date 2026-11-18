@@ -10,8 +10,7 @@ var outputs : RWStructuredBuffer<float4>;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func fixed_mixture_main(uint3 id: SV_DispatchThreadID)->void
-{
+func fixed_mixture_main(uint3 id: SV_DispatchThreadID)->void {
     let sample : uint = id.x;
     if (sample >= inputs[0].z)
         return;

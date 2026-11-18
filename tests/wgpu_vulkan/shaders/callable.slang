@@ -10,19 +10,16 @@ var tint : Texture2D<float4>;
 [[vk::binding(4, 0)]]
 var linear_clamp : SamplerState;
 
-struct CallablePayload
-{
+struct CallablePayload {
     var value : float4;
     var lane : uint;
 };
-struct RayPayload
-{
+struct RayPayload {
     var unused : uint;
 };
 
 [shader("raygeneration")]
-func callable_raygen()->void
-{
+func callable_raygen()->void {
     var lane : uint = DispatchRaysIndex().x;
     var payload : CallablePayload;
     payload.value = float4(float(lane), 1, 2, 1);
@@ -34,30 +31,26 @@ func callable_raygen()->void
 }
 
 [shader("callable")]
-func callable_add(inout payload_value: CallablePayload)->void
-{
+func callable_add(inout payload_value: CallablePayload)->void {
     payload_value.value.xyz +=
         source[payload_value.lane].xyz + tint.SampleLevel(linear_clamp, float2(.5), 0).xyz;
     payload_value.value.w += 1;
 }
 
 [shader("callable")]
-func callable_scale(inout payload_value: CallablePayload)->void
-{
+func callable_scale(inout payload_value: CallablePayload)->void {
     payload_value.value.xyz *= 2;
     payload_value.value.w += 2;
 }
 
 [shader("miss")]
-func callable_miss(inout payload_value: RayPayload)->void
-{
+func callable_miss(inout payload_value: RayPayload)->void {
     payload_value.unused = 0;
 }
 
 [shader("closesthit")]
 func callable_closest(inout payload_value: RayPayload,
                       attributes: BuiltInTriangleIntersectionAttributes)
-    ->void
-{
+    ->void {
     payload_value.unused = 0;
 }

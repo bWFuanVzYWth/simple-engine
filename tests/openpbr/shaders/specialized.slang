@@ -1,13 +1,12 @@
 module specialized_fixture;
-import bsdf.openpbr.api;
-import bsdf.openpbr.specialized;
+import openpbr.api;
+import openpbr.specialized;
 
 #ifndef OPENPBR_CAPABILITY
 #error OPENPBR_CAPABILITY must select one compile-time OpenPBR capability
 #endif
 
-struct Case
-{
+struct Case {
     var material : openpbr::Material;
     var view : float4;
     var u : float4;
@@ -25,8 +24,7 @@ var energy_sampler : SamplerState;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func main(uint3 id: SV_DispatchThreadID)->void
-{
+func main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     cases.GetDimensions(count, stride);
@@ -35,8 +33,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
     let c : Case = cases[id.x];
     let energy : openpbr::Energy = { energy_texture, energy_sampler };
     let i : uint = id.x * 5;
-    if (c.u.w == 2.0)
-    {
+    if (c.u.w == 2.0) {
         let evaluated : openpbr::Evaluation = openpbr::evaluate_specialized<OPENPBR_CAPABILITY>(
                             energy, c.material, float3(0, 0, 1), c.view.xyz, c.u.xyz, c.incident,
                             c.transmitted);
@@ -48,8 +45,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
         output[i + 3] = float4(evaluated.response, evaluated.pdf);
         return;
     }
-    if (c.u.w == 3.0 || c.u.w == 4.0)
-    {
+    if (c.u.w == 3.0 || c.u.w == 4.0) {
         let control = uint(c.view.w);
         let shaded : openpbr::Batch = openpbr::shade_specialized<OPENPBR_CAPABILITY>(
                          energy, c.material, float3(0, 0, 1), c.view.xyz, float3(0.6, 0, 0.8),

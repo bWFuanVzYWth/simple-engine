@@ -22,8 +22,7 @@ static const let PI = 3.14159265358979323846;
 /// mode 2/3/10 为 z=2 无限发光平面，其 NEE 只采样边长4的子区域；10从双面灯背面接收光。
 /// mode 7/8 为 z=0/1 的 Lambert 发光腔体，禁用NEE/MIS，最多10次散射。
 /// variant 改变 primary 法线或横向位置，使双向 shift 的支持域/PDF 与源域不同。
-public struct LambertScene : IRestirScene
-{
+public struct LambertScene : IRestirScene {
     public var mode : uint;
     public var variant : uint;
     public var albedo : float3;
@@ -31,40 +30,32 @@ public struct LambertScene : IRestirScene
     public var extinction : float;
     public var angle : float;
 
-    public func finiteLight()->bool
-    {
+    public func finiteLight()->bool {
         return mode == 2 || mode == 3 || mode == 10;
     }
-    public func cavity()->bool
-    {
+    public func cavity()->bool {
         return mode == 7 || mode == 8;
     }
-    public func use_nee()->bool
-    {
+    public func use_nee()->bool {
         return mode != 1 && !cavity();
     }
-    public func use_mis()->bool
-    {
+    public func use_mis()->bool {
         return !cavity();
     }
-    public func normal()->float3
-    {
+    public func normal()->float3 {
         let a : float = finiteLight() || cavity() || mode == 9 || variant == 0 ? 0.0 : angle;
         return float3(sin(a), 0.0, cos(a));
     }
-    public func position()->float3
-    {
+    public func position()->float3 {
         return finiteLight() || cavity() || mode == 6 ? float3(float(variant) * 0.7, 0.0, 0.0)
                                                       : float3(0.0);
     }
-    public func primary_hit()->HitInfo
-    {
+    public func primary_hit()->HitInfo {
         var hit : HitInfo;
         hit.data = uint4(mode == 5 ? 0u : 1u, asuint(position()));
         return hit;
     }
-    public func load_surface(hit: HitInfo, wo: float3, previous: bool)->Surface
-    {
+    public func load_surface(hit: HitInfo, wo: float3, previous: bool)->Surface {
         var hit = hit;
         var result : Surface = {};
         result.hit = hit;
@@ -82,8 +73,7 @@ public struct LambertScene : IRestirScene
         result.front_facing = dot(result.point.normal, wo) > 0.0;
         return result;
     }
-    public func load_surface_from_origin(hit: HitInfo, origin: float3, previous: bool)->Surface
-    {
+    public func load_surface_from_origin(hit: HitInfo, origin: float3, previous: bool)->Surface {
         var result : Surface = load_surface(hit, float3(0.0), previous);
         let delta : float3 = origin - result.point.position;
         result.distance = length(delta);
@@ -91,30 +81,24 @@ public struct LambertScene : IRestirScene
         result.front_facing = dot(result.point.normal, result.wo) > 0.0;
         return result;
     }
-    public func light_endpoint(hit: HitInfo, previous: bool)->geometry::SurfacePoint
-    {
+    public func light_endpoint(hit: HitInfo, previous: bool)->geometry::SurfacePoint {
         return load_surface(hit, float3(0), previous).point;
     }
-    public func emission_side_supported(surface: Surface)->bool
-    {
+    public func emission_side_supported(surface: Surface)->bool {
         return mode == 10 || surface.front_facing;
     }
-    public func shade_initial_vertex(surface: Surface, request: InitialRequest)->InitialVertex
-    {
+    public func shade_initial_vertex(surface: Surface, request: InitialRequest)->InitialVertex {
         return generic_initial_vertex(this, surface, request);
     }
-    public func set_incident(inout surface: Surface, medium: float4)->void
-    {
+    public func set_incident(inout surface: Surface, medium: float4)->void {
         surface.incident = medium;
     }
     public func trace(origin: float3, direction: float3, previous: bool, out hit: HitInfo,
                       out distance: float)
-        ->bool
-    {
+        ->bool {
         hit = {};
         distance = environment_distance();
-        if (cavity())
-        {
+        if (cavity()) {
             let upper : bool = direction.z > 0.0;
             distance = ((upper ? 1.0 : 0.0) - origin.z) / direction.z;
             hit.data = uint4(upper ? 2u : 1u, asuint(origin + distance * direction));
@@ -126,24 +110,19 @@ public struct LambertScene : IRestirScene
         hit.data = uint4(2u, asuint(origin + distance * direction));
         return distance > 0.0;
     }
-    public func visible(source: Surface, target: Surface, previous: bool)->bool
-    {
+    public func visible(source: Surface, target: Surface, previous: bool)->bool {
         return true;
     }
-    public func visible_direction(source: Surface, direction: float3, previous: bool)->bool
-    {
+    public func visible_direction(source: Surface, direction: float3, previous: bool)->bool {
         return true;
     }
-    public func transmittance(source: Surface, direction: float3, distance: float)->float3
-    {
+    public func transmittance(source: Surface, direction: float3, distance: float)->float3 {
         return float3(exp(-extinction * distance));
     }
-    public func environment_distance()->float
-    {
+    public func environment_distance()->float {
         return 2.0;
     }
-    public func sample_bsdf(surface: Surface, u: float3)->BsdfSample
-    {
+    public func sample_bsdf(surface: Surface, u: float3)->BsdfSample {
         let n : float3 = surface.point.normal;
         let tangent = float3(n.z, 0.0, -n.x);
         let r : float = sqrt(u.x);
@@ -159,28 +138,25 @@ public struct LambertScene : IRestirScene
     }
     public func shade_initial(surface: Surface, u: float3, direction: float3,
                               secondDirection: float3, sample_continuation: bool)
-        ->InitialShading
-    {
+        ->InitialShading {
         var sample : BsdfSample = {};
         if (sample_continuation)
             sample = sample_bsdf(surface, u);
         return { sample, evaluate_bsdf(surface, direction, -1), surface.emission,
                  evaluate_bsdf(surface, secondDirection, -1) };
     }
-    public func evaluate_bsdf(surface: Surface, direction: float3, component: int)->BsdfEvaluation
-    {
+    public func evaluate_bsdf(surface: Surface, direction: float3, component: int)->BsdfEvaluation {
         let pdf : float = max(0.0, dot(surface.point.normal, direction)) / PI;
         return { albedo * pdf, pdf };
     }
     public func evaluate_connection(surface: Surface, direction: float3, distance: float,
                                     component: int)
-        ->ConnectionEvaluation
-    {
+        ->ConnectionEvaluation {
         return { evaluate_bsdf(surface, direction, component),
                  transmittance(surface, direction, distance), surface.incident.x };
     }
-    public func evaluate_emitter(surface: Surface, from: float3, previous: bool)->EmitterEvaluation
-    {
+    public func evaluate_emitter(surface: Surface, from: float3, previous: bool)
+        ->EmitterEvaluation {
         var surface = surface;
         surface = load_surface(surface.hit, surface.wo, previous);
         var source : Surface = {};
@@ -190,16 +166,13 @@ public struct LambertScene : IRestirScene
                  surface.point.position, surface.point.normal };
     }
     public func is_sample_rough(surface: Surface, component: uint, pdf: float, threshold: float)
-        ->bool
-    {
+        ->bool {
         return surface.roughness >= threshold;
     }
-    public func sample_light(surface: Surface, u: float3)->LightSample
-    {
+    public func sample_light(surface: Surface, u: float3)->LightSample {
         var result : LightSample = {};
         result.radiance = float3(radiance);
-        if (finiteLight())
-        {
+        if (finiteLight()) {
             let point = float3(4.0 * u.xy - 2.0, 2.0);
             let delta : float3 = point - surface.point.position;
             result.distance = length(delta);
@@ -207,9 +180,7 @@ public struct LambertScene : IRestirScene
             result.hit.data = uint4(2u, asuint(point));
             result.pdf = result.distance * result.distance / (16.0 * result.direction.z);
             result.light_type = LIGHT_EMISSIVE;
-        }
-        else
-        {
+        } else {
             let cosine : float = u.x;
             let sine : float = sqrt(1.0 - cosine * cosine);
             var phi : float = 2.0 * PI * u.y;
@@ -227,8 +198,7 @@ public struct LambertScene : IRestirScene
     }
     public func light_pdf(surface: Surface, light: HitInfo, direction: float3, light_type: uint,
                           previous: bool)
-        ->float
-    {
+        ->float {
         if (cavity())
             return 0.0;
         if (!finiteLight())
@@ -239,36 +209,29 @@ public struct LambertScene : IRestirScene
         let delta : float3 = point - surface.point.position;
         return dot(delta, delta) / (16.0 * direction.z);
     }
-    public func environment(direction: float3, origin: float3, previous: bool)->float3
-    {
+    public func environment(direction: float3, origin: float3, previous: bool)->float3 {
         if (cavity())
             return 0.0;
         return float3(radiance * (mode == 6 ? 1.0 + 0.5 * origin.x : 1.0));
     }
-    public func is_point_light(hit: HitInfo)->bool
-    {
+    public func is_point_light(hit: HitInfo)->bool {
         return false;
     }
-    public func initial_origin(pixel: uint2)->float3
-    {
+    public func initial_origin(pixel: uint2)->float3 {
         return position() + normal() * (cavity() ? 0.5 : 1.0);
     }
-    public func initial_direction(pixel: uint2)->float3
-    {
+    public func initial_direction(pixel: uint2)->float3 {
         return -normal();
     }
-    public func initial_medium(pixel: uint2)->float4
-    {
+    public func initial_medium(pixel: uint2)->float4 {
         return float4(1.0, extinction, extinction, extinction);
     }
-    public func primary_ray_footprint(surface: Surface, pixel: uint2, previous: bool)->float
-    {
+    public func primary_ray_footprint(surface: Surface, pixel: uint2, previous: bool)->float {
         return 1.0;
     }
 }
 
-func testScene(variant: uint)->LambertScene
-{
+func testScene(variant: uint)->LambertScene {
     var scene : LambertScene;
     scene.mode = inputs[0].x;
     scene.variant = variant;
@@ -281,8 +244,7 @@ func testScene(variant: uint)->LambertScene
     return scene;
 }
 
-func testSettings()->ShiftSettings
-{
+func testSettings()->ShiftSettings {
     var settings : ShiftSettings = {};
     settings.near_field_distance_sigma = 0.0;
     settings.specular_roughness_sigma = 0.0;
@@ -292,8 +254,7 @@ func testSettings()->ShiftSettings
 }
 
 func shifted(inout destination: LambertScene, source: PathReservoir, settings: ShiftSettings)
-    ->PrecomputedShiftData
-{
+    ->PrecomputedShiftData {
     var source = source;
     let primary : Surface = destination.load_surface_from_origin(
                       destination.primary_hit(), destination.initial_origin(0), false);
@@ -307,8 +268,7 @@ func shifted(inout destination: LambertScene, source: PathReservoir, settings: S
 
 /// 每线程一个独立 ensemble；输出初采、恒等移位误差、temporal、spatial 与分支计数。
 [numthreads(64, 1, 1)]
-func restir_mean_main(uint3 id: SV_DispatchThreadID)->void
-{
+func restir_mean_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x >= inputs[0].y)
         return;
     var canonicalScene : LambertScene = testScene(0);
@@ -325,8 +285,7 @@ func restir_mean_main(uint3 id: SV_DispatchThreadID)->void
     var neighbor : InitialResult = sample_initial_path(
                        neighborScene, uint2(0), neighborScene.primary_hit(), neighborRng.state,
                        bounces, settings, true, neighborScene.use_nee(), neighborScene.use_mis());
-    if (canonicalScene.mode == 9)
-    {
+    if (canonicalScene.mode == 9) {
         canonical = sample_initial_path<LambertScene, 2>(
             canonicalScene, uint2(0), canonicalScene.primary_hit(), canonicalRng.state, bounces,
             settings, true, true, true);
@@ -378,8 +337,7 @@ func restir_mean_main(uint3 id: SV_DispatchThreadID)->void
 
 /// 精确隔离逆向 footprint 拒绝；其余阈值与几何相同，临界条件为 1 / p_first = PI。
 [numthreads(64, 1, 1)]
-func restir_footprint_main(uint3 id: SV_DispatchThreadID)->void
-{
+func restir_footprint_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x >= 2u)
         return;
     var scene : LambertScene = testScene(0);

@@ -5,26 +5,22 @@ import atmosphere.sampling;
 import atmosphere.terrain_frame;
 import atmosphere.epipolar;
 import color.primaries;
-namespace atmosphere
-{
-struct TerrainFilter
-{
+namespace atmosphere {
+struct TerrainFilter {
     var radial : float2;
     var slices : int2;
     var weights : float2;
 };
 func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: float2, metres: float,
                     far_sample: bool)
-    ->TerrainFilter
-{
+    ->TerrainFilter {
     var filter : TerrainFilter;
     let ndc = float2(2 * uv.x - 1, 1 - 2 * uv.y);
     let range = terrain_range(f);
     var fraction : float;
     filter.slices = terrain_slices(ndc, f.projection.xy, range, TERRAIN_SLICES, fraction);
     filter.weights = float2(1. - fraction, fraction);
-    for (var k = 0; k < 2; ++k)
-    {
+    for (var k = 0; k < 2; ++k) {
         let slice : int = filter.slices[k];
         let segment = epipolar_slice_segment(f.projection.xy, range, slice, TERRAIN_SLICES);
         let x = epipolar_radial_coordinate(ndc, segment) * float(TERRAIN_RADIAL) - 0.5;
@@ -50,8 +46,7 @@ func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: flo
 }
 func terrain_sample(volume: Texture3D<float4>, sampler: SamplerState, filter: TerrainFilter,
                     z: float)
-    ->float4
-{
+    ->float4 {
     var sum : float4 = 0;
     for (var k = 0; k < 2; ++k)
         sum +=
@@ -67,8 +62,7 @@ public func composite_clear_aerial_bt709(clear_light: Texture3D<float4>,
                                          transmittance: Texture3D<float4>, sampler: SamplerState,
                                          uv: float2, metres: float, max_distance_km: float,
                                          surface: bool, background: float3)
-    ->float3
-{
+    ->float3 {
     if (metres <= 0 || !surface)
         return background;
     let air =
@@ -81,8 +75,7 @@ public func composite_shadowed_terrain_bt709(
     clear_light: Texture3D<float4>, transmittance: Texture3D<float4>, volume: Texture3D<float4>,
     first_hits: StructuredBuffer<uint>, sampler: SamplerState, frame: TerrainFrame, uv: float2,
     metres: float, max_distance_km: float, surface: bool, background: float3)
-    ->float3
-{
+    ->float3 {
     if (metres <= 0)
         return background;
     let beyond = !surface || metres > TERRAIN_RANGE_M;
@@ -102,8 +95,7 @@ public func composite_shadowed_terrain_bt709(
     let node = lower + (squared - lower * lower) / (2. * lower + 1.);
     let z = (max(node, 1.) - 0.5) / layer_count;
     var radiance : float3 = terrain_sample(volume, sampler, filter, z).xyz * saturate(node);
-    if (beyond)
-    {
+    if (beyond) {
         let near_clear = aerial_sample(clear_light, transmittance, sampler, uv,
                                        TERRAIN_RANGE_M * 0.001, max_distance_km);
         // 五级网格之外按最后有覆盖的区间延续可见度，封闭洞穴不会重新得到无条件的远场晴空散射。
@@ -118,8 +110,7 @@ public func composite_terrain_bt709(clear_light: Texture3D<float4>,
                                     first_hits: StructuredBuffer<uint>, sampler: SamplerState,
                                     frame: TerrainFrame, uv: float2, metres: float,
                                     max_distance_km: float, surface: bool, background: float3)
-    ->float3
-{
+    ->float3 {
     if (frame.source.active == 0)
         return composite_clear_aerial_bt709(clear_light, transmittance, sampler, uv, metres,
                                             max_distance_km, surface, background);

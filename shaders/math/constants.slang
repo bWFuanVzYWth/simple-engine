@@ -1,8 +1,7 @@
 /// 共享的float32数学常量；不包含颜色编码、采样协议或算法容差。
 module constants;
 
-namespace math
-{
+namespace math {
 public static const let pi : float = 3.14159265358979323846;
 public static const let tau : float = 6.28318530717958647692;
 public static const let frac_1_pi : float = 0.31830988618379067154;

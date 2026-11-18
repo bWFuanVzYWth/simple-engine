@@ -2,12 +2,13 @@
 module key_guides;
 import pt.scene;
 import pt.reconstruction;
-import pt.denoise;
-import bsdf.openpbr.flow;
+import openpbr.flow;
 import geometry.ray;
+import denoise.guide;
+import pt.surface_guides;
+import transport.surface_material;
 
-namespace pt
-{
+namespace pt {
 public static const let KEY_GUIDE_DISCRETE = 1u;
 public static const let KEY_GUIDE_REFLECTION = 2u;
 public static const let KEY_GUIDE_REFRACTED = 4u;
@@ -16,8 +17,7 @@ public static const let KEY_GUIDE_POSE_FIXED = 16u;
 
 /// 128B无损数值顶点；无完整PBR闭包、材质身份、纹素、随机状态或光源。
 /// normal_roughness.xyz保留实际着色法线朝向；输出投影最后朝向相机。
-public struct KeyGuideVertex
-{
+public struct KeyGuideVertex {
     public var point : geometry::SurfacePoint;
     public var distance : float;
     public var normal_roughness : float4;
@@ -32,11 +32,9 @@ public struct KeyGuideVertex
 
 /// 命中程序输入仅medium为当前介质，输出复用全128B。
 /// known-surface适配器可在未使用输入字段中编码稳定命中与观察方向，须先消费再写输出。
-public struct KeyGuideCall
-{
+public struct KeyGuideCall {
     public var value : KeyGuideVertex;
-    public static func input(incident: float4)->KeyGuideCall
-    {
+    public static func input(incident: float4)->KeyGuideCall {
         var result : KeyGuideCall = {};
         result.value.medium = incident;
         return result;
@@ -44,11 +42,10 @@ public struct KeyGuideCall
 };
 
 /// 材质已按guide操作投影解码；不消费发光、alias、边界颜色filter或任何光照策略。
-public func make_key_guide<let flow : uint>(hit: Hit, material: SurfaceMaterial,
+public func make_key_guide<let flow : uint>(hit: Hit, material: transport::SurfaceMaterial,
                                             energy: openpbr::Energy, pose: GuidePose,
                                             incoming: float3, incident: float4)
-    ->KeyGuideVertex
-{
+    ->KeyGuideVertex {
     let normal = shading_normal(hit, material);
     let albedos = denoise_surface_flow<flow>(energy, material, normal, -incoming, incident);
     var reflection = true;
@@ -79,22 +76,19 @@ public func make_key_guide<let flow : uint>(hit: Hit, material: SurfaceMaterial,
 }
 
 /// 每个新命中的原子追踪/专用导引操作，不能先通用读取材质再分流。
-public interface IKeyGuideTrace
-{
+public interface IKeyGuideTrace {
     func intersect_guide(origin: float3, direction: float3, incident: float4,
                          out vertex: KeyGuideVertex)
         ->bool;
 };
 
 /// 兼容原有投影记录，只在endpoint.material中使用数值着色法线，不再从记录求BSDF或albedo。
-public struct KeyGuideEndpoint
-{
+public struct KeyGuideEndpoint {
     public var endpoint : GuideEndpoint;
-    public var albedos : DenoiseGuides;
+    public var albedos : denoise::DenoiseGuides;
 };
 
-func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex)->void
-{
+func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex)->void {
     result.endpoint.hit.surface = vertex.point;
     result.endpoint.hit.distance = vertex.distance;
     result.endpoint.material.normal = vertex.normal_roughness.xyz;
@@ -110,8 +104,7 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
                                                     initial_medium: float4, budget: uint,
                                                     first_reflection: bool,
                                                     delta_only: bool = false)
-    ->KeyGuideEndpoint
-{
+    ->KeyGuideEndpoint {
     var result : KeyGuideEndpoint = {};
     result.endpoint.incident = initial_medium;
     result.endpoint.direction = camera_direction;
@@ -122,17 +115,14 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
     set_key_guide_vertex(result, first);
     var candidate : KeyGuideEndpoint = result;
     var vertex : KeyGuideVertex = first;
-    while (true)
-    {
+    while (true) {
         let discrete : bool = (vertex.flags & KEY_GUIDE_DISCRETE) != 0;
-        if (!discrete && (delta_only || !(first_reflection && result.endpoint.queries == 1)))
-        {
+        if (!discrete && (delta_only || !(first_reflection && result.endpoint.queries == 1))) {
             var position : float3;
             var normal : float3;
             if (psr_surface(result.endpoint.psr, camera_origin, camera_direction,
                             vertex.point.position, vertex.point.normal, vertex.normal_roughness.xyz,
-                            position, normal))
-            {
+                            position, normal)) {
                 if (result.endpoint.use_interface_specular)
                     result.albedos.specular_albedo = result.endpoint.interface_specular;
                 return result;
@@ -140,8 +130,7 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
             candidate.endpoint.flags |= GUIDE_SURFACE_PROXY;
             return candidate;
         }
-        if (result.endpoint.queries == budget)
-        {
+        if (result.endpoint.queries == budget) {
             candidate.endpoint.flags |= GUIDE_SURFACE_PROXY | GUIDE_BUDGET_PROXY;
             return candidate;
         }
@@ -149,8 +138,7 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
         let reflection : bool = forced || (vertex.flags & KEY_GUIDE_REFLECTION) != 0;
         let refracted : bool = !forced && (vertex.flags & KEY_GUIDE_REFRACTED) != 0;
         let next = forced ? vertex.reflection_direction : vertex.canonical_direction;
-        if (result.endpoint.queries == 1 && !reflection && !first_reflection)
-        {
+        if (result.endpoint.queries == 1 && !reflection && !first_reflection) {
             result.endpoint.interface_specular = vertex.specular;
             result.endpoint.use_interface_specular = true;
         }
@@ -165,8 +153,7 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
         result.endpoint.direction = next;
         ++result.endpoint.queries;
         var following : KeyGuideVertex;
-        if (!scene.intersect_guide(origin, next, result.endpoint.incident, following))
-        {
+        if (!scene.intersect_guide(origin, next, result.endpoint.incident, following)) {
             result.endpoint.flags |= GUIDE_SKY;
             if (result.endpoint.psr.count != 0)
                 result.endpoint.flags |= GUIDE_MOTION_PROXY;

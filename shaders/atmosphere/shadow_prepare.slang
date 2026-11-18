@@ -6,7 +6,6 @@ var inputs : StructuredBuffer<TerrainInput>;
 var frames : RWStructuredBuffer<TerrainFrame>;
 [shader("compute")]
 [numthreads(1, 1, 1)]
-func shadow_prepare()->void
-{
+func shadow_prepare()->void {
     frames[0] = terrain_frame(inputs[0]);
 }

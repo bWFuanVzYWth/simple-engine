@@ -4,7 +4,7 @@
 //!
 //! 这不是完整 [OpenPBR 标准](https://academysoftwarefoundation.github.io/OpenPBR/)实现；
 //! 没有 coat、fuzz、thin-film、dispersion、衍射或厚体 SSS。
-//! 数学内核位于引擎 Slang `bsdf.openpbr.api`，使用 GGX、Fresnel、完整边缘 PDF
+//! 数学内核位于引擎 Slang `openpbr.api`，使用 GGX、Fresnel、完整边缘 PDF
 //! 与多次散射能量补偿，不将其替换为近似 BRDF。来源及许可见 `assets/NOTICE.md`。
 //!
 //! 本 crate 校验材料与均匀介质，并提供原作者能量表。RGB 属于调用方选择的一致线性工作空间；
@@ -13,7 +13,7 @@
 //! 不解析应用贴图、不决定介质初值、边界拓扑或路径调度。
 //! Slang `may_evaluate` 提供无能量表读取的保守连续支持域快判；false 保证 response/PDF 为零。
 //! 调用方可先排除支持域、再查询可见性，最后 evaluate，避免跨光追查询保存闭包状态。
-//! `bsdf.openpbr.specialized` 提供八类编译期闭包入口；调用方在发布材料时保证类别匹配。
+//! `openpbr.specialized` 提供八类编译期闭包入口；调用方在发布材料时保证类别匹配。
 //! `shade_specialized` 在一次调用内共享两个连续方向及可选散射的状态；纯 delta 不准备连续闭包。
 //! `sample_delta_specialized` 仅接受纯 delta 类别，无需 Energy，标量随机数对应普通采样的 `u.z`。
 //! `evaluate_solid_continuous`／`sample_solid_continuous` 在调用方保证 roughness²≥1e-4 且实际

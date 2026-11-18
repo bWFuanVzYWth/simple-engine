@@ -1,6 +1,5 @@
 // 与 scene_cache::PackedQuads 的连续 word 流对应。地址与范围由本批所有者建立并保活。
-struct Expansion
-{
+struct Expansion {
     var headers : uint *;
     var payload : uint *;
     var vertices : uint *;
@@ -22,8 +21,7 @@ var parameters : ConstantBuffer<Expansion>;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
-{
+func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void {
     let slot = parameters.first + dispatch_id.x;
     if (slot >= parameters.count)
         return;
@@ -34,8 +32,7 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
     let payload_format = (geometry_word >> 29u) & 3u;
     var vertex_words : uint[12];
     var cell = int3(surface_words[1], surface_words[2], surface_words[3]);
-    if ((surface_word >> 31u) != 0u)
-    {
+    if ((surface_word >> 31u) != 0u) {
         let anchor = uint3(geometry_word, geometry_word >> 6u, geometry_word >> 12u) & 63u;
         let lod = (surface_words[0] >> 4u) & 31u;
         cell = int3(anchor << lod);
@@ -43,9 +40,7 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
         for (var i = 0u; i < 12; ++i)
             vertex_words[i] = asuint(float(anchor[i % 3u] + ((geometry_word >> (18u + i)) & 1u)) *
                                      float(1u << lod));
-    }
-    else if ((geometry_word >> 31u) == 0u)
-    {
+    } else if ((geometry_word >> 31u) == 0u) {
         let layout = surface_words[0];
         let axis = layout & 3u;
         let u = (axis + 1u) % 3u;
@@ -72,22 +67,18 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
         d[along_u ? v : u] = c[along_u ? v : u];
         let scale = float(1u << ((layout >> 4u) & 31u));
         [unroll]
-        for (var j = 0u; j < 3; ++j)
-        {
+        for (var j = 0u; j < 3; ++j) {
             vertex_words[j] = asuint(float(a[j]) * scale);
             vertex_words[j + 3] = asuint(float(b[j]) * scale);
             vertex_words[j + 6] = asuint(float(c[j]) * scale);
             vertex_words[j + 9] = asuint(float(d[j]) * scale);
         }
-    }
-    else if (payload_format == 0u)
-    {
+    } else if (payload_format == 0u) {
         let payload_words = parameters.payload + (geometry_word & 0x1fffffffu);
         let a = payload_words[0];
         let c = payload_words[1];
         [unroll]
-        for (var axis = 0u; axis < 3; ++axis)
-        {
+        for (var axis = 0u; axis < 3; ++axis) {
             let av = asuint(float((a >> (8u * axis)) & 255u));
             let cv = asuint(float((c >> (8u * axis)) & 255u));
             vertex_words[axis] = av;
@@ -95,13 +86,10 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
             vertex_words[6 + axis] = cv;
             vertex_words[9 + axis] = ((c >> (24 + axis)) & 1u) != 0 ? cv : av;
         }
-    }
-    else
-    {
+    } else {
         let payload_words = parameters.payload + (geometry_word & 0x1fffffffu);
         [unroll]
-        for (var i = 0u; i < 12; ++i)
-        {
+        for (var i = 0u; i < 12; ++i) {
             if (payload_format == 1u)
                 vertex_words[i] = asuint(float((payload_words[i >> 2] >> ((i & 3u) * 8u)) & 255u));
             else if (payload_format == 2u)
@@ -115,8 +103,7 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
     let tags = uint4(asuint(region), 0u);
     let vertex_output = parameters.vertices + slot * 16u;
     [unroll]
-    for (var j = 0u; j < 4; ++j)
-    {
+    for (var j = 0u; j < 4; ++j) {
         vertex_output[4u * j] = vertex_words[3u * j];
         vertex_output[4u * j + 1u] = vertex_words[3u * j + 1u];
         vertex_output[4u * j + 2u] = vertex_words[3u * j + 2u];
@@ -127,21 +114,16 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
         flags |= (surface_word >> 31u) != 0u ? 257u
                                              : (((geometry_word >> 18u) & 63u) + 1u) |
                                                    ((((geometry_word >> 24u) & 63u) + 1u) << 8u);
-    if ((parameters.mask & 1u) != 0u)
-    {
+    if ((parameters.mask & 1u) != 0u) {
         let attribute_output = parameters.attributes + slot * 12u;
-        if ((surface_words[0] & 512u) == 0u)
-        {
+        if ((surface_words[0] & 512u) == 0u) {
             [unroll]
             for (var k = 0u; k < 12; ++k)
                 attribute_output[k] = surface_words[4u + k];
-        }
-        else
-        {
+        } else {
             let scale = float(1u << ((surface_words[0] >> 4u) & 31u));
             [unroll]
-            for (var j = 0u; j < 2; ++j)
-            {
+            for (var j = 0u; j < 2; ++j) {
                 let code = (surface_words[0] >> (10u + 3u * j)) & 7u;
                 let axis = code & 3u;
                 let sign = (code & 4u) << 29u;
@@ -155,21 +137,18 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
             attribute_output[9] = flags;
         }
     }
-    if ((parameters.mask & 2u) != 0u)
-    {
+    if ((parameters.mask & 2u) != 0u) {
         var id = parameters.base_id;
         if ((parameters.mask & 16u) != 0u)
             id = uint2(parameters.id_input[slot * 2u], parameters.id_input[slot * 2u + 1u]);
-        else
-        {
+        else {
             id.x += slot;
             id.y += uint(id.x < slot);
         }
         parameters.identities[slot * 2u] = id.x;
         parameters.identities[slot * 2u + 1u] = id.y;
     }
-    if ((parameters.mask & 4u) != 0u)
-    {
+    if ((parameters.mask & 4u) != 0u) {
         let index_output = parameters.indices + slot * 6u;
         let first_vertex = slot * 4u;
         index_output[0] = first_vertex;
@@ -179,8 +158,7 @@ func expand_quads(dispatch_id: uint3: SV_DispatchThreadID)->void
         index_output[4] = first_vertex + 2u;
         index_output[5] = first_vertex + 3u;
     }
-    if ((parameters.mask & 8u) != 0u)
-    {
+    if ((parameters.mask & 8u) != 0u) {
         let cell_output = parameters.cells + slot * 4u;
         let world = region * 64 + cell;
         cell_output[0] = asuint(world.x);

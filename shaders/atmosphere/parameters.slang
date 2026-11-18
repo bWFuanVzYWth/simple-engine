@@ -1,15 +1,13 @@
 // 来源：Sky Tracer 9e9430d；见 crates/atmosphere/data/README.md。
 module parameters;
-namespace atmosphere
-{
+namespace atmosphere {
 /// Earth/balanced 的固定介质、四波长及观察者参数，按源顺序排列的400 B；数组均为连续float4。
 /// 距离为 km；局部 +Y 为径向上方，太阳方位 atan2(x,z)，仰角 asin(y)。
 /// 数据偏移与维度须来自同一物理输入；API 不支持混合不同求解版本的 LUT。
 /// mapping_version必须为63，multiple_scattering_marker必须为1，horizon_power固定为3，path_height_scale_km有限且为正。
 /// 生产核不提供legacy坐标模式。
 /// 散射阶由构建入口与宿主阶段调度选择，不由本参数中的迭代记录切换。
-public struct Params
-{
+public struct Params {
     /// 输出尺寸、积分步数与固定的多次散射标记1。
     public var output_width : uint;
     public var output_height : uint;

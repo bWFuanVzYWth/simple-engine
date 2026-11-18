@@ -16,11 +16,9 @@ var first_hits : StructuredBuffer<uint>;
 #include "shadow_source.inc.slang"
 groupshared var profile_changed : uint;
 groupshared var same_view : uint;
-func update_shadow_profile(slice: uint, lane: uint)->bool
-{
+func update_shadow_profile(slice: uint, lane: uint)->bool {
     var start : uint = slice * (SUN_SHADOW_PROFILE_TOTAL_CAPACITY + SUN_SHADOW_CASCADE_COUNT + 1u);
-    if (lane == 0)
-    {
+    if (lane == 0) {
         same_view =
             !terrain_full(frames[0]) && previous_profiles[start] == frames[0].source.view_version;
         previous_profiles[start] = frames[0].source.view_version;
@@ -30,18 +28,15 @@ func update_shadow_profile(slice: uint, lane: uint)->bool
     let reuse : bool = same_view != 0;
     start += 1;
     var changed : bool = (first_hits[slice * TERRAIN_RADIAL + lane] >> 31u) != 0;
-    if (lane < SUN_SHADOW_CASCADE_COUNT)
-    {
+    if (lane < SUN_SHADOW_CASCADE_COUNT) {
         let count : uint = asuint(shadow_profile_counts[lane]);
         if (reuse)
             changed = changed || previous_profiles[start + lane] != count;
         previous_profiles[start + lane] = count;
     }
-    for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT; cascade++)
-    {
+    for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT; cascade++) {
         let base = shadow_profile_base(cascade);
-        for (var i = int(lane); i < shadow_profile_counts[cascade]; i += 128)
-        {
+        for (var i = int(lane); i < shadow_profile_counts[cascade]; i += 128) {
             let index : uint = start + SUN_SHADOW_CASCADE_COUNT + base + i;
             let depth : uint = asuint(shadow_profile_entries[base + i].y);
             if (reuse)
@@ -55,8 +50,7 @@ func update_shadow_profile(slice: uint, lane: uint)->bool
     return profile_changed != 0;
 }
 
-func terrain_rgb(spectrum: float4, scale: float3)->float3
-{
+func terrain_rgb(spectrum: float4, scale: float3)->float3 {
     var rgb : float3 = 0;
     for (var k: uint = 0; k < 4; ++k)
         rgb += spectrum[k] * p.spectral_to_rec2020[k].xyz;
@@ -66,8 +60,7 @@ func terrain_rgb(spectrum: float4, scale: float3)->float3
 // 各深度段沿相机可见的空气积分受光源项。末层单独保存天空需扣除的遮挡量及远场边界可见度。
 [shader("compute")]
 [numthreads(128, 1, 1)]
-func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
-{
+func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void {
     let slice = terrain_slice_index(frames[0], group.y);
     terrain_slice<false>(lane, slice);
     if (!update_shadow_profile(slice, lane))
@@ -88,20 +81,17 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
     var end : float = first_hit * 0.001;
     var entry_height : float = height;
     var entry_mu : float = ray.y;
-    if (height > p.atmosphere_height_km)
-    {
+    if (height > p.atmosphere_height_km) {
         let b = radius * ray.y;
         let c = (height - p.atmosphere_height_km) *
                 (radius + p.planet_radius_km + p.atmosphere_height_km);
         let disc = b * b - c;
-        if (b < 0 && disc > 0)
-        {
+        if (b < 0 && disc > 0) {
             let root = sqrt(disc);
             entry = c / (-b + root);
             entry_height = p.atmosphere_height_km;
             entry_mu = -root / (p.planet_radius_km + entry_height);
-        }
-        else
+        } else
             entry = end;
     }
     if (entry < end)
@@ -130,16 +120,13 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
                                                                     SUN_SHADOW_CASCADE_COUNT - 1) *
                                              shadow_ray.inverse_scalar_rate)
                   : TERRAIN_RANGE_M;
-    for (var z: uint = 0; z < TERRAIN_DEPTH; ++z)
-    {
+    for (var z: uint = 0; z < TERRAIN_DEPTH; ++z) {
         let t = float(z + 1u) / float(TERRAIN_DEPTH);
         let edge = min(end, TERRAIN_RANGE_M * 0.001 * t * t);
         let start = max(previous, entry);
-        if (edge > start)
-        {
+        if (edge > start) {
             let dt = (edge - start) * 0.5;
-            for (var step: uint = 0; step < 2; ++step)
-            {
+            for (var step: uint = 0; step < 2; ++step) {
                 let a = start + float(step) * dt;
                 let d = a + dt * 0.5;
                 let h = height_at(radial, d);
@@ -151,8 +138,7 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
                 let vis = shadow_visible_interval(shadow_source<false>(), shadow_ray, a * 1000.0,
                                                   (a + dt) * 1000.0);
                 // 有限表面只需要受光积分。只有可达近场末端的射线还要给天空提供遮挡积分。
-                if (vis > 0 || first_hit >= TERRAIN_RANGE_M)
-                {
+                if (vis > 0 || first_hit >= TERRAIN_RANGE_M) {
                     let c = scattering_source_coefficients<true>(h, stencil, phase);
                     var source : float4 = c.solar_phase_weighted *
                                           sun_transmittance(p, tau_read, linear_sampler, h, mus) *
@@ -164,8 +150,7 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void
                     lit += energy * vis;
                     blocked += energy * (1. - vis);
                     transmission *= segment.transmittance;
-                }
-                else
+                } else
                     transmission *= exp(-dt * extinction);
                 let measured : float = min((a + dt) * 1000.0, covered_metres) - a * 1000.0;
                 if (measured > 0)

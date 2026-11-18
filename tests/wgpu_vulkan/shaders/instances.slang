@@ -1,7 +1,6 @@
 module instances;
 
-struct Payload
-{
+struct Payload {
     var instance : uint;
     var primitive : uint;
     var distance : float;
@@ -15,8 +14,7 @@ var result : RWStructuredBuffer<uint>; // InstanceID、PrimitiveIndex、距离�
 var rays : StructuredBuffer<float4>; // origin/t_min、direction/t_max 两个 planes。
 
 [shader("raygeneration")]
-func instance_raygen()->void
-{
+func instance_raygen()->void {
     let index : uint = DispatchRaysIndex().x;
     let count : uint = DispatchRaysDimensions().x;
     let origin : float4 = rays[index];
@@ -30,8 +28,7 @@ func instance_raygen()->void
 }
 
 [shader("miss")]
-func instance_miss(inout payload_value: Payload)->void
-{
+func instance_miss(inout payload_value: Payload)->void {
     payload_value.instance = 0xffffffffu;
     payload_value.primitive = 0xffffffffu;
     payload_value.distance = 0.0;
@@ -40,8 +37,7 @@ func instance_miss(inout payload_value: Payload)->void
 [shader("closesthit")]
 func instance_closest(inout payload_value: Payload,
                       attributes: BuiltInTriangleIntersectionAttributes)
-    ->void
-{
+    ->void {
     payload_value.instance = InstanceID();
     payload_value.primitive = PrimitiveIndex();
     payload_value.distance = RayTCurrent();

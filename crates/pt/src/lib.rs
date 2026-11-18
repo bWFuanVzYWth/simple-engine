@@ -17,15 +17,15 @@
 //! 共享输运包含Beer、发光、NEE/MIS、OpenPBR和eta-aware RR；末顶点保留发光与NEE，
 //! 达到反弹上限后不再散射；dielectric事件耗尽显式失败。交接缓冲不按SPP倍增。
 //!
-//! `pt.denoise` 提供首表面 OpenPBR 方向 diffuse/specular 能量、世界法线和线性
-//! roughness，以及前向线性深度与无 jitter 的 previous-current 像素运动计算。
+//! `pt.surface_guides` 提供首表面 OpenPBR 方向 diffuse/specular 能量、世界法线和线性 roughness。
+//! `camera.pinhole` 提供前向线性深度，`denoise.guide` 定义无 jitter 的 previous-current 像素运动。
 //! 兼容入口的 `IPrefixGuides` 在 alpha 接受后、delta 前缀消费前观察实际首命中；默认观察者
 //! 在编译期消除，不增加材质翻译、资源或存储。该首表面接口保持原语义，不包含光学 PSR。
 //! `pt.reconstruction` 另提供独立规范 guide、PSR、刚体前态和反射运动；guide 使用自身
 //! 查询预算，不随照明 beta、吸收或 roulette 终止。第 N 次查询命中非 delta 或真实逃逸
 //! 仍完成，需要第 N+1 次时才保留已观察接口并标记预算代理。平面反射精确，折射仅为
 //! 终点切平面代理；未知对象/移动光学接口使用显式运动代理。所有辅助量不含曝光、照明
-//! 或路径吞吐。`pt.spatial_denoise` 提供无时域历史的 5x5 几何/材质边界保护空间核。
+//! 或路径吞吐。`denoise.spatial` 提供无时域历史的 5x5 几何/材质边界保护空间核。
 //! 前后相机使用同一显式锚点，坐标和运动统一左上原点；上层维护对象对应和输出格式。
 //! 可选 `vulkan::streamline` 提供 SDK 适配，应用负责设备接入、历史与提交/完成证明。
 //!

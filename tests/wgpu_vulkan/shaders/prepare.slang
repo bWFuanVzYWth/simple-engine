@@ -1,7 +1,6 @@
 module prepare;
 
-struct Parameters
-{
+struct Parameters {
     var frame : uint;
 };
 
@@ -13,8 +12,7 @@ var output : RWTexture2D<float4>;
 var parameters : ConstantBuffer<Parameters>;
 
 [numthreads(8, 8, 1)]
-func prepare_main(uint3 id: SV_DispatchThreadID)->void
-{
+func prepare_main(uint3 id: SV_DispatchThreadID)->void {
     var width : uint;
     var height : uint;
     input.GetDimensions(width, height);

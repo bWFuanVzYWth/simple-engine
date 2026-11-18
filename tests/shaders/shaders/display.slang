@@ -7,15 +7,13 @@ var inputs : StructuredBuffer<uint4>;
 [[vk::binding(1, 0)]]
 var outputs : RWStructuredBuffer<uint4>;
 
-func parameters(a: float4, b: float4)->display::PrimeDrtParameters
-{
+func parameters(a: float4, b: float4)->display::PrimeDrtParameters {
     return { a.x, a.y, a.z, a.w, b.x, b.y, b.zw };
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func display_main(uint3 id: SV_DispatchThreadID)->void
-{
+func display_main(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
     var stride : uint;
     inputs.GetDimensions(rows, stride);

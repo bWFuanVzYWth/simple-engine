@@ -11,8 +11,7 @@ var outputs : RWStructuredBuffer<uint4>;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func atmosphere_main(uint3 id: SV_DispatchThreadID)->void
-{
+func atmosphere_main(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
     var stride : uint;
     inputs.GetDimensions(rows, stride);
@@ -24,8 +23,7 @@ func atmosphere_main(uint3 id: SV_DispatchThreadID)->void
         outputs[id.x] = asuint(segment_transport(a, asfloat(b.x)).integral);
     else if (b.y == 2)
         outputs[id.x] = asuint(segment_transport(a, asfloat(b.x)).transmittance);
-    else
-    {
+    else {
         var p : Params = (Params)0;
         p.planet_radius_km = 6360.0;
         p.atmosphere_height_km = 120.0;
@@ -35,21 +33,17 @@ func atmosphere_main(uint3 id: SV_DispatchThreadID)->void
     }
 }
 
-struct IntervalProfileSource : IShadowProfileSource
-{
-    func texel_size(cascade: int)->float
-    {
+struct IntervalProfileSource : IShadowProfileSource {
+    func texel_size(cascade: int)->float {
         return shadow_texel_size(cascade);
     }
-    func blocker_depth(cascade: int, node: int2)->float
-    {
+    func blocker_depth(cascade: int, node: int2)->float {
         return 0;
     }
 };
 [shader("compute")]
 [numthreads(1, 1, 1)]
-func shadow_interval_main(uint3 id: SV_DispatchThreadID)->void
-{
+func shadow_interval_main(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
     var stride : uint;
     inputs.GetDimensions(rows, stride);
@@ -63,8 +57,7 @@ func shadow_interval_main(uint3 id: SV_DispatchThreadID)->void
     shadow_profile_entries[0] = float2(63.5, -0.25);
     shadow_profile_entries[1] = float2(95.25, 0.5);
     shadow_profile_entries[2] = float2(127.0, 1.25);
-    for (var cascade = 1; cascade < SUN_SHADOW_CASCADE_COUNT; ++cascade)
-    {
+    for (var cascade = 1; cascade < SUN_SHADOW_CASCADE_COUNT; ++cascade) {
         shadow_profile_counts[cascade] = 1;
         shadow_profile_entries[shadow_profile_base(cascade)] =
             float2(shadow_profile_cascade_end(IntervalProfileSource(), cascade), 0.35);

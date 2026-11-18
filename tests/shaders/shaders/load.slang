@@ -9,8 +9,7 @@ var outputs : RWStructuredBuffer<float4>;
 
 // 一次连接构造的批量消费者；输入决定尺度、切向分布与工作集，不循环反馈。
 [numthreads(64, 1, 1)]
-func connection_load_main(uint3 id: SV_DispatchThreadID)->void
-{
+func connection_load_main(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
     var stride : uint;
     inputs.GetDimensions(rows, stride);

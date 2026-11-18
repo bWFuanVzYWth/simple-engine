@@ -1,12 +1,15 @@
 /// 规范 guide、PSR 和空间核的实际 GPU 行为；场景为解析几何，不依赖应用策略。
 module reconstruction_test;
 import pt.reconstruction;
-import pt.spatial_denoise;
-import bsdf.openpbr.specialized;
-import bsdf.openpbr.api;
+import denoise.spatial;
+import openpbr.specialized;
+import openpbr.api;
 import pt.scene;
 import geometry.ray;
 import pt.key_guides;
+import camera.pinhole;
+import denoise.guide;
+import transport.surface_material;
 
 [[vk::binding(0, 0)]]
 var inputs : StructuredBuffer<float4>;
@@ -18,14 +21,12 @@ var unused_energy : Texture3D<float4>;
 var unused_sampler : SamplerState;
 using namespace pt;
 
-func camera(x: float)->DenoiseCamera
-{
+func shifted_camera(x: float)->camera::Camera {
     return { float4(x, 0, 0, 1), float4(0, 0, 1, 2), float4(1, 0, 0, 0), float4(0, 1, 0, 0) };
 }
 
 [numthreads(64, 1, 1)]
-func psr_main(uint3 id: SV_DispatchThreadID)->void
-{
+func psr_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let mode = uint(inputs[0].x);
@@ -34,13 +35,11 @@ func psr_main(uint3 id: SV_DispatchThreadID)->void
     var normal = float3(0, 0, 1);
     if (mode != 2)
         state = psr_append(state, float3(0, 0, 2), float3(0, 0, -1), true, false, true);
-    if (mode == 1)
-    {
+    if (mode == 1) {
         state = psr_append(state, float3(0, 0, -2), float3(0, 0, 1), true, false, true);
         position = float3(0, 0, 1);
     }
-    if (mode == 2)
-    {
+    if (mode == 2) {
         state = psr_append(state, float3(0, 0, 2), float3(0, 0, -1), false, true, false);
         position = float3(3, 0, 6);
         normal = normalize(float3(1, 0, -1));
@@ -54,12 +53,10 @@ func psr_main(uint3 id: SV_DispatchThreadID)->void
     outputs[2] = float4(float(state.count), float(state.refracted), float(state.fixed), 0);
 }
 
-public struct GuideScene : IGuideScene, IKeyGuideTrace
-{
+public struct GuideScene : IGuideScene, IKeyGuideTrace {
     public var mode : uint;
-    public func guide_material(hit: Hit, incident: float4)->SurfaceMaterial
-    {
-        var result : SurfaceMaterial = {};
+    public func guide_material(hit: Hit, incident: float4)->transport::SurfaceMaterial {
+        var result : transport::SurfaceMaterial = {};
         result.boundary_filter = 0;
         result.transmitted = float4(mode == 2 ? 1 : 1.5, 100, 100, 100);
         result.pbr.surface.x = 1.5;
@@ -67,19 +64,16 @@ public struct GuideScene : IGuideScene, IKeyGuideTrace
             result.pbr.surface.y = 1;
         else if (hit.capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC)
             result.pbr.control.x = 1;
-        else
-        {
+        else {
             result.pbr.base_roughness = float4(1, 1, 1, 0.5);
             result.pbr.surface.x = 1;
         }
         return result;
     }
-    public func energy()->openpbr::Energy
-    {
+    public func energy()->openpbr::Energy {
         return { unused_energy, unused_sampler };
     }
-    public func intersect(origin: float3, direction: float3, out hit: Hit)->bool
-    {
+    public func intersect(origin: float3, direction: float3, out hit: Hit)->bool {
         hit = {};
         if (mode == 4)
             return false;
@@ -89,16 +83,13 @@ public struct GuideScene : IGuideScene, IKeyGuideTrace
         hit.identity.x = 22;
         return true;
     }
-    public func resolve_hit(inout hit: Hit, incident: float4)->void
-    {
+    public func resolve_hit(inout hit: Hit, incident: float4)->void {
     }
-    public func guide_pose(hit: Hit)->GuidePose
-    {
+    public func guide_pose(hit: Hit)->GuidePose {
         return { hit.surface.position, true, true };
     }
-    public func key_vertex(hit: Hit, direction: float3, incident: float4)->KeyGuideVertex
-    {
-        let material : SurfaceMaterial = guide_material(hit, incident);
+    public func key_vertex(hit: Hit, direction: float3, incident: float4)->KeyGuideVertex {
+        let material : transport::SurfaceMaterial = guide_material(hit, incident);
         if (hit.capability == openpbr::CAP_DELTA_SOLID_DIELECTRIC)
             return make_key_guide<338>(hit, material, energy(), guide_pose(hit), direction,
                                        incident);
@@ -109,8 +100,7 @@ public struct GuideScene : IGuideScene, IKeyGuideTrace
     }
     public func intersect_guide(origin: float3, direction: float3, incident: float4,
                                 out vertex: KeyGuideVertex)
-        ->bool
-    {
+        ->bool {
         var direction = direction;
         vertex = {};
         var hit : Hit;
@@ -122,8 +112,7 @@ public struct GuideScene : IGuideScene, IKeyGuideTrace
 };
 
 [numthreads(64, 1, 1)]
-func guide_main(uint3 id: SV_DispatchThreadID)->void
-{
+func guide_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let mode = uint(inputs[0].x);
@@ -143,8 +132,8 @@ func guide_main(uint3 id: SV_DispatchThreadID)->void
     let endpoint : GuideEndpoint = mode == 6 ? trace_reflection_guide(scene, first, 2)
                                              : trace_guide(scene, first, mode == 5 ? 1 : 2);
     let uv : float2 = 0.5;
-    let projection : GuideProjection =
-                         project_guide(endpoint, camera(0), camera(-1), uv, uint2(800, 400), true);
+    let projection : GuideProjection = project_guide(endpoint, shifted_camera(0),
+                                                     shifted_camera(-1), uv, uint2(800, 400), true);
     outputs[0] = float4(endpoint.hit.surface.position, float(endpoint.hit.identity.x));
     outputs[1] = float4(endpoint.direction, float(endpoint.queries));
     outputs[2] = float4(projection.depth, projection.motion, float(projection.flags));
@@ -154,8 +143,7 @@ func guide_main(uint3 id: SV_DispatchThreadID)->void
 }
 
 [numthreads(64, 1, 1)]
-func keyed_guide_main(uint3 id: SV_DispatchThreadID)->void
-{
+func keyed_guide_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let mode = uint(inputs[0].x);
@@ -172,8 +160,9 @@ func keyed_guide_main(uint3 id: SV_DispatchThreadID)->void
     let keyed : KeyGuideEndpoint = trace_key_guide(scene, vertex, float3(0), direction, incident,
                                                    mode == 5 ? 1 : 2, mode >= 6, mode == 7);
     let endpoint : GuideEndpoint = keyed.endpoint;
-    let projection : GuideProjection = project_guide(endpoint, camera(0), camera(-1), float2(0.5),
-                                                     uint2(800, 400), true);
+    let projection : GuideProjection =
+                         project_guide(endpoint, shifted_camera(0), shifted_camera(-1), float2(0.5),
+                                       uint2(800, 400), true);
     outputs[0] = float4(endpoint.hit.surface.position, 0);
     outputs[1] = float4(endpoint.direction, float(endpoint.queries));
     outputs[2] = float4(projection.depth, projection.motion, float(projection.flags));
@@ -183,21 +172,20 @@ func keyed_guide_main(uint3 id: SV_DispatchThreadID)->void
 }
 
 [numthreads(64, 1, 1)]
-func reflection_motion_main(uint3 id: SV_DispatchThreadID)->void
-{
+func reflection_motion_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     var motion : float2;
     let mode = uint(inputs[0].x);
     let valid : bool = reflection_distance_motion(
-                    camera(0), camera(-1), float2(0.5), mode == 2 ? DENOISE_SKY_DEPTH : 10,
+                    shifted_camera(0), shifted_camera(-1), float2(0.5),
+                    mode == 2 ? denoise::DENOISE_SKY_DEPTH : 10,
                     mode == 1 ? 0 : (mode == 3 ? -1 : 10), float2(7, 3), uint2(800, 400), motion);
     outputs[0] = float4(motion, float(valid), 0);
 }
 
 [numthreads(64, 1, 1)]
-func rigid_motion_main(uint3 id: SV_DispatchThreadID)->void
-{
+func rigid_motion_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let mode = uint(inputs[0].x);
@@ -210,21 +198,18 @@ func rigid_motion_main(uint3 id: SV_DispatchThreadID)->void
     endpoint.camera_direction = endpoint.direction = float3(0, 0, 1);
     endpoint.pose = { float3(1, 0, 10), mode == 0, true };
     endpoint.psr = psr_initial();
-    if (mode == 2)
-    {
+    if (mode == 2) {
         endpoint.pose.known = true;
         endpoint.psr.fixed = false;
     }
-    let projection : GuideProjection = project_guide(endpoint, camera(0), camera(0), float2(0.5),
-                                                     uint2(800, 400), true);
+    let projection : GuideProjection = project_guide(endpoint, shifted_camera(0), shifted_camera(0),
+                                                     float2(0.5), uint2(800, 400), true);
     outputs[1] = float4(projection.motion, projection.depth, float(projection.flags));
 }
 
-public struct SpatialImage : ISpatialImage
-{
+public struct SpatialImage : denoise::ISpatialImage {
     public var mode : uint;
-    public func load(pixel: uint2)->SpatialSample
-    {
+    public func load(pixel: uint2)->denoise::SpatialSample {
         let color : float3 = mode == 0 ? float3(2, 3, 4)
                                        : (pixel.x == 1 ? float3(2, 0, 0) : float3(0, 0, 2));
         let depth : float = mode == 1 && pixel.x != 1 ? 100 : 10;
@@ -234,12 +219,11 @@ public struct SpatialImage : ISpatialImage
 };
 
 [numthreads(64, 1, 1)]
-func spatial_main(uint3 id: SV_DispatchThreadID)->void
-{
+func spatial_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let image : SpatialImage = { uint(inputs[0].x) };
     var valid : bool;
-    let color : float3 = spatial_reconstruct(image, float2(1, 0), uint2(3, 1), valid);
+    let color : float3 = denoise::spatial_reconstruct(image, float2(1, 0), uint2(3, 1), valid);
     outputs[0] = float4(color, float(valid));
 }

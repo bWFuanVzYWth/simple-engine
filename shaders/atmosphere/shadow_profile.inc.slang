@@ -8,8 +8,7 @@ public static const let SUN_SHADOW_DEPTH_BIAS_METERS = 0.02;
 public static const let SUN_SHADOW_CASCADE_RADIUS_TEXELS = 254.0;
 public static const let SUN_SHADOW_TRAVERSAL_EPSILON = 1.0e-5;
 
-public interface IShadowProfileSource
-{
+public interface IShadowProfileSource {
     func texel_size(cascade: int)->float;
     func blocker_depth(cascade: int, world_node: int2)->float;
 }
@@ -43,8 +42,7 @@ public groupshared var shadow_profile_entries : float2[SUN_SHADOW_PROFILE_TOTAL_
 public func initialize_shadow_profile(direction_to_sun: float3, projected_camera: float2,
                                       camera_depth: float, edge_direction: float3, basis_u: float3,
                                       basis_v: float3)
-    ->void
-{
+    ->void {
     shadow_profile_direction_to_sun = normalize(direction_to_sun);
     shadow_profile_basis_u = basis_u;
     shadow_profile_basis_v = basis_v;
@@ -59,33 +57,28 @@ public func initialize_shadow_profile(direction_to_sun: float3, projected_camera
         max(abs(shadow_profile_direction.x), abs(shadow_profile_direction.y));
 }
 
-func shadow_profile_base(cascade: int)->int
-{
+func shadow_profile_base(cascade: int)->int {
     return cascade == 0
                ? 0
                : SUN_SHADOW_PROFILE_NEAR_CAPACITY + (cascade - 1) * SUN_SHADOW_PROFILE_FAR_CAPACITY;
 }
 
-func shadow_profile_capacity(cascade: int)->int
-{
+func shadow_profile_capacity(cascade: int)->int {
     return cascade == 0 ? SUN_SHADOW_PROFILE_NEAR_CAPACITY : SUN_SHADOW_PROFILE_FAR_CAPACITY;
 }
 
 public func shadow_profile_cascade_end<Source>(source: Source, cascade: int)->float
-    where Source : IShadowProfileSource
-{
+    where Source : IShadowProfileSource {
     let radius : float = SUN_SHADOW_CASCADE_RADIUS_TEXELS * source.texel_size(cascade);
     return min(radius / max(shadow_profile_direction_max, SUN_SHADOW_PROFILE_EPSILON),
                SUN_SHADOW_MAX_DISTANCE_METERS);
 }
 
 public func build_shadow_profile_cascade<Source>(source: Source, cascade: int)->void
-    where Source : IShadowProfileSource
-{
+    where Source : IShadowProfileSource {
     let start_scalar = cascade == 0 ? 0.0 : shadow_profile_cascade_end(source, cascade - 1);
     let end_scalar = shadow_profile_cascade_end(source, cascade);
-    if (end_scalar <= start_scalar + SUN_SHADOW_PROFILE_EPSILON)
-    {
+    if (end_scalar <= start_scalar + SUN_SHADOW_PROFILE_EPSILON) {
         shadow_profile_counts[cascade] = 0;
         return;
     }
@@ -102,23 +95,17 @@ public func build_shadow_profile_cascade<Source>(source: Source, cascade: int)->
     let cell_step = int2(sign(grid_rate));
     var next_crossing = float2(1.0e20);
     var crossing_step = float2(1.0e20);
-    if (grid_rate.x > 0.0)
-    {
+    if (grid_rate.x > 0.0) {
         next_crossing.x = (float(cell.x + 1) - grid_point.x) / grid_rate.x;
         crossing_step.x = 1.0 / grid_rate.x;
-    }
-    else if (grid_rate.x < 0.0)
-    {
+    } else if (grid_rate.x < 0.0) {
         next_crossing.x = (float(cell.x) - grid_point.x) / grid_rate.x;
         crossing_step.x = -1.0 / grid_rate.x;
     }
-    if (grid_rate.y > 0.0)
-    {
+    if (grid_rate.y > 0.0) {
         next_crossing.y = (float(cell.y + 1) - grid_point.y) / grid_rate.y;
         crossing_step.y = 1.0 / grid_rate.y;
-    }
-    else if (grid_rate.y < 0.0)
-    {
+    } else if (grid_rate.y < 0.0) {
         next_crossing.y = (float(cell.y) - grid_point.y) / grid_rate.y;
         crossing_step.y = -1.0 / grid_rate.y;
     }
@@ -128,11 +115,9 @@ public func build_shadow_profile_cascade<Source>(source: Source, cascade: int)->
     let base = shadow_profile_base(cascade);
     let capacity = shadow_profile_capacity(cascade);
 
-    for (; count < capacity; ++count)
-    {
+    for (; count < capacity; ++count) {
         let span_end : float = min(profile_length, min(next_crossing.x, next_crossing.y));
-        if (span_end <= cursor + SUN_SHADOW_PROFILE_EPSILON)
-        {
+        if (span_end <= cursor + SUN_SHADOW_PROFILE_EPSILON) {
             shadow_profile_counts[cascade] = -1;
             return;
         }
@@ -140,26 +125,22 @@ public func build_shadow_profile_cascade<Source>(source: Source, cascade: int)->
         let resolved_shadow = source.blocker_depth(cascade, cell);
         shadow_profile_entries[base + count] = float2(start_scalar + span_end, resolved_shadow);
         cursor = span_end;
-        if (cursor + SUN_SHADOW_PROFILE_EPSILON >= profile_length)
-        {
+        if (cursor + SUN_SHADOW_PROFILE_EPSILON >= profile_length) {
             shadow_profile_counts[cascade] = count + 1;
             return;
         }
 
         let crosses_x : bool = next_crossing.x <= span_end + SUN_SHADOW_PROFILE_EPSILON;
         let crosses_y : bool = next_crossing.y <= span_end + SUN_SHADOW_PROFILE_EPSILON;
-        if (!crosses_x && !crosses_y)
-        {
+        if (!crosses_x && !crosses_y) {
             shadow_profile_counts[cascade] = -1;
             return;
         }
-        if (crosses_x)
-        {
+        if (crosses_x) {
             cell.x += cell_step.x;
             next_crossing.x += crossing_step.x;
         }
-        if (crosses_y)
-        {
+        if (crosses_y) {
             cell.y += cell_step.y;
             next_crossing.y += crossing_step.y;
         }
@@ -169,21 +150,16 @@ public func build_shadow_profile_cascade<Source>(source: Source, cascade: int)->
     shadow_profile_counts[cascade] = -1;
 }
 
-func shadow_profile_find(cascade: int, scalar: float)->int
-{
+func shadow_profile_find(cascade: int, scalar: float)->int {
     let count = shadow_profile_counts[cascade];
     let base = shadow_profile_base(cascade);
     var low = 0;
     var high : int = count;
-    while (low < high)
-    {
+    while (low < high) {
         let middle : int = (low + high) >> 1;
-        if (shadow_profile_entries[base + middle].x <= scalar + SUN_SHADOW_PROFILE_EPSILON)
-        {
+        if (shadow_profile_entries[base + middle].x <= scalar + SUN_SHADOW_PROFILE_EPSILON) {
             low = middle + 1;
-        }
-        else
-        {
+        } else {
             high = middle;
         }
     }
@@ -193,17 +169,14 @@ func shadow_profile_find(cascade: int, scalar: float)->int
 func shadow_profile_cascade_lit_length(cascade: int, start_distance: float, end_distance: float,
                                        scalar_rate: float, inverse_scalar_rate: float,
                                        ray_depth_rate: float)
-    ->float
-{
+    ->float {
     let count = shadow_profile_counts[cascade];
-    if (count <= 0 || end_distance <= start_distance)
-    {
+    if (count <= 0 || end_distance <= start_distance) {
         return 0.0;
     }
 
     let base = shadow_profile_base(cascade);
-    if (scalar_rate <= SUN_SHADOW_PROFILE_EPSILON)
-    {
+    if (scalar_rate <= SUN_SHADOW_PROFILE_EPSILON) {
         return shadow_leaf_visible_length(
             shadow_profile_camera_depth, ray_depth_rate, start_distance, end_distance,
             shadow_profile_entries[base].y, SUN_SHADOW_DEPTH_BIAS_METERS);
@@ -216,12 +189,10 @@ func shadow_profile_cascade_lit_length(cascade: int, start_distance: float, end_
     let capacity = shadow_profile_capacity(cascade);
     for (var traversal = 0; traversal < capacity && index < count &&
                             cursor + SUN_SHADOW_TRAVERSAL_EPSILON < end_distance;
-         ++traversal, ++index)
-    {
+         ++traversal, ++index) {
         let entry = shadow_profile_entries[base + index];
         let span_end = min(entry.x * inverse_scalar_rate, end_distance);
-        if (span_end <= cursor + SUN_SHADOW_TRAVERSAL_EPSILON)
-        {
+        if (span_end <= cursor + SUN_SHADOW_TRAVERSAL_EPSILON) {
             continue;
         }
         lit_length +=
@@ -234,16 +205,14 @@ func shadow_profile_cascade_lit_length(cascade: int, start_distance: float, end_
 }
 
 /// 同一相机射线在极线剖面中的固定速率；仅在正速率有效域内求倒数。
-public struct SunShadowProfileRay
-{
+public struct SunShadowProfileRay {
     public var scalar_rate : float;
     public var inverse_scalar_rate : float;
     public var depth_rate : float;
     public var supported : bool;
 };
 /// profile初始化后准备同一射线的方向投影，供其各积分段复用。
-public func shadow_profile_ray(ray_direction: float3)->SunShadowProfileRay
-{
+public func shadow_profile_ray(ray_direction: float3)->SunShadowProfileRay {
     let projected_ray = float2(dot(ray_direction, shadow_profile_basis_u),
                                dot(ray_direction, shadow_profile_basis_v));
     let scalar_rate = dot(projected_ray, shadow_profile_direction);
@@ -258,15 +227,12 @@ public func shadow_profile_ray(ray_direction: float3)->SunShadowProfileRay
 public func shadow_visible_interval<Source>(source: Source, ray: SunShadowProfileRay,
                                             start_distance: float, end_distance: float)
     ->float
-    where Source : IShadowProfileSource
-{
-    if (end_distance <= start_distance)
-    {
+    where Source : IShadowProfileSource {
+    if (end_distance <= start_distance) {
         return 1.0;
     }
     let traced_end = min(end_distance, SUN_SHADOW_MAX_DISTANCE_METERS);
-    if (traced_end <= start_distance)
-    {
+    if (traced_end <= start_distance) {
         return 0.0;
     }
 
@@ -275,14 +241,12 @@ public func shadow_visible_interval<Source>(source: Source, ray: SunShadowProfil
 
     var cursor : float = start_distance;
     var lit_length = 0.0;
-    for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT && cursor < traced_end; ++cascade)
-    {
+    for (var cascade = 0; cascade < SUN_SHADOW_CASCADE_COUNT && cursor < traced_end; ++cascade) {
         let cascade_end = ray.scalar_rate > SUN_SHADOW_PROFILE_EPSILON
                               ? min(traced_end, shadow_profile_cascade_end(source, cascade) *
                                                     ray.inverse_scalar_rate)
                               : traced_end;
-        if (cascade_end > cursor)
-        {
+        if (cascade_end > cursor) {
             lit_length +=
                 shadow_profile_cascade_lit_length(cascade, cursor, cascade_end, ray.scalar_rate,
                                                   ray.inverse_scalar_rate, ray.depth_rate);
@@ -295,8 +259,7 @@ public func shadow_visible_interval<Source>(source: Source, ray: SunShadowProfil
 public func shadow_visible_interval<Source>(source: Source, ray_direction: float3,
                                             start_distance: float, end_distance: float)
     ->float
-    where Source : IShadowProfileSource
-{
+    where Source : IShadowProfileSource {
     return shadow_visible_interval(source, shadow_profile_ray(ray_direction), start_distance,
                                    end_distance);
 }

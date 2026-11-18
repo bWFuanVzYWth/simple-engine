@@ -9,8 +9,7 @@ var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
 var outputs : RWStructuredBuffer<float4>;
 
-func source(value: float3, weight: float, mass: float)->PathReservoir
-{
+func source(value: float3, weight: float, mass: float)->PathReservoir {
     var result : PathReservoir = empty_reservoir();
     result.integrand = value;
     result.weight = weight;
@@ -18,13 +17,11 @@ func source(value: float3, weight: float, mass: float)->PathReservoir
     return result;
 }
 
-func shifted(value: float3, jacobian: float)->PrecomputedShiftData
-{
+func shifted(value: float3, jacobian: float)->PrecomputedShiftData {
     return { value, jacobian, 0 };
 }
 
-func boundaries()->void
-{
+func boundaries()->void {
     outputs[0] = float4(cv_alpha(float3(0, 0.5, 3), float3(0, 0.25, 1)), 0);
     var colors : CVAccumulator;
     colors.init(float3(3, 5, 7), 0);
@@ -60,22 +57,19 @@ func boundaries()->void
         0);
 }
 
-func canonical_function(interval: uint, zeroTarget: bool)->float3
-{
+func canonical_function(interval: uint, zeroTarget: bool)->float3 {
     if (zeroTarget && interval == 0)
         return float3(0);
     return interval == 0 ? float3(4, 1, 0.5) : float3(0.5, 3, 2);
 }
 
-func neighbor_function(interval: uint, zeroTarget: bool)->float3
-{
+func neighbor_function(interval: uint, zeroTarget: bool)->float3 {
     if (zeroTarget && interval == 1)
         return float3(0);
     return interval == 0 ? float3(0.25, 2, 3) : float3(3, 0.5, 0.25);
 }
 
-func integral(partial: bool, zeroTarget: bool = false)->void
-{
+func integral(partial: bool, zeroTarget: bool = false)->void {
     // x∈[0,1]，y∈[0,2]，y=2x；两段宽度分别是1/2和1，抽样概率刻意不同。
     // partial仅保留第一段映射，其余积分须由各自源独占域补足；不同抽样点允许单向失败。
     var difference : float3 = 0;
@@ -86,8 +80,7 @@ func integral(partial: bool, zeroTarget: bool = false)->void
     let neighborIntegral : float3 =
                                neighbor_function(0, zeroTarget) + neighbor_function(1, zeroTarget);
     for (var i: uint = 0; i < 2; i++)
-        for (var j: uint = 0; j < 2; j++)
-        {
+        for (var j: uint = 0; j < 2; j++) {
             let pc : float = i == 0 ? 0.2 : 0.8;
             let pn : float = j == 0 ? 0.7 : 0.3;
             let canonical : PathReservoir = source(canonical_function(i, zeroTarget),
@@ -119,8 +112,7 @@ func integral(partial: bool, zeroTarget: bool = false)->void
     outputs[3] = float4(temporal, 0);
 }
 
-func chroma_variance()->void
-{
+func chroma_variance()->void {
     // 两条等概率彩色路径，积分为(1,1,0)；history是16个独立抽样的平均。
     // 穷举Binomial(16,1/2)，不以有限随机样本的波动代替方差判断。
     var initialMean : float3 = 0;
@@ -132,11 +124,9 @@ func chroma_variance()->void
     var history : PathReservoir = source(float3(0, 1, 0), 2, 16);
     let reverse : PrecomputedShiftData = shifted(canonical.integrand, 1);
     let forward : PrecomputedShiftData = shifted(history.integrand, 1);
-    for (var red: uint = 0; red <= 16; red++)
-    {
+    for (var red: uint = 0; red <= 16; red++) {
         let history_color : float3 = float3(red, 16 - red, 0) / 8.f;
-        for (var current: uint = 0; current < 2; current++)
-        {
+        for (var current: uint = 0; current < 2; current++) {
             let initial : float3 = current == 0 ? float3(2, 0, 0) : float3(0, 2, 0);
             let filtered : float3 = cv_temporal(initial, history_color, canonical, history, reverse,
                                                 forward, float3(1));
@@ -153,8 +143,7 @@ func chroma_variance()->void
 }
 
 [numthreads(64, 1, 1)]
-func cv_main(uint3 id: SV_DispatchThreadID)->void
-{
+func cv_main(uint3 id: SV_DispatchThreadID)->void {
     if (id.x != 0)
         return;
     let mode = uint(inputs[0].x);

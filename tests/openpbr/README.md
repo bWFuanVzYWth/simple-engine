@@ -28,7 +28,7 @@ conductor、thin 及三个 delta fixture 不创建或绑定能量纹理／sample
 该 fixture 的保守舍入模型不代表所有 GPU 的严格精度保证，也不扩大生产算法的输入支持域。
 
 组合版本的参数证明与绑定契约见 `openpbr::{MaterialRanges,InterfaceIor,FlowKey,FlowPlan}`，
-shader 入口见 `bsdf.openpbr.flow`。`flow-*.spv` 覆盖同一面上金属／非金属、diffuse／SSS、
+shader 入口见 `openpbr.flow`。`flow-*.spv` 覆盖同一面上金属／非金属、diffuse／SSS、
 delta／continuous 的组合，以及匹配 IOR、黑色 base 和无散射的边界；并与原通用入口逐样本比较。
 可达指令检查包括未声明物理族、资源读取和常量条件分支；保留 Fresnel、TIR、随机选择等数据条件。
 

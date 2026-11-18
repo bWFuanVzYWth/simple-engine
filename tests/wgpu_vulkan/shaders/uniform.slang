@@ -6,7 +6,6 @@ var result : RWStructuredBuffer<uint>;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-func uniform_main()->void
-{
+func uniform_main()->void {
     result[0] = parameters.x;
 }

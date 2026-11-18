@@ -4,15 +4,13 @@ module present;
 var image : Texture2D<float4>;
 
 [shader("vertex")]
-float4 vertex_main(uint vertex_id: SV_VulkanVertexID) : SV_Position
-{
+float4 vertex_main(uint vertex_id: SV_VulkanVertexID) : SV_Position {
     let corner = float2((vertex_id << 1) & 2, vertex_id & 2);
     return float4(corner * 2 - 1, 0, 1);
 }
 
 [shader("fragment")]
-float4 fragment_main(float4 position: SV_Position) : SV_Target0
-{
+float4 fragment_main(float4 position: SV_Position) : SV_Target0 {
     var width : uint;
     var height : uint;
     image.GetDimensions(width, height);

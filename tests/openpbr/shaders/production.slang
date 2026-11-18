@@ -1,9 +1,8 @@
 module production;
-import bsdf.openpbr.api;
-import bsdf.openpbr.denoise;
+import openpbr.api;
+import openpbr.denoise;
 
-struct Case
-{
+struct Case {
     var material : openpbr::Material;
     var view : float4;
     var u : float4;
@@ -21,8 +20,7 @@ var energy_sampler : SamplerState;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func main(uint3 id: SV_DispatchThreadID)->void
-{
+func main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     cases.GetDimensions(count, stride);
@@ -30,8 +28,7 @@ func main(uint3 id: SV_DispatchThreadID)->void
         return;
     let c : Case = cases[id.x];
     let energy : openpbr::Energy = { energy_texture, energy_sampler };
-    if (c.u.w == 5.0)
-    {
+    if (c.u.w == 5.0) {
         let value : openpbr::DenoiseAlbedos = openpbr::denoise_albedos(
                         energy, c.material, float3(0, 0, 1), c.view.xyz, c.incident, c.transmitted);
         let i : uint = id.x * 5;
@@ -40,15 +37,13 @@ func main(uint3 id: SV_DispatchThreadID)->void
         output[i + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
         return;
     }
-    if (c.u.w == 1.0)
-    {
+    if (c.u.w == 1.0) {
         let i : uint = id.x * 5;
         output[i] = energy.lookup(c.view.xyz);
         output[i + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
         return;
     }
-    if (c.u.w == 2.0)
-    {
+    if (c.u.w == 2.0) {
         let i : uint = id.x * 5;
         let evaluated : openpbr::Evaluation =
                             openpbr::evaluate(energy, c.material, float3(0, 0, 1), c.view.xyz,

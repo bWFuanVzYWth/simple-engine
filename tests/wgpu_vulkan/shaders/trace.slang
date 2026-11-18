@@ -1,7 +1,6 @@
 module trace;
 
-struct Payload
-{
+struct Payload {
     var hit : uint;
 };
 
@@ -13,8 +12,7 @@ var input : RWTexture2D<float4>;
 var output : RWTexture2D<float4>;
 
 [shader("raygeneration")]
-func raygen_main()->void
-{
+func raygen_main()->void {
     let pixel : uint2 = DispatchRaysIndex().xy;
     var ray : RayDesc;
     ray.Origin = float3((pixel.x & 1) == 0 ? 0 : 100, 0, -1);
@@ -27,15 +25,13 @@ func raygen_main()->void
 }
 
 [shader("miss")]
-func miss_main(inout payload_value: Payload)->void
-{
+func miss_main(inout payload_value: Payload)->void {
     payload_value.hit = 0;
 }
 
 [shader("closesthit")]
 func closest_hit_main(inout payload_value: Payload,
                       attributes: BuiltInTriangleIntersectionAttributes)
-    ->void
-{
+    ->void {
     payload_value.hit = 1;
 }

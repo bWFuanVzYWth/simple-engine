@@ -6,25 +6,21 @@ module control_variate;
 import restir_pt.types;
 import restir_pt.reservoir;
 
-namespace restir_pt
-{
+namespace restir_pt {
 /// 基于确定性反射率代理的逐通道系数，合法范围为[0,2]。
 /// 零分母或非有限比例回退1；该系数不读取随机路径辐射，代理无需等于物理反射率。
-public func cv_alpha(canonical_reflectance: float3, neighbor_reflectance: float3)->float3
-{
+public func cv_alpha(canonical_reflectance: float3, neighbor_reflectance: float3)->float3 {
     let ratio = canonical_reflectance / neighbor_reflectance;
     return float3(isfinite(ratio.x) ? clamp(ratio.x, 0.f, 2.f) : 1.f,
                   isfinite(ratio.y) ? clamp(ratio.y, 0.f, 2.f) : 1.f,
                   isfinite(ratio.z) ? clamp(ratio.z, 0.f, 2.f) : 1.f);
 }
 
-func cv_mass_valid(mass: float)->bool
-{
+func cv_mass_valid(mass: float)->bool {
     return isfinite(mass) && mass > 0.f;
 }
 
-func cv_mapped(shifted: PrecomputedShiftData)->float3
-{
+func cv_mapped(shifted: PrecomputedShiftData)->float3 {
     return isfinite(shifted.jacobian) && shifted.jacobian > 0.f
                ? shifted.path_throughput * shifted.jacobian
                : float3(0.f);
@@ -32,8 +28,7 @@ func cv_mapped(shifted: PrecomputedShiftData)->float3
 
 // 两个来源的MIS仅服务于像素差，按源measure形成partition of unity；不是空间选样的c_sum权重。
 // 先缩放PDF和M，避免HDR*历史量及其相加溢出；正常支持域不引入log/exp。
-func cv_pair_weight(source: PathReservoir, other_mass: float, mapped: float3)->float
-{
+func cv_pair_weight(source: PathReservoir, other_mass: float, mapped: float3)->float {
     let p = target(source.integrand);
     if (!cv_mass_valid(source.sample_mass) || !isfinite(source.weight) || source.weight <= 0.f ||
         !isfinite(p) || p <= 0.f)
@@ -57,8 +52,7 @@ func cv_pair_weight(source: PathReservoir, other_mass: float, mapped: float3)->f
 public func cv_difference(canonical: PathReservoir, neighbor: PathReservoir,
                           neighbor_at_canonical: PrecomputedShiftData,
                           canonical_at_neighbor: PrecomputedShiftData, alpha: float3)
-    ->float3
-{
+    ->float3 {
     if (!cv_mass_valid(canonical.sample_mass) || !cv_mass_valid(neighbor.sample_mass))
         return 0.f;
     let forward = cv_mapped(neighbor_at_canonical);
@@ -75,8 +69,7 @@ public func cv_difference(canonical: PathReservoir, neighbor: PathReservoir,
 public func cv_from_neighbor(neighbor_color: float3, canonical: PathReservoir,
                              neighbor: PathReservoir, neighbor_at_canonical: PrecomputedShiftData,
                              canonical_at_neighbor: PrecomputedShiftData, alpha: float3)
-    ->float3
-{
+    ->float3 {
     if (!cv_mass_valid(canonical.sample_mass) || !cv_mass_valid(neighbor.sample_mass))
         return 0.f;
     return alpha * neighbor_color +
@@ -86,8 +79,7 @@ public func cv_from_neighbor(neighbor_color: float3, canonical: PathReservoir,
 /// 单轮颜色组合；整个轮次共享同一canonical，不逐邻居改变其路径或颜色输入。
 /// mass为实际参与的置信度和，不代表独立样本数；不与reservoir RIS权重和混用。
 /// 参与集合、M及alpha须独立于随机辐射和shift成败；几何拒绝可由固定primary决定。
-public struct CVAccumulator
-{
+public struct CVAccumulator {
     /// 累计RGB分子；缺失canonical时直接保存回退颜色。
     public var weighted : float3;
     /// 正canonical与已添加项的M之和；零表示禁用邻居的回退状态。
@@ -95,26 +87,22 @@ public struct CVAccumulator
 
     /// 初始化中心颜色和正有限M；缺失中心保持原颜色，并禁用后续邻居项。
     [mutating]
-    public func init(canonical_color: float3, canonical_mass: float)->void
-    {
+    public func init(canonical_color: float3, canonical_mass: float)->void {
         mass = cv_mass_valid(canonical_mass) ? canonical_mass : 0.f;
         weighted = mass > 0.f ? canonical_color * mass : canonical_color;
     }
 
     /// 添加一个完整的from-neighbor估计；无效/零M项不参与分母，合法负RGB保留。
     [mutating]
-    public func add(estimate: float3, neighbor_mass: float)->void
-    {
-        if (mass > 0.f && cv_mass_valid(neighbor_mass))
-        {
+    public func add(estimate: float3, neighbor_mass: float)->void {
+        if (mass > 0.f && cv_mass_valid(neighbor_mass)) {
             weighted += neighbor_mass * estimate;
             mass += neighbor_mass;
         }
     }
 
     /// 输出按置信度组合的颜色；缺失中心直接返回初始化颜色，不制造邻域支持。
-    public func resolve()->float3
-    {
+    public func resolve()->float3 {
         return mass > 0.f ? weighted / mass : weighted;
     }
 }
@@ -126,8 +114,7 @@ public func cv_temporal(canonical_color: float3, history_color: float3, canonica
                         history: PathReservoir, canonical_at_history: PrecomputedShiftData,
                         history_at_canonical: PrecomputedShiftData, alpha: float3,
                         history_length: float = 20.f)
-    ->float3
-{
+    ->float3 {
     var history = history;
     if (!cv_mass_valid(canonical.sample_mass) || !cv_mass_valid(history.sample_mass) ||
         !cv_mass_valid(history_length))

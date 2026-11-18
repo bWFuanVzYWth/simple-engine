@@ -9,27 +9,24 @@ var inputs : StructuredBuffer<float4>;
 [[vk::binding(2, 0)]]
 var outputs : RWStructuredBuffer<uint4>;
 
-struct Payload
-{
+struct Payload {
     var primitive : uint;
     var barycentric : float2;
 };
 
 [shader("miss")]
-func miss_main(inout payload_value: Payload)->void
-{
+func miss_main(inout payload_value: Payload)->void {
     payload_value.primitive = 0xffffffffu;
 }
 
 [shader("closesthit")]
-func hit_main(inout payload_value: Payload, attributes: BuiltInTriangleIntersectionAttributes)->void
-{
+func hit_main(inout payload_value: Payload, attributes: BuiltInTriangleIntersectionAttributes)
+    ->void {
     payload_value.primitive = PrimitiveIndex();
     payload_value.barycentric = attributes.barycentrics;
 }
 
-func occluded(input: geometry::Ray)->bool
-{
+func occluded(input: geometry::Ray)->bool {
     let ray : RayDesc = { input.origin, input.t_min, input.direction, input.t_max };
     var payload : Payload = {};
     TraceRay(scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
@@ -38,8 +35,7 @@ func occluded(input: geometry::Ray)->bool
 }
 
 [shader("raygeneration")]
-func outgoing_main()->void
-{
+func outgoing_main()->void {
     let index : uint = DispatchRaysIndex().x;
     let data : float4 = inputs[index + 3];
     let edge_u : float3 = inputs[1].xyz - inputs[0].xyz;
@@ -54,8 +50,7 @@ func outgoing_main()->void
     var flags : uint = 0;
     if (payload.primitive == 0xffffffffu)
         flags |= 1;
-    else
-    {
+    else {
         let surface : geometry::SurfacePoint = geometry::triangle_point(
                           inputs[0].xyz, inputs[1].xyz, inputs[2].xyz, payload.barycentric);
         var direction : float3 = normalize(normal * 0.01 + normalize(edge_u));
@@ -68,8 +63,7 @@ func outgoing_main()->void
 }
 
 [shader("raygeneration")]
-func connection_main()->void
-{
+func connection_main()->void {
     let index : uint = DispatchRaysIndex().x;
     let data : float4 = inputs[index + 3];
     let tangent : float3 = normalize(inputs[1].xyz - inputs[0].xyz);

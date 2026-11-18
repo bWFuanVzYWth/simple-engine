@@ -32,14 +32,12 @@ module resampling;
 import restir_pt.types;
 import restir_pt.reservoir;
 
-namespace restir_pt
-{
+namespace restir_pt {
 /// NV paired空间邻居的对称几何拒绝：shading normal点积至少0.5，
 /// 相机距离差小于较远距离的10%。输入normal已归一，距离为同一相机的非负距离。
 public func paired_geometry_valid(canonical_normal: float3, canonical_distance: float,
                                   neighbor_normal: float3, neighbor_distance: float)
-    ->bool
-{
+    ->bool {
     return dot(canonical_normal, neighbor_normal) >= 0.5f &&
            abs(canonical_distance - neighbor_distance) <
                0.1f * max(canonical_distance, neighbor_distance);
@@ -47,15 +45,13 @@ public func paired_geometry_valid(canonical_normal: float3, canonical_distance: 
 
 /// NV pairwise有效量：c_sum=canonical sample_mass+所有几何有效邻居M，c_c=canonical sample_mass。
 /// 同一canonical的所有邻居共用此值；c_sum须正且c_sum>=c_c。
-public struct PairwiseFactor
-{
+public struct PairwiseFactor {
     public var c_sum : float;
     public var c_c : float;
 };
 
 /// forward shift写入的新几何因子随被选source一起保留，支持后续轮次链式shift。
-public func shifted_source(source: PathReservoir, shift: PrecomputedShiftData)->PathReservoir
-{
+public func shifted_source(source: PathReservoir, shift: PrecomputedShiftData)->PathReservoir {
     var source = source;
     source.reconnection_jacobian = shift.reconnection_jacobian;
     return source;
@@ -64,8 +60,7 @@ public func shifted_source(source: PathReservoir, shift: PrecomputedShiftData)->
 /// temporal canonical项需要T_c->history的目标值与Jacobian；历史M已做history cap。
 public func temporal_canonical_weight(canonical: PathReservoir, history: PathReservoir,
                                       canonical_at_history: PrecomputedShiftData)
-    ->float
-{
+    ->float {
     let reverse_p_hat =
         target(canonical_at_history.path_throughput) * canonical_at_history.jacobian;
     return reverse_p_hat > 0.f ? 1.f - reverse_p_hat * history.sample_mass /
@@ -77,8 +72,7 @@ public func temporal_canonical_weight(canonical: PathReservoir, history: PathRes
 /// temporal邻居项使用T_history->c；完整源target*源M与目标target*canonical M竞争。
 public func temporal_neighbor_weight(canonical: PathReservoir, history: PathReservoir,
                                      history_at_canonical: PrecomputedShiftData)
-    ->float
-{
+    ->float {
     let source_term = target(history.integrand) * history.sample_mass;
     return source_term /
            (source_term + history_at_canonical.jacobian *
@@ -91,8 +85,7 @@ public func temporal_resample(canonical: PathReservoir, history: PathReservoir,
                               canonical_at_history: PrecomputedShiftData,
                               history_at_canonical: PrecomputedShiftData, u: float2,
                               history_length: float = 20.f)
-    ->PathReservoir
-{
+    ->PathReservoir {
     var history = history;
     history.sample_mass = min(history_length, history.sample_mass);
     let canonical_weight = temporal_canonical_weight(canonical, history, canonical_at_history);
@@ -107,8 +100,7 @@ public func temporal_resample(canonical: PathReservoir, history: PathReservoir,
 }
 
 /// 一个spatial轮的canonical起始权重；其余项由每个有效邻居的逆shift补入。
-public func spatial_begin(factor: PairwiseFactor)->float
-{
+public func spatial_begin(factor: PairwiseFactor)->float {
     return factor.c_c / factor.c_sum;
 }
 
@@ -116,8 +108,7 @@ public func spatial_begin(factor: PairwiseFactor)->float
 public func spatial_canonical_term(canonical: PathReservoir, neighbor: PathReservoir,
                                    canonical_at_neighbor: PrecomputedShiftData,
                                    factor: PairwiseFactor)
-    ->float
-{
+    ->float {
     let reverse_p_hat =
         target(canonical_at_neighbor.path_throughput) * canonical_at_neighbor.jacobian;
     var term = 1.f;
@@ -132,8 +123,7 @@ public func spatial_canonical_term(canonical: PathReservoir, neighbor: PathReser
 public func spatial_neighbor_weight(neighbor: PathReservoir,
                                     neighbor_at_canonical: PrecomputedShiftData,
                                     factor: PairwiseFactor)
-    ->float
-{
+    ->float {
     let source_term = target(neighbor.integrand) * (factor.c_sum - factor.c_c);
     return neighbor.sample_mass / factor.c_sum * source_term /
            (source_term + neighbor_at_canonical.jacobian *
@@ -147,8 +137,7 @@ public func spatial_merge_neighbor(inout result: PathReservoir, canonical: PathR
                                    neighbor_at_canonical: PrecomputedShiftData,
                                    canonical_at_neighbor: PrecomputedShiftData,
                                    factor: PairwiseFactor, inout canonical_weight: float, u: float)
-    ->bool
-{
+    ->bool {
     canonical_weight += spatial_canonical_term(canonical, neighbor, canonical_at_neighbor, factor);
     return merge_reservoir(result, shifted_source(neighbor, neighbor_at_canonical),
                            neighbor_at_canonical.path_throughput, neighbor_at_canonical.jacobian,
@@ -158,8 +147,7 @@ public func spatial_merge_neighbor(inout result: PathReservoir, canonical: PathR
 /// 全部有效邻居后合并canonical并finalize；返回是否选中了canonical。
 public func spatial_finish(inout result: PathReservoir, canonical: PathReservoir,
                            canonical_weight: float, u: float)
-    ->bool
-{
+    ->bool {
     let selected =
         merge_reservoir(result, canonical, canonical.integrand, 1.f, canonical_weight, u);
     finalize_reuse(result);

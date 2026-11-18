@@ -1,15 +1,13 @@
 module render2d;
 
-struct Instance
-{
+struct Instance {
     var rect : float4;
     var uv : float4;
     var color : float4;
     var params : float4;
 };
 
-struct View
-{
+struct View {
     var transform : float4;
     var pixel : float4;
 };
@@ -23,8 +21,7 @@ var image : Texture2D<float4>;
 [[vk::binding(1, 1)]]
 var image_sampler : SamplerState;
 
-struct VertexOutput
-{
+struct VertexOutput {
     var position : float4 : SV_Position;
     [[vk::location(0)]]
     var uv : float2 : TEXCOORD0;
@@ -40,8 +37,7 @@ struct VertexOutput
 
 [shader("vertex")]
 func vertex_main(vertex_id: uint: SV_VulkanVertexID, instance_id: uint: SV_VulkanInstanceID)
-    ->VertexOutput
-{
+    ->VertexOutput {
     let corners : float2[6] = {
         float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
         float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0),
@@ -61,15 +57,13 @@ func vertex_main(vertex_id: uint: SV_VulkanVertexID, instance_id: uint: SV_Vulka
 }
 
 [shader("fragment")]
-float4 fragment_main(VertexOutput input) : SV_Target0
-{
+float4 fragment_main(VertexOutput input) : SV_Target0 {
     let radius = clamp(input.params.y, 0.0, min(input.extent.x, input.extent.y) * 0.5);
     let half_extent = input.extent * 0.5;
     let q = abs(input.local - half_extent) - half_extent + radius;
     let signed_distance = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
     let filter_width = max(fwidth(signed_distance), 0.00001);
-    if (input.params.x == 0.0)
-    {
+    if (input.params.x == 0.0) {
         var coverage = saturate(0.5 - signed_distance / filter_width);
         if (input.params.z > 0.0)
             coverage -= saturate(0.5 - (signed_distance + input.params.z) / filter_width);

@@ -1,22 +1,18 @@
 module shadow_resolve;
 import atmosphere.terrain_frame;
 import atmosphere.shadow_math;
-namespace atmosphere
-{
+namespace atmosphere {
 /// 应用只判定候选三角形的实际覆盖；硬件 OMM 的确定态由遍历处理。
-public interface IBlockerCoverage
-{
+public interface IBlockerCoverage {
     static func accepts(instance: uint, primitive: uint, bary: float2, front: bool)->bool;
 }
 // 相机射线遵循主查询的覆盖朝向。阻挡列从太阳侧向内查询，覆盖须取接收点向太阳看的那一面。
 func terrain_hit_distance<C : IBlockerCoverage, let reverse : bool>(
     scene: RaytracingAccelerationStructure, ray: RayDesc)
-    ->float
-{
+    ->float {
     var q : RayQuery<RAY_FLAG_NONE>;
     q.TraceRayInline(scene, RAY_FLAG_NONE, 0xff, ray);
-    while (q.Proceed())
-    {
+    while (q.Proceed()) {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
             C.accepts(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(),
                       q.CandidateTriangleBarycentrics(), q.CandidateTriangleFrontFace() != reverse))
@@ -29,14 +25,12 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
                                                         cells: RWStructuredBuffer<uint4>,
                                                         scene: RaytracingAccelerationStructure,
                                                         first_hits: RWStructuredBuffer<uint>)
-    ->void
-{
+    ->void {
     var cells = cells;
     var first_hits = first_hits;
     // 与当前刷新批共用 TLAS 和覆盖规则。最高位通知积分阶段本射线的终点是否实际改变。
     let slices : uint = terrain_full(f) ? TERRAIN_SLICES : TERRAIN_SLICES / 8u;
-    if (id.z == 0 && id.x < TERRAIN_RADIAL && id.y < slices)
-    {
+    if (id.z == 0 && id.x < TERRAIN_RADIAL && id.y < slices) {
         let slice = terrain_slice_index(f, id.y);
         let sample = slice * TERRAIN_RADIAL + id.x;
         let camera : RayDesc = { f.source.camera_position, 0, terrain_ray(f, id.x, slice),
@@ -55,8 +49,8 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
     let local_cell = lo + ((int2(id.xy) - lo) & 511);
     let tag = terrain_column(f, int(id.z), int2(id.xy));
     // 重叠切片在四个已提交活跃帧内复用同一列。局部场景发布不清理相邻格。
-    if (all(cell.yz == tag) && cell.w != 0 && ((f.source.refresh_clock - last) & 0x7fffffffu) < 4u)
-    {
+    if (all(cell.yz == tag) && cell.w != 0 &&
+        ((f.source.refresh_clock - last) & 0x7fffffffu) < 4u) {
         cells[index].x = last;
         return;
     }
@@ -67,8 +61,7 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
     let ray : RayDesc = { origin, 0, -f.source.sun_direction, 8192.0 };
     let distance = terrain_hit_distance<C, true>(scene, ray);
     var blocker : float = -1e20;
-    if (distance < ray.TMax)
-    {
+    if (distance < ray.TMax) {
         blocker = f.source.wrapped_shadow_plane_depth + 4096.0 - distance;
         blocker -= floor(blocker * (1.0 / 32768.0)) * 32768.0;
     }

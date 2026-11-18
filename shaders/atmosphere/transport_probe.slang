@@ -7,8 +7,7 @@ var probe_outputs : RWStructuredBuffer<float4>;
 // 独立测试入口：每查询两行 ray.xyz/segmentKm、sun.xyz/initialHeightKm；输出 L4、T4。
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func transport_probe(uint3 id: SV_DispatchThreadID)->void
-{
+func transport_probe(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
     var stride : uint;
     probe_queries.GetDimensions(rows, stride);

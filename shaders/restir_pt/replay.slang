@@ -36,11 +36,9 @@ import restir_pt.rng;
 import restir_pt.scene;
 import geometry.ray;
 
-namespace restir_pt
-{
+namespace restir_pt {
 /// 当前 bounce 的随机输入；light 的后两维是 NV 非 LightTileRIS 路径的固定 padding。
-public struct ReplayRandom
-{
+public struct ReplayRandom {
     public var u_bsdfris : float;
     public var u_neeris : float;
     public var nee_seed : uint;
@@ -54,8 +52,7 @@ public struct ReplayRandom
 /// 恢复源路径种子并消费阈值；initial 也必须调用此入口，不另建阈值随机流。
 public func init_replay_sampler(seed: uint, settings: ShiftSettings, out distance_threshold: float,
                                 out roughness_threshold: float)
-    ->TinyUniformSampleGenerator
-{
+    ->TinyUniformSampleGenerator {
     var sampler : TinyUniformSampleGenerator = rng_from_seed(seed);
     distance_threshold = settings.near_field_distance_threshold;
     roughness_threshold = settings.specular_roughness_threshold;
@@ -71,8 +68,7 @@ public func init_replay_sampler(seed: uint, settings: ShiftSettings, out distanc
 /// 非 LightTileRIS 的共同消费顺序；关闭 NEE 或碰到 delta 时仍消费光源 padding。
 /// RR 开启消费 11 维、关闭消费 10 维；只有 initial 使用 roulette 的存活决策。
 public func bounce_random(inout sampler: TinyUniformSampleGenerator, use_russian_roulette: bool)
-    ->ReplayRandom
-{
+    ->ReplayRandom {
     var result : ReplayRandom;
     result.u_bsdfris = sampler.next_1d();
     result.u_neeris = sampler.next_1d();
@@ -86,14 +82,12 @@ public func bounce_random(inout sampler: TinyUniformSampleGenerator, use_russian
 }
 
 /// 场景光源适配器使用联合 CDF；z 选择策略后须重映射为该策略内的均匀残差。
-public func light_random(random: ReplayRandom)->float3
-{
+public func light_random(random: ReplayRandom)->float3 {
     return float3(random.light.xy, random.light_selector);
 }
 
 /// NV 默认 Balance MIS；参数已经含各策略的样本数，不混用旧 PT 的 power heuristic。
-public func light_mis_weight(n0: float, p0: float, n1: float, p1: float)->float
-{
+public func light_mis_weight(n0: float, p0: float, n1: float, p1: float)->float {
     let first = n0 * p0;
     let second = n1 * p1;
     return first > 0.0 ? first / (first + second) : 0.0;
@@ -101,28 +95,24 @@ public func light_mis_weight(n0: float, p0: float, n1: float, p1: float)->float
 
 /// 初采外部 RR 的存活率；存活时 throughput 除此值，source_pdf 乘此值。
 /// mixed-PSS 的重放去掉 roulette 维，仅跳过相同随机数，不再次补偿吞吐。
-public func initial_roulette_probability(throughput: float3)->float
-{
+public func initial_roulette_probability(throughput: float3)->float {
     return min(1.0, max(0.0, PathRISState::to_scalar(throughput)));
 }
 
 /// 连续 BSDF 用立体角密度，delta 仅在 footprint 中用 NV 的有限大替代值。
-public func replay_scatter_pdf(sample_value: BsdfSample)->float
-{
+public func replay_scatter_pdf(sample_value: BsdfSample)->float {
     return sample_value.delta ? 1.0e20 : sample_value.pdf;
 }
 
 /// 每段的几何量；两端点均为未偏移表面位置，visibility 的偏移不进入积分 measure。
-public struct ReplaySegment
-{
+public struct ReplaySegment {
     public var geometry_factor : float;
     public var inverse_geometry_factor : float;
     public var ray_footprint : float;
 };
 
 /// 与 initial 的 setRcVertex 和 NEE/emitter 特例共同使用。
-public func replay_segment(previous: Surface, current: Surface, scatter_pdf: float)->ReplaySegment
-{
+public func replay_segment(previous: Surface, current: Surface, scatter_pdf: float)->ReplaySegment {
     let delta : float3 = current.point.position - previous.point.position;
     let distance_squared = dot(delta, delta);
     let wo = -delta * rsqrt(distance_squared);
@@ -143,8 +133,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
                                                       settings: ShiftSettings,
                                                       use_russian_roulette: bool, use_nee: bool,
                                                       use_mis: bool, previous: bool)
-    ->ReconnectionData
-{
+    ->ReconnectionData {
     var result : ReconnectionData = {};
     if (!primary.hit.is_valid() || source.weight == 0.0)
         return result;
@@ -152,8 +141,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
     let path_length = uint(source.path_flags.path_length());
     let should_connect : bool = rc_length <= path_length + 1;
     let primary_throughput = exp(-primary.incident.yzw * primary.distance);
-    if (should_connect && rc_length == 1)
-    {
+    if (should_connect && rc_length == 1) {
         if (!primary.has_non_delta_lobes)
             return result;
         result.rc_prev_hit = primary.hit;
@@ -174,8 +162,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
     var throughput : float3 = primary_throughput;
     var last_rough = false;
     var incoming : ReplaySegment = {};
-    for (var depth: uint = 0; depth <= path_length; ++depth)
-    {
+    for (var depth: uint = 0; depth <= path_length; ++depth) {
         let random = bounce_random(sampler, use_russian_roulette);
         var scatter : BsdfSample = scene.sample_bsdf(surface, random.bsdf);
         if (scatter.pdf <= 0.0 || all(scatter.weight == 0.0) ||
@@ -196,8 +183,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
         var hit : HitInfo = {};
         var distance : float;
         let found : bool = scene.trace(origin, scatter.direction, previous, hit, distance);
-        if (!found)
-        {
+        if (!found) {
             if (should_connect || depth != path_length ||
                 source.path_flags.light_type() != LIGHT_ENV || rough)
                 return result;
@@ -215,8 +201,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
 
         throughput *= exp(-scatter.medium.yzw * distance);
         let next_depth : uint = depth + 1;
-        if (next_depth == path_length + 1 && !source.path_flags.last_vertex_nee())
-        {
+        if (next_depth == path_length + 1 && !source.path_flags.last_vertex_nee()) {
             if (should_connect || source.path_flags.light_type() != LIGHT_EMISSIVE)
                 return result;
             var endpoint : Surface = {};
@@ -246,8 +231,7 @@ public func trace_replayed_path<Scene : IRestirScene>(inout scene: Scene, primar
         var next : Surface = scene.load_surface(hit, -scatter.direction, previous);
         scene.set_incident(next, scatter.medium);
         incoming = replay_segment(surface, next, scatter_pdf);
-        if (should_connect && next_depth == rc_length - 1)
-        {
+        if (should_connect && next_depth == rc_length - 1) {
             if (!next.has_non_delta_lobes)
                 return result;
             result.rc_prev_hit = hit;

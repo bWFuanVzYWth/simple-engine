@@ -4,22 +4,19 @@
 module vertex_call;
 import pt.scene;
 import pt.integrator;
+import light_sampling.sample;
 
-namespace pt
-{
+namespace pt {
 /// 一族已经采样并查询可见性的灯；pdf=0表示不参与材质求值。
-public struct DirectSample
-{
+public struct DirectSample {
     public var direction : float3;
     public var pdf : float;
     public var distance : float;
-    public static func from_light(light: LightSample)->DirectSample
-    {
+    public static func from_light(light: light_sampling::LightSample)->DirectSample {
         return { light.direction, light.pdf, light.distance };
     }
-    public func light()->LightSample
-    {
-        var result : LightSample = {};
+    public func light()->light_sampling::LightSample {
+        var result : light_sampling::LightSample = {};
         result.direction = direction;
         result.pdf = pdf;
         result.distance = distance;
@@ -30,8 +27,7 @@ public struct DirectSample
 /// 输入origin_pixel保存pixel.xy/sample的位模式；输出改为新origin。
 /// sun/lamp输入为DirectSample，输出由store复用为方向和两族权重，仅经result/weights读取。
 /// 调用前须消费入射Beer，调用后由raygen做RR及finish；depth/events各占7bit。
-public struct VertexCall
-{
+public struct VertexCall {
     public var origin_pixel : float3;
     public var throughput : float3;
     public var radiance : float3;
@@ -43,8 +39,9 @@ public struct VertexCall
     public var sun : DirectSample;
     public var lamp : DirectSample;
 
-    public static func input(data: TransportCall, sun: LightSample, lamp: LightSample)->VertexCall
-    {
+    public static func input(data: TransportCall, sun: light_sampling::LightSample,
+                             lamp: light_sampling::LightSample)
+        ->VertexCall {
         return { asfloat(uint3(data.pixel, data.sample)),
                  data.path.throughput,
                  data.path.radiance,
@@ -56,8 +53,7 @@ public struct VertexCall
                  DirectSample::from_light(sun),
                  DirectSample::from_light(lamp) };
     }
-    public func unpack(hit: Hit, direction: float3)->TransportCall
-    {
+    public func unpack(hit: Hit, direction: float3)->TransportCall {
         var data : TransportCall = {};
         data.hit = hit;
         data.pixel = asuint(origin_pixel.xy);
@@ -74,8 +70,7 @@ public struct VertexCall
         return data;
     }
     [mutating]
-    public func store(path: PathState, weights: DirectWeights)->void
-    {
+    public func store(path: PathState, weights: DirectWeights)->void {
         origin_pixel = path.origin;
         throughput = path.throughput;
         radiance = path.radiance;
@@ -90,8 +85,7 @@ public struct VertexCall
         lamp.pdf = weights.sun.z;
         lamp.direction = weights.lamp;
     }
-    public func result()->PathState
-    {
+    public func result()->PathState {
         return { origin_pixel,
                  sun.direction,
                  throughput,
@@ -104,8 +98,7 @@ public struct VertexCall
                  (state >> 9) & 127u,
                  state & 3u };
     }
-    public func weights()->DirectWeights
-    {
+    public func weights()->DirectWeights {
         return { float3(sun.pdf, sun.distance, lamp.pdf), lamp.direction };
     }
 };

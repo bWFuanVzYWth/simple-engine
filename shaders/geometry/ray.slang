@@ -11,11 +11,9 @@
 /// 许可见文件头；分析：https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/
 module ray;
 
-namespace geometry
-{
+namespace geometry {
 /// p(t) = origin + t * direction；方向可不归一化，只有单位方向的 t 才是距离。
-public struct Ray
-{
+public struct Ray {
     /// 射线起点，与 direction 使用同一坐标系。
     public var origin : float3;
     /// 沿 direction 的参数下界，不是独立的距离单位。
@@ -27,8 +25,7 @@ public struct Ray
 };
 
 /// 可直接生成散射射线的世界空间表面点与误差偏移。
-public struct SurfacePoint
-{
+public struct SurfacePoint {
     /// 尚未按出射方向偏移的世界位置。
     public var position : float3;
     /// 单位几何法线；三角形绕序经逆转置变换后的朝向。
@@ -38,8 +35,7 @@ public struct SurfacePoint
 };
 
 /// 可供多条连接复用的目标端点；缓存与连接方向无关的误差项。
-public struct TriangleEndpoint
-{
+public struct TriangleEndpoint {
     /// 未偏移的世界位置。
     public var position : float3;
     /// 单位世界几何法线，保留物体空间三角形绕序。
@@ -50,8 +46,7 @@ public struct TriangleEndpoint
     public var traversal_weight : float3;
 };
 
-struct TriangleData
-{
+struct TriangleData {
     var position : float3;
     var normal : float3;
     var error : float3;
@@ -61,8 +56,7 @@ static const let c0 = 5.9604644775390625E-8;
 static const let c1 = 1.788139769587360206060111522674560546875E-7;
 static const let c2 = 1.19209317972490680404007434844970703125E-7;
 
-func reconstruct_triangle(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleData
-{
+func reconstruct_triangle(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleData {
     precise let edge1 = v1 - v0;
     precise let edge2 = v2 - v0;
     precise var position : float3 = v0 + fma(float3(bary.x), edge1, bary.y * edge2);
@@ -79,8 +73,7 @@ func reconstruct_triangle(v0: float3, v1: float3, v2: float3, bary: float2)->Tri
 /// 两个仿射 float3x4 变换须互逆、有限、非奇异且与实际实例一致；其余数值边界见模块说明。
 public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
                               object_to_world: float3x4, world_to_object: float3x4)
-    ->TriangleEndpoint
-{
+    ->TriangleEndpoint {
     let object = reconstruct_triangle(v0, v1, v2, bary);
     precise var world_position : float3;
     world_position.x = object_to_world[0][3] + fma(object_to_world[0][0], object.position.x,
@@ -117,8 +110,7 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2,
 }
 
 /// 无实例变换的重载，输入即世界坐标；保留恒等变换误差预算，其余三角形条件同变换重载。
-public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleEndpoint
-{
+public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2)->TriangleEndpoint {
     let object = reconstruct_triangle(v0, v1, v2, bary);
     let scale = rsqrt(dot(object.normal, object.normal));
     var point : TriangleEndpoint;
@@ -131,8 +123,7 @@ public func triangle_endpoint(v0: float3, v1: float3, v2: float3, bary: float2)-
 }
 
 /// 将缓存端点转换为完整当前位置的误差偏移；endpoint须满足triangle_endpoint契约。
-public func surface_point(endpoint: TriangleEndpoint)->SurfacePoint
-{
+public func surface_point(endpoint: TriangleEndpoint)->SurfacePoint {
     var point : SurfacePoint;
     point.position = endpoint.position;
     point.normal = endpoint.normal;
@@ -144,21 +135,18 @@ public func surface_point(endpoint: TriangleEndpoint)->SurfacePoint
 /// bary、非退化和 float32 范围条件同 triangle_endpoint；法线按物体绕序经逆转置变换。
 public func triangle_point(v0: float3, v1: float3, v2: float3, bary: float2,
                            object_to_world: float3x4, world_to_object: float3x4)
-    ->SurfacePoint
-{
+    ->SurfacePoint {
     return surface_point(triangle_endpoint(v0, v1, v2, bary, object_to_world, world_to_object));
 }
 
 /// 无实例变换的世界坐标重载，保留恒等变换误差；重心与数值边界同 triangle_endpoint。
-public func triangle_point(v0: float3, v1: float3, v2: float3, bary: float2)->SurfacePoint
-{
+public func triangle_point(v0: float3, v1: float3, v2: float3, bary: float2)->SurfacePoint {
     return surface_point(triangle_endpoint(v0, v1, v2, bary));
 }
 
 /// 沿几何法线偏移世界位置；direction 只选前／后侧，不要求单位长度，切向时选前侧。
 /// point 须携带单位几何法线及有效非负 offset；不修改传入的表面点。
-public func offset_origin(point_value: SurfacePoint, direction: float3)->float3
-{
+public func offset_origin(point_value: SurfacePoint, direction: float3)->float3 {
     let offset =
         dot(point_value.normal, direction) < 0.0 ? -point_value.offset : point_value.offset;
     precise let origin = fma(float3(offset), point_value.normal, point_value.position);
@@ -167,8 +155,7 @@ public func offset_origin(point_value: SurfacePoint, direction: float3)->float3
 
 /// 从 offset_origin 选定侧生成散射射线，t_min=0，原样保留 direction 与 t_max。
 /// 不归一化方向或换算上界；仅单位方向时 t_max 是世界距离，调用方维持有效区间。
-public func spawn_ray(point_value: SurfacePoint, direction: float3, t_max: float)->Ray
-{
+public func spawn_ray(point_value: SurfacePoint, direction: float3, t_max: float)->Ray {
     var ray : Ray;
     ray.origin = offset_origin(point_value, direction);
     ray.t_min = 0.0;
@@ -181,8 +168,7 @@ public func spawn_ray(point_value: SurfacePoint, direction: float3, t_max: float
 /// 目标端误差使用 abs(origin)+abs(未偏移方向)，沿法线以 FMA 修正方向，避免重建端点的新误差。
 /// false 表示端点重合或偏移后无法形成正向非空段，此时不能追踪输出；不表示几何遮挡。
 /// 连接射线误差分析：https://developer.nvidia.com/blog/solving-self-intersection-artifacts-in-directx-raytracing/#connection_rays
-public func connection_ray(source: SurfacePoint, target: TriangleEndpoint, out ray: Ray)->bool
-{
+public func connection_ray(source: SurfacePoint, target: TriangleEndpoint, out ray: Ray)->bool {
     let delta = target.position - source.position;
     ray.origin = offset_origin(source, delta);
     ray.t_min = 0.0;

@@ -4,12 +4,10 @@ import pt.material_vertex;
 import pt.scene;
 import pt.integrator;
 
-namespace pt
-{
+namespace pt {
 /// program只读取将实际几何映射到已发布材质程序所需的紧凑元数据，不解码表面。
 /// 辅助输出只在首表面且显式开启时调用，不成为普通路径的共同解码前缀。
-public interface IHitScene : IScene
-{
+public interface IHitScene : IScene {
     func acceleration()->RaytracingAccelerationStructure;
     func program(object: HitObject, incident: float4)->uint;
     func guides_enabled()->bool;
@@ -19,28 +17,23 @@ public interface IHitScene : IScene
 /// miss保留公共环境处理；辅助量观察独立于照明路径。reorder 在编译期选择 SER。
 public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder : bool>(
     provider: Scene, guides: Guides, inout data: TransportCall)
-    ->float
-{
+    ->float {
     var distance : float = FAR;
-    while (data.path.status == PATH_ACTIVE)
-    {
+    while (data.path.status == PATH_ACTIVE) {
         let ray : RayDesc = { data.path.origin, 0, data.path.direction, FAR };
         var unused : uint = 0;
         // 不将HitObject嵌入聚合状态（Slang 2026.20驱动互操作约束）。
         var found : HitObject = HitObject::TraceRay(provider.acceleration(), RAY_FLAG_NONE, 0xff, 0,
                                                     1, 0, ray, unused);
-        if (!found.IsHit())
-        {
+        if (!found.IsHit()) {
             if (data.path.depth == 0)
                 guides.environment(data);
             escape(provider, data.path);
             break;
         }
-        if (data.path.depth == 0)
-        {
+        if (data.path.depth == 0) {
             distance = found.GetRayDesc().TMax;
-            if (provider.guides_enabled())
-            {
+            if (provider.guides_enabled()) {
                 guides.surface_hit(found, data);
             }
         }

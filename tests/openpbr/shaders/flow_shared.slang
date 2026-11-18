@@ -1,13 +1,12 @@
 module specialized_fixture;
-import bsdf.openpbr.api;
-import bsdf.openpbr.flow;
+import openpbr.api;
+import openpbr.flow;
 
 #ifndef OPENPBR_FLOW
 #error OPENPBR_FLOW must select one compile-time OpenPBR capability
 #endif
 
-struct Case
-{
+struct Case {
     var material : openpbr::Material;
     var view : float4;
     var u : float4;
@@ -23,26 +22,22 @@ var energy_texture : Texture3D<float4>;
 [[vk::binding(3, 0)]]
 var energy_sampler : SamplerState;
 
-struct EvaluationSum : openpbr::IFlowEvaluationConsumer
-{
+struct EvaluationSum : openpbr::IFlowEvaluationConsumer {
     var evaluated : openpbr::Evaluation;
 
     [mutating]
-    func consume(direction: uint, value: openpbr::Evaluation)->void
-    {
+    func consume(direction: uint, value: openpbr::Evaluation)->void {
         evaluated.response += value.response;
         evaluated.pdf += value.pdf;
     }
 };
 
-func shade_case<let shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::Batch
-{
+func shade_case<let shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::Batch {
     if (shared == 1)
         return openpbr::shade_flow<OPENPBR_FLOW>(energy, c.material, float3(0, 0, 1), c.view.xyz,
                                                  float3(0.6, 0, 0.8), float3(0.6, 0, -0.8), 3u,
                                                  c.u.xyz, true, c.incident, c.transmitted);
-    if (shared == 2)
-    {
+    if (shared == 2) {
         var consumer : EvaluationSum = {};
         var shaded : openpbr::Batch = {};
         shaded.scattered =
@@ -66,8 +61,7 @@ func shade_case<let shared : uint>(energy: openpbr::Energy, c: Case)->openpbr::B
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-func main(uint3 id: SV_DispatchThreadID)->void
-{
+func main(uint3 id: SV_DispatchThreadID)->void {
     var count : uint;
     var stride : uint;
     cases.GetDimensions(count, stride);

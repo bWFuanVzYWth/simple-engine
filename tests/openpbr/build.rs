@@ -310,7 +310,7 @@ fn main() -> Result<(), shader_build::Error> {
             "src",
             "tests",
             "../../crates/openpbr",
-            "../../shaders/bsdf/openpbr",
+            "../../shaders/openpbr",
         ],
     )
 }

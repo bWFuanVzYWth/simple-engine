@@ -1,3 +1,4 @@
 BasedOnStyle: Microsoft
 Language: CSharp
+BreakBeforeBraces: Attach
 ColumnLimit: 100
