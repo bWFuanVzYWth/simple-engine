@@ -53,16 +53,11 @@ public func triple_product(first: float3, second: float3, third: float)->float3 
 /// 同量度的两策略 power heuristic；first<=0 为0，second<=0 为1。
 /// 非零路径按较大 PDF 归一化，避免大比值平方溢出。
 public func power_heuristic(first: float, second: float)->float {
-    if (first <= 0.0)
-        return 0.0;
-    if (second <= 0.0)
-        return 1.0;
-    if (first >= second) {
-        let ratio = second / first;
-        return 1.0 / (1.0 + ratio * ratio);
-    }
-    let ratio = first / second;
-    return ratio * ratio / (1.0 + ratio * ratio);
+    if (!all(float2(first, second) > 0.0))
+        return float(first > 0.0);
+    let ratio = min(first, second) / max(first, second);
+    let square = ratio * ratio;
+    return select(first >= second, 1.0, square) / (1.0 + square);
 }
 
 /// 合并 sampled 策略的权重与 1/pdf，避免单独权重下溢抹掉可表示贡献。

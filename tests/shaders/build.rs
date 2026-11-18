@@ -89,6 +89,12 @@ fn main() -> Result<(), shader_build::Error> {
             "camera-project.spv",
         ),
         (
+            "shaders/transport_bench.slang",
+            "mis_main",
+            "compute",
+            "bench-transport.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

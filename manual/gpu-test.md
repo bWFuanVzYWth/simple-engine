@@ -83,6 +83,14 @@ cargo bench --locked -p shader_tests --bench camera
 
 输出 JSON 包含主射线生成，以及沿每条射线重投影 32 个世界点的 GPU 时间和结果指纹。
 
+纯计算 kernel 的定向基准支持按着色器目录选择。输运负载对 4K 位置各计算 32 对普通及跨指数 PDF 的 MIS 权重：
+
+```powershell
+cargo bench --locked -p shader_tests --bench kernels -- transport
+```
+
+省略目录名时运行全部 kernel 负载，报告每项 GPU 时间、输入和输出指纹。
+
 通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell
