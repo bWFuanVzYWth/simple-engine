@@ -125,6 +125,30 @@ fn main() -> Result<(), shader_build::Error> {
             "display_main.spv",
         ),
         (
+            "shaders/color_bench.slang",
+            "primaries_main",
+            "compute",
+            "color-primaries.spv",
+        ),
+        (
+            "shaders/color_bench.slang",
+            "srgb_main",
+            "compute",
+            "color-srgb.spv",
+        ),
+        (
+            "shaders/color_bench.slang",
+            "hsv_main",
+            "compute",
+            "color-hsv.spv",
+        ),
+        (
+            "shaders/color_bench.slang",
+            "prime_drt_main",
+            "compute",
+            "color-prime-drt.spv",
+        ),
+        (
             "shaders/z_sobol.slang",
             "z_sobol_bits_main",
             "compute",
@@ -346,6 +370,7 @@ fn main() -> Result<(), shader_build::Error> {
         &recipes,
         &[shader_library::root()],
         &[
+            "benches",
             "src",
             "tests",
             "../../crates/gpu_test/src",

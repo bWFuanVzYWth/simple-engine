@@ -11,6 +11,10 @@ name = "shaders"
 path = "tests/shaders.rs"
 harness = false
 
+[[bench]]
+name = "color"
+harness = false
+
 [dependencies]
 simple_engine = { workspace = true, features = ["gpu_test", "light_bvh", "display", "openpbr"] }
 thiserror.workspace = true

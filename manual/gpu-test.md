@@ -51,7 +51,15 @@ validation error、device lost 或超时后停止复用该环境。GPU hang 由[
 
 ## 定向测量
 
-当前 CLI 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
+已配置 Slang 且 Vulkan 设备支持 GPU 时间戳时，在仓库根目录运行 4K 颜色 benchmark：
+
+```powershell
+cargo bench --locked -p shader_tests --bench color
+```
+
+它在第一块 Vulkan 设备上测原色往返与亮度、sRGB 往返、HSV 往返和 Rec.2020 的 Prime DRT。前三项按 64 个曝光级对每个像素重复转换，Prime DRT 按正常路径执行一次。成功时输出 JSON，记录 3840×2160 派发的 GPU 耗时中位数、原始样本和输入输出指纹。输入上传和结果回读单独执行。
+
+通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell
 cargo run --release -p shader_tests --bin shader_bench -- --count 262144 --dispatches 256 --rounds 7 --distribution all --scale 1
