@@ -107,6 +107,12 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-sampling.spv",
         ),
         (
+            "shaders/scene_cache_bench.slang",
+            "identity_main",
+            "compute",
+            "bench-scene_cache.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

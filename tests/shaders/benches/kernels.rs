@@ -37,6 +37,13 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "sobol_4k_main",
         ),
     ),
+    (
+        "scene_cache",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-scene_cache.spv")),
+            "identity_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {
@@ -57,10 +64,25 @@ enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Measurement(#[from] compute::Error),
+    #[error(transparent)]
+    SceneCache(#[from] simple_engine::scene_cache::Error),
     #[error("指定一个已有的 benchmark 目录名")]
     Argument,
     #[error("{0} 的 GPU 输出无效")]
     Output(&'static str),
+}
+
+fn input(folder: &str) -> Result<Vec<u8>, Error> {
+    let mut words = vec![[SEED, 0, 0, 0]];
+    if folder == "scene_cache" {
+        let entries: Vec<_> = (0..65_536).map(|i| [0, 0, 0, 2 * i + 1]).collect();
+        words.extend(simple_engine::scene_cache::directory(&entries)?);
+    }
+    Ok(words
+        .into_iter()
+        .flatten()
+        .flat_map(u32::to_le_bytes)
+        .collect())
 }
 
 fn main() -> Result<(), Error> {
@@ -75,16 +97,13 @@ fn main() -> Result<(), Error> {
     {
         return Err(Error::Argument);
     }
-    let input: Vec<_> = [SEED, 0, 0, 0]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
     let mut gpu = Gpu::new(Capability::Compute, 0, true)?;
     let adapter = gpu.context().adapter_info();
     let workloads = KERNELS
         .iter()
         .filter(|(folder, _)| filter.is_none_or(|name| folder == name))
         .map(|&(folder, shader)| -> Result<_, Error> {
+            let input = input(folder)?;
             let trial =
                 compute::measure(&mut gpu, shader, &input, OUTPUT_BYTES, GROUPS, DISPATCHES)?;
             if trial.output.first_chunk::<16>() == trial.output.last_chunk::<16>()
@@ -100,6 +119,7 @@ fn main() -> Result<(), Error> {
             Ok(serde_json::json!({
                 "name": format!("{folder}/{}", shader.entry),
                 "spirv_blake3": blake3::hash(shader.spirv).to_hex().as_str(),
+                "input_blake3": blake3::hash(&input).to_hex().as_str(),
                 "output_blake3": blake3::hash(&trial.output).to_hex().as_str(),
                 "median_gpu_ms_per_frame": trial.median_gpu_ms_per_frame,
                 "samples": trial.samples,
@@ -120,7 +140,7 @@ fn main() -> Result<(), Error> {
         "executable_blake3": executable.finalize().to_hex().as_str(),
         "resolution": EXTENT,
         "dispatches_per_sample": DISPATCHES,
-        "input_blake3": blake3::hash(&input).to_hex().as_str(),
+        "seed": SEED,
         "workloads": workloads,
     });
     let mut stdout = io::stdout().lock();

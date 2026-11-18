@@ -6,20 +6,19 @@ public func identity_index(words: StructuredBuffer<uint4>, base: uint, token: ui
     if (token == 0u)
         return 0xffffffffu;
     let header = words[base];
-    var hash : uint = token;
+    var hash = token;
     hash ^= hash >> 16u;
     hash *= 0x7feb352du;
     hash ^= hash >> 15u;
     hash *= 0x846ca68bu;
     hash ^= hash >> 16u;
-    var slot : uint = hash & header.y;
-    for (var attempt: uint = 0; attempt <= header.y; ++attempt) {
+    var slot = hash & header.y;
+    for (var attempt = 0u; attempt <= header.y; ++attempt) {
         let packed = words[base + header.z + slot / 2u];
-        let entry = (slot & 1u) == 0u ? packed.xy : packed.zw;
-        if (entry.x == token)
-            return entry.y - 1u;
-        if (entry.x == 0u)
-            return 0xffffffffu;
+        let entry = select((slot & 1u) == 0u, packed.xy, packed.zw);
+        let found = entry.x == token;
+        if (found | (entry.x == 0u))
+            return select(found, entry.y - 1u, 0xffffffffu);
         slot = (slot + 1u) & header.y;
     }
     return 0xffffffffu;
