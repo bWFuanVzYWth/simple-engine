@@ -11,41 +11,30 @@ import openpbr.math.spectrum;
 
 namespace openpbr {
 namespace kernel {
+/// ior 为有限正值，cosine_theta 的符号表示介电界面的入射侧。
 public func dielectric_polarized_amplitude(ior: float, cosine_theta: float)->PolarizedValue {
-    var cosine_theta = cosine_theta;
-    // Equal optical media have no interface. The general subtraction loses precision
-    // near grazing incidence and is 0/0 at exactly zero cosine.
-    if (ior == 1.0) {
-        let zero : PolarizedValue = { 0.0, 0.0 };
-        return zero;
-    }
-    var eta : float = ior;
-    if (cosine_theta < 0.0) {
-        cosine_theta = -cosine_theta;
-        eta = 1.0 / eta;
-    }
-    let eta2 : float = eta * eta;
-    let t0 : float = cosine_theta * cosine_theta + (eta - 1.0) * (eta + 1.0);
-    if (t0 <= 0)
+    // 折射率相等时振幅为零，直接返回避免掠射时分母为零。
+    if (ior == 1.0)
+        return { 0.0, 0.0 };
+    let eta = cosine_theta < 0.0 ? 1.0 / ior : ior;
+    let cosine = abs(cosine_theta);
+    let discriminant = cosine * cosine + (eta - 1.0) * (eta + 1.0);
+    if (discriminant <= 0.0)
         return { -1.0, 1.0 };
-    let t1 : float = t0 > 0.0 ? sqrt(t0) : 0.0;
-    // Multiply Rp's numerator and denominator by eta; IOR is strictly positive.
-    let t2 : float = eta2 * cosine_theta;
-    var result : PolarizedValue;
-    result.s = (cosine_theta - t1) / (cosine_theta + t1);
-    result.p = (t1 - t2) / (t1 + t2);
-    return result;
+    let transmitted = sqrt(discriminant);
+    // p 分量的分子与分母同乘相对折射率。
+    let scaled_incident = eta * eta * cosine;
+    return { (cosine - transmitted) / (cosine + transmitted),
+             (transmitted - scaled_incident) / (transmitted + scaled_incident) };
 }
 
 public func dielectric_polarized_reflectance(ior: float, cosine_theta: float)->PolarizedValue {
-    var result : PolarizedValue = dielectric_polarized_amplitude(ior, cosine_theta);
-    result.s *= result.s;
-    result.p *= result.p;
-    return result;
+    let amplitude = dielectric_polarized_amplitude(ior, cosine_theta);
+    return { amplitude.s * amplitude.s, amplitude.p * amplitude.p };
 }
 
 public func dielectric_reflectance(ior: float, cosine_theta: float)->float {
-    let value : PolarizedValue = dielectric_polarized_reflectance(ior, cosine_theta);
+    let value = dielectric_polarized_reflectance(ior, cosine_theta);
     return 0.5 * (value.s + value.p);
 }
 
