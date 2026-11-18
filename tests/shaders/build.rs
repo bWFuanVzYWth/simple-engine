@@ -102,6 +102,12 @@ fn main() -> Result<(), shader_build::Error> {
         ),
         (
             "../../shaders/display/exposure_compute.slang",
+            "histogram_texture_main",
+            "compute",
+            "exposure.histogram-texture.spv",
+        ),
+        (
+            "../../shaders/display/exposure_compute.slang",
             "update_main",
             "compute",
             "exposure.update.spv",

@@ -15,6 +15,10 @@ harness = false
 name = "color"
 harness = false
 
+[[bench]]
+name = "exposure"
+harness = false
+
 [dependencies]
 simple_engine = { workspace = true, features = ["gpu_test", "light_bvh", "display", "openpbr"] }
 thiserror.workspace = true

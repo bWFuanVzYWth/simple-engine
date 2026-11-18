@@ -59,6 +59,14 @@ cargo bench --locked -p shader_tests --bench color
 
 它在第一块 Vulkan 设备上测原色往返与亮度、sRGB 往返、HSV 往返和 Rec.2020 的 Prime DRT。前三项按 64 个曝光级对每个像素重复转换，Prime DRT 按正常路径执行一次。成功时输出 JSON，记录 3840×2160 派发的 GPU 耗时中位数、原始样本和输入输出指纹。输入上传和结果回读单独执行。
 
+同一终端可测 4K 自动曝光：
+
+```powershell
+cargo bench --locked -p shader_tests --bench exposure
+```
+
+输出 JSON 分别记录 buffer 和 texture 的均匀、空间混合及宽亮度场景。GPU 时间覆盖生产录制器的直方图清零、计量和曝光更新，另记输入准备与命令录制，测量结束后回读曝光状态。
+
 通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell

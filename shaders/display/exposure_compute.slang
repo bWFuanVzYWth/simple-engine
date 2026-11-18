@@ -47,19 +47,20 @@ struct TextureInput : IExposureInput {
 
 func histogram_group<Input : IExposureInput>(input: Input, group: uint3, lane: uint3, index: uint)
     ->void {
-    var p : ExposureParameters = parameters[0];
+    let p = parameters[0];
     bins[index] = 0;
     if (index == 0)
         valid_count = 0;
     GroupMemoryBarrierWithGroupSync();
-    let origin : uint2 = group.xy * 64 + lane.xy * 4;
-    var count : uint = 0;
-    for (var y: uint = 0; y < 4; ++y)
-        for (var x: uint = 0; x < 4; ++x) {
-            var pixel : uint2 = origin + uint2(x, y);
+    // 组内相邻线程在同一轮读取相邻像素，合计覆盖原来的 64×64 块。
+    let origin = group.xy * 64 + lane.xy;
+    var count = 0u;
+    for (var y = 0u; y < 64; y += 16)
+        for (var x = 0u; x < 64; x += 16) {
+            let pixel = origin + uint2(x, y);
             if (any(pixel >= p.extent))
                 continue;
-            let value : float4 = input.load(pixel, p.extent);
+            let value = input.load(pixel, p.extent);
             if (value.w < 0)
                 continue;
             let bin = display::exposure_bin(value.xyz, p.linear709 != 0);

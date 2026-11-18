@@ -8,7 +8,6 @@ import color.primaries;
 
 namespace display {
 internal static const let EXPOSURE_BIN_COUNT : uint = 256;
-internal static const let EXPOSURE_TAIL_DENOMINATOR : uint = 200;
 internal static const let EXPOSURE_MIN_LOG_BRIGHTNESS : float = -16.0;
 internal static const let EXPOSURE_MAX_LOG_BRIGHTNESS = 20.0;
 internal static const let EXPOSURE_KEY = 0.16;
@@ -36,19 +35,18 @@ public func exposure_brightness(rec2020: float3)->float {
 /// BT.709 先转 Rec.2020，再裁剪负通道；超出计量范围的亮度归端点桶。
 public func exposure_bin(radiance: float3, linear709: bool)->int {
     var radiance = radiance;
-    if (any(isnan(radiance)) || any(isinf(radiance)))
+    if (!all(isfinite(radiance)))
         return -1;
     if (linear709)
         radiance = color::bt709_to_rec2020(radiance);
     let brightness = exposure_brightness(radiance);
-    if (isnan(brightness) || isinf(brightness))
+    if (!isfinite(brightness))
         return -1;
     let logarithm = clamp(log2(max(brightness, exp2(EXPOSURE_MIN_LOG_BRIGHTNESS))),
                           EXPOSURE_MIN_LOG_BRIGHTNESS, EXPOSURE_MAX_LOG_BRIGHTNESS);
     let range = EXPOSURE_MAX_LOG_BRIGHTNESS - EXPOSURE_MIN_LOG_BRIGHTNESS;
-    return int(min(uint(floor((logarithm - EXPOSURE_MIN_LOG_BRIGHTNESS) *
-                              (float(EXPOSURE_BIN_COUNT) / range))),
-                   EXPOSURE_BIN_COUNT - 1u));
+    let bin = uint((logarithm - EXPOSURE_MIN_LOG_BRIGHTNESS) * (float(EXPOSURE_BIN_COUNT) / range));
+    return int(min(bin, EXPOSURE_BIN_COUNT - 1u));
 }
 
 /// 将0..255内的桶坐标仿射映射到log2亮度；允许传入保留样本的平均桶坐标。
