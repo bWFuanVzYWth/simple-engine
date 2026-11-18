@@ -2,16 +2,18 @@
 //! 比较 buffer 与 texture 输入的均匀、空间混合和宽亮度分布。上传、录制和读回分别计量。
 #![forbid(unsafe_code)]
 
+mod support;
+
 use simple_engine::{
     display::exposure::{
         self, Frame,
         gpu::{Exposure, Programs},
     },
-    gpu_test::{self, Capability, Gpu, Sample},
+    gpu_test::{self, Capability, Gpu},
     vulkan::{
         self,
         interop::RayShader,
-        native::{Binding, Buffer, Commands, Image, ImageFormat},
+        native::{Binding, Buffer, Image, ImageFormat},
     },
     wgpu,
 };
@@ -99,20 +101,6 @@ fn pixels(scene: Scene) -> Vec<u8> {
     bytes
 }
 
-fn measure_frames(gpu: &mut Gpu, exposure: &Exposure) -> Result<(Sample, f64), Error> {
-    let start = Instant::now();
-    let context = gpu.context_mut();
-    let native = context.native();
-    let mut commands = Commands::new(native)?;
-    for _ in 0..FRAMES {
-        exposure.record_into(&mut commands)?;
-    }
-    let recorded = commands.finish(native)?;
-    let commands = context.record_native(recorded)?;
-    let record_seconds = start.elapsed().as_secs_f64();
-    Ok((gpu.measure(vec![commands])?, record_seconds))
-}
-
 fn measure(
     gpu: &mut Gpu,
     name: String,
@@ -159,13 +147,14 @@ fn measure(
     let readback = Buffer::new(native, 16, true)?;
     let setup_seconds = start.elapsed().as_secs_f64();
 
+    let record_frame = |commands: &mut _| exposure.record_into(commands);
     for _ in 0..3 {
-        measure_frames(gpu, &exposure)?;
+        support::native_frames(gpu, FRAMES, record_frame)?;
     }
     let mut samples = Vec::with_capacity(ROUNDS);
     let mut frame_ms = [0.0; ROUNDS];
     for elapsed in &mut frame_ms {
-        let (sample, record_seconds) = measure_frames(gpu, &exposure)?;
+        let (sample, record_seconds) = support::native_frames(gpu, FRAMES, record_frame)?;
         if !sample.gpu_seconds.is_finite() || sample.gpu_seconds <= 0.0 {
             return Err(Error::Timing);
         }

@@ -71,6 +71,12 @@ fn main() -> Result<(), shader_build::Error> {
             "spatial_main.spv",
         ),
         (
+            "shaders/denoise_bench.slang",
+            "spatial_4k_main",
+            "compute",
+            "denoise-spatial.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

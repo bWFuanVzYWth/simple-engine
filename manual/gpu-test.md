@@ -67,6 +67,14 @@ cargo bench --locked -p shader_tests --bench exposure
 
 输出 JSON 分别记录 buffer 和 texture 的均匀、空间混合及宽亮度场景。GPU 时间覆盖生产录制器的直方图清零、计量和曝光更新，另记输入准备与命令录制，测量结束后回读曝光状态。
 
+原生 4K 输入与输出的 5×5 空间重建可在同一终端测量：
+
+```powershell
+cargo bench --locked -p shader_tests --bench denoise
+```
+
+输出 JSON 分别记录连续表面和含天空、材质边界及无效像素的场景，包含 GPU 派发时间、命令录制和结果指纹。
+
 通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell
