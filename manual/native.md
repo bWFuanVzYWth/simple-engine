@@ -23,7 +23,7 @@ $env:VK_LAYER_VALIDATE_SYNC = "1"
 cargo run --release -p hello_triangle -- --frames 120
 ```
 
-KHR OMM 需要能识别新接口的 validation。Windows x86_64 可在同一 PowerShell 会话执行 `./scripts/install_validation.ps1`：校验[官方 SDK 1.4.363.0](https://vulkan.lunarg.com/sdk/home)的 SHA256，仅提取 validation DLL 与 manifest 到 `target/tools`，设置当前进程 `VK_LAYER_PATH`；需安装 7-Zip，不执行 SDK 安装或改注册表。固定版本、内嵌段及文件 SHA256 见 `scripts/tools.json`。其它平台自行准备新版 `VK_LAYER_KHRONOS_validation`。
+KHR OMM 需要能识别新接口的 validation。已有兼容 Vulkan SDK 时，Vulkan loader 可以使用其 validation 层。Windows x86_64 需要固定版本复测时，从仓库根目录运行 `./scripts/validation.ps1 -Install`。它校验[官方 SDK 1.4.363.0](https://vulkan.lunarg.com/sdk/home)的 SHA-256，用 Windows 自带的 `tar.exe` 提取 validation DLL 和 manifest。看到版本及层目录后，`compute`、`rt` 与 Streamline GPU fixture 会自动发现 `local/tools/validation/` 中的安装。自定义路径用 `VK_LAYER_PATH` 覆盖。其它平台使用本机安装的新版 `VK_LAYER_KHRONOS_validation`。
 
 诊断结束后恢复原环境变量；性能比较应固定相同验证设置。脚本 `compute` / `rt` 检查档会临时开启验证并恢复环境：
 

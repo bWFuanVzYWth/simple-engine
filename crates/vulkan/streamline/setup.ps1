@@ -1,13 +1,28 @@
-param(
-    [Parameter(Mandatory = $true)][string]$SdkRoot,
+﻿param(
+    [string]$SdkRoot,
     [switch]$VerifyOnly,
-    [string]$DeployTo
+    [string]$DeployTo,
+    [switch]$PassThru
 )
 
 $ErrorActionPreference = 'Stop'
-$SdkRoot = [IO.Path]::GetFullPath($SdkRoot)
-$lock = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'sdk-lock.json') -Raw | ConvertFrom-Json
+$lockFile = Join-Path $PSScriptRoot 'sdk-lock.json'
+$lock = Get-Content -LiteralPath $lockFile -Raw | ConvertFrom-Json
 if ($lock.schema -ne 1) { throw 'Unsupported SDK lock schema' }
+if (!$SdkRoot -and $env:STREAMLINE_SDK) {
+    if ($env:STREAMLINE_SDK -notmatch '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\])') {
+        throw 'STREAMLINE_SDK 必须为绝对路径。'
+    }
+    $SdkRoot = $env:STREAMLINE_SDK
+}
+if (!$SdkRoot) {
+    $lockHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash
+    $SdkRoot = Join-Path $PSScriptRoot "../../../local/tools/streamline/$($lock.sources.streamline.tag)-$($lockHash.Substring(0, 16))"
+}
+$SdkRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SdkRoot)
+if ($VerifyOnly -and !(Test-Path -LiteralPath $SdkRoot -PathType Container)) {
+    throw "未找到 Streamline SDK：$SdkRoot。请从仓库根目录运行 ./crates/vulkan/streamline/setup.ps1 安装锁定 SDK。"
+}
 
 function Assert-Hash([string]$Path, [string]$Expected) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing SDK file: $Path" }
@@ -69,4 +84,9 @@ foreach ($file in $lock.files | Where-Object path -like '*.dll') {
 if ($DeployTo) {
     Copy-Item -LiteralPath (Sdk-File 'licenses/NVIDIA-Streamline.txt'),(Sdk-File '3rd-party-licenses.md'),(Sdk-File 'bin/x64/nvngx_dlss.license.txt') -Destination $DeployTo -Force
 }
-Write-Output "Verified $($lock.files.Count) SDK files; Streamline 2.14.1 / DLSS 310.9.1."
+if ($PassThru) {
+    Write-Output $SdkRoot
+} else {
+    Write-Output "已校验 $($lock.files.Count) 个 SDK 文件（Streamline $($lock.sources.streamline.tag)、DLSS $($lock.sources.dlss.tag)）"
+    Write-Output "SDK 目录 $SdkRoot"
+}

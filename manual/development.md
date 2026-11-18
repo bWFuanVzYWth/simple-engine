@@ -16,14 +16,15 @@ Linux 使用 `pwsh -NoProfile -File scripts/check.ps1 -Suite cpu`。
 |---|---|---|
 | `cpu` | 引擎仓库 Rust/Slang 格式、基础库 CPU 测试、Clippy、进程超时自测 | Rust、Git Bash/Bash、clang-format；不需要 Slang 或 GPU |
 | `features` | 根包默认、CPU、GUI、2D GPU、native 与 Web feature 组合检查，含 wasm | Rust、Slang；不需要 GPU |
-| `build` | workspace 普通测试、Clippy（含 benches）、引擎 wasm 构建 | Rust、Slang；不需要 GPU |
-| `docs` | native/wasm rustdoc、链接/HTML 检查、文档示例、公开项覆盖率 100% | 固定 nightly Rust、Slang；不需要 GPU |
+| `docs` | native/wasm rustdoc、链接/HTML 检查、文档示例、公开项覆盖率 100% | 固定 nightly Rust、Slang；Windows 另需锁定 Streamline SDK |
 | `compute` | shader compute、light BVH／采样、OpenPBR／大气／显示、原始 bits 重放、2D 像素 | Slang、Vulkan compute；timestamp 用例另需对应能力 |
 | `rt` | RT 性质、计时、Cornell 光追、实例保活及互操作集成测试（含窗口 resize） | Slang、Vulkan KHR 光追、桌面环境 |
 
 GPU 档显式开启 validation 与同步验证，结束后恢复环境。每个命令由外层子进程限时；`-TimeoutSeconds` 默认 900，超时退出 124，其余失败传播子退出码。日志保存在 `temp/check/<suite>/<run>`，完成一档不代表其它档通过。语义见 [进程超时](gpu-runner.md)。
 
-CI 在 Linux 执行 `cpu` 与 `features`、Windows 执行 `build` 与 `docs`，共用上述入口；GPU 档在具备设备的环境中手动执行。性能测量独立运行，不作通过门槛。
+CI 在 Linux 执行 `cpu` 与 `features`，在 Windows 执行 Cargo 构建检查和 `docs`。GPU 档在具备设备的环境中手动执行。性能测量独立运行。
+
+首次执行 `features`、`docs` 或 Web 构建前运行 `rustup target add wasm32-unknown-unknown`。更换固定 nightly 后重新添加。Windows 上执行 `docs` 前按 [Streamline 手册](streamline.md) 安装锁定 SDK。
 
 `docs` 在 `target/doc` 和 `target/wasm32-unknown-unknown/doc` 生成文档，`target/doc-coverage.json` 汇总当前 native host 与 wasm 的 rustdoc 公开项覆盖。统计会省略部分重导出项，缺失注释仍由整个 workspace 继承的 `missing_docs` 阻断；覆盖率不代表示例覆盖或语义质量。入口和操作见 [操作手册](README.md)。
 
@@ -32,7 +33,7 @@ CI 在 Linux 执行 `cpu` 与 `features`、Windows 执行 `build` 与 `docs`，�
 Windows 上检查 Streamline 桥接的退出失败处理：先按 [DLSS RR 手册](streamline.md) 安装锁定 SDK，并安装带 `clang++` 的 LLVM；在仓库根目录的 PowerShell 运行下面命令。它使用模拟 SDK 调用，不创建窗口或 GPU 设备。成功会显示 `4 failure-boundary tests passed`；编译失败先检查 `clang++`、MSVC 工具链和 SDK 路径，断言失败保留完整终端输出。
 
 ```powershell
-./scripts/test_streamline_bridge.ps1 -SdkRoot "$PWD/target/streamline-sdk"
+./crates/vulkan/streamline/test_bridge.ps1
 ```
 
 ## 工具链
@@ -43,7 +44,9 @@ Rust 日期由 `rust-toolchain.toml` 固定。Slang 发行包与 clang-format �
 
 ```powershell
 ./scripts/install_slang.ps1
-./scripts/check.ps1 -Suite build
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets
+cargo check --locked -p simple_engine --features webgpu,render2d_gpu --target wasm32-unknown-unknown
 ```
 
 安装器校验官方 Slang ZIP 的 SHA256，解压到 `target/tools`，只设置当前进程的 `SLANGC`。Windows/Linux x86_64 提供固定发行包；其它平台自行设置 `SLANGC`。原有 SDK 和其它编译器仍可用，实际版本与组件身份进入构建记录，见 [shader 构建](shader-build.md)。
@@ -56,12 +59,12 @@ VSCode 的 rust-analyzer 使用独立的 `target-ra/`，普通 Cargo 使用 `tar
 
 验证入口直接装配生产同源模块，工具包版本与 SHA256 固定在 `tools.json`；
 生产执行代码使用普通 Rust 与条件属性契约；普通构建使用固定 vstd 擦除证明连接，不运行证明器。
-安装到 `target/tools`，在当前会话设置 `VERUS`；需要独立的 Rust 1.99.1，不修改仓库 nightly：
+首次验证时安装独立的 Rust 1.99.1 和锁定的 Verus。验证入口自动发现 `local/tools/verus/` 中的安装。
 
 ```powershell
 rustup toolchain install 1.99.1 --profile minimal
-./scripts/install_verus.ps1
-./scripts/verify_vulkan.ps1
+./scripts/verus.ps1 -Install
+./crates/vulkan/verify/check.ps1
 ```
 
 验证器以 `--no-cheating --rlimit 10` 检查下列全部入口及对应违规反例：
@@ -94,7 +97,7 @@ producer 遍历及 uses 排序保留原实现并明确未证，不新增外部�
 SipHash 使用独立入口：
 
 ```powershell
-./scripts/verify_sip_hash.ps1
+./crates/sip_hash/verify/check.ps1
 ```
 
 它装配 [SipHash](../crates/sip_hash/src/lib.rs)、标量与实际 `portable_simd` 内核，
@@ -109,7 +112,7 @@ SipHash 使用独立入口：
 HashDag 使用独立入口：
 
 ```powershell
-./scripts/verify_hashdag.ps1
+./crates/hashdag/verify/check.ps1
 ```
 
 入口装配 [HashDag](../crates/hashdag/src/lib.rs) 的实际节点、池、根槽、写入、回收与精确差分，
@@ -131,7 +134,7 @@ hashbrown 按可信容器处理；完整内容判等、候选哈希一致性、�
 ### 矩形分解
 
 ```powershell
-./scripts/verify_rectangles.ps1
+./crates/rectangle_decomposition/verify/check.ps1
 ```
 
 使用同一固定 Verus，算法入口均带 `--no-cheating --rlimit 10`，检查正式装配、生产调用链及违规反例。
@@ -162,20 +165,20 @@ panic／进程退出不作为正常错误返回。渐近复杂度和性能另行
 
 ## 依赖维护
 
-重复依赖的版本集中在根 `Cargo.toml` 的 `workspace.dependencies`，各包保留自身 feature。修改版本约束后运行 `cargo update`，并依次执行 `features`、`build`、`docs` 检查档；Vulkan 绑定变更另需按设备运行 `compute`／`rt`。
+重复依赖的版本集中在根 `Cargo.toml` 的 `workspace.dependencies`，各包保留自身 feature。修改版本约束后运行 `cargo update`，再执行 `features`、上述三条 Cargo 检查和 `docs`。Vulkan 绑定变更另需按设备运行 `compute`／`rt`。
 
 native ash 使用[官方固定提交](https://github.com/ash-rs/ash/commit/8844f6b4eefb16d08cd73c8f3d340e1ac12deb16)，补充正式版尚未提供的 KHR/EXT 接口。wgpu 30.0.1 保留其兼容的 ash 版本，两者通过 Vulkan crate 的原始句柄边界交接。更新时核对上游 API，修改 `crates/vulkan/Cargo.toml` 的 git `rev` 并重新生成 `Cargo.lock`；两者一同审查、提交。
 
 ## Git 格式检查
 
-Windows 安装：
+在仓库根目录启用钩子：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1
+git config --local core.hooksPath .githooks
 ```
 
 钩子依赖 Bash、rustfmt 和 clang-format；Git for Windows 已提供 Bash。
-Linux/macOS 可执行 `git config --local core.hooksPath .githooks`，并确保钩子有执行权限。
+Linux/macOS 上确认钩子有执行权限。
 
 提交前仅检查暂存的 `.rs` / `.slang` 及暂存的格式配置，不修改工作树或 index。
 Rust 按当前工作区的 edition 2024 检查；Slang 使用 clang-format 的 CSharp 模式。
@@ -195,7 +198,7 @@ PowerShell 中的 `bash` 可能指向 WSL，请从 Git Bash 执行以上命令�
 `bench_gpu.ps1` 配对执行两个 `shader_bench` 可执行文件，交替 A/B 顺序，保存逐轮 JSON、CSV 及比值汇总，不设性能阈值：
 
 ```powershell
-powershell -NoProfile -File scripts/gpu/bench_gpu.ps1 -Before temp/shader-bench-before.exe -After temp/shader-bench-after.exe
+powershell -NoProfile -File tests/shaders/bench_gpu.ps1 -Before temp/shader-bench-before.exe -After temp/shader-bench-after.exe
 ```
 
 两侧使用相同输入和 Slang 版本；脚本关闭 validation，每个进程内部热身。数据含 GPU timestamp 与明确区间的主机时间。负载、失败重放和统计口径见 [GPU 测试](gpu-test.md)。

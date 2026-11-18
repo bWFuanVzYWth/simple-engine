@@ -8,14 +8,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
-. (Join-Path $PSScriptRoot 'process.ps1')
-$taskRoot = Split-Path -Parent $PSScriptRoot
-$tools = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tools.json') -Raw | ConvertFrom-Json
-if (!$Verus) {
-    $name = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'verus-x86-win/verus.exe' } else { 'verus-x86-linux/verus' }
-    $Verus = Join-Path $taskRoot "target/tools/verus/$($tools.verus.version)/$name"
-}
-$compiler = (Get-Command $Verus -ErrorAction Stop).Source
+$taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+. (Join-Path $taskRoot 'scripts/process.ps1')
+$tool = & (Join-Path $taskRoot 'scripts/verus.ps1') -Verus $Verus
+$compiler = $tool.Path
 $run = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $logs = Join-Path $taskRoot "temp/verus/rectangles/$run"
 $adapter = Join-Path $taskRoot "target/verus/rectangles/$run"
@@ -55,7 +51,7 @@ $current = 'version'
 try {
     $version = Invoke-CheckedProcess -FilePath $compiler -ArgumentList @('--version') -WorkingDirectory $taskRoot -TimeoutSeconds $TimeoutSeconds -LogPrefix (Join-Path $logs 'version')
     $reported = [IO.File]::ReadAllText($version.StdoutPath) + [IO.File]::ReadAllText($version.StderrPath)
-    if ($reported -notmatch ('Version:\s*' + [regex]::Escape($tools.verus.version) + '(\s|$)')) { throw 'Verus 版本与 scripts/tools.json 不符' }
+    if ($reported -notmatch ('Version:\s*' + [regex]::Escape($tool.Version) + '(\s|$)')) { throw "Verus 版本须为 $($tool.Version)" }
     $current = 'std'
     $null = New-Item -ItemType Directory -Path $adapter -Force
     $trusted = Invoke-CheckedProcess -FilePath $compiler -ArgumentList @('--edition=2024', '--rlimit', '10', '--triggers-mode', 'silent', '--compile', '--crate-type', 'lib', '--crate-name', 'rectangle_std', '--export', $metadata, '-o', $library, 'crates/rectangle_decomposition/verify/std.rs') -WorkingDirectory $taskRoot -TimeoutSeconds $TimeoutSeconds -LogPrefix (Join-Path $logs 'std')

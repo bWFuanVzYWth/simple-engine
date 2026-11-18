@@ -19,7 +19,7 @@ Linux 的解释器路径为 `target/nsight-python/bin/python`。缺少可选依�
 
 ```powershell
 $readerPython = 'target/nsight-python/Scripts/python.exe'
-. ./scripts/load_local.ps1
+if (Test-Path ./local/env.ps1) { . ./local/env.ps1 }
 $nsightHost = $env:NSIGHT_HOST
 & $readerPython scripts/nsight/nsight-trace.py temp/captures/example.ngfx-gputrace `
     --out temp/nsight/example --nsight-host $nsightHost --max-chunk-mib 768 --pc-top 32

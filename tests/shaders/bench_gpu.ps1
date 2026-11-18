@@ -9,7 +9,7 @@
 )
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
-. (Join-Path $PSScriptRoot "../process.ps1")
+. (Join-Path $PSScriptRoot "../../scripts/process.ps1")
 $executables = @{
     before = (Resolve-Path -LiteralPath $Before).Path
     after = (Resolve-Path -LiteralPath $After).Path

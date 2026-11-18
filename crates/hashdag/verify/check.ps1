@@ -12,13 +12,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
-. (Join-Path $PSScriptRoot 'process.ps1')
-$taskRoot = Split-Path -Parent $PSScriptRoot
-$tools = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tools.json') -Raw | ConvertFrom-Json
-if (!$Verus) {
-    $binary = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'verus-x86-win/verus.exe' } else { 'verus-x86-linux/verus' }
-    $Verus = Join-Path $taskRoot "target/tools/verus/$($tools.verus.version)/$binary"
-}
+$taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+. (Join-Path $taskRoot 'scripts/process.ps1')
 $run = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $logs = Join-Path $taskRoot "temp/verus-hashdag/$run"
 $build = Join-Path $taskRoot "target/verus-hashdag/$run"
@@ -26,7 +21,7 @@ $deps = Join-Path $taskRoot 'target/verus-hashdag-deps'
 $null = [IO.Directory]::CreateDirectory($logs)
 $null = [IO.Directory]::CreateDirectory($build)
 $clock = [Diagnostics.Stopwatch]::StartNew()
-$summary = [ordered]@{ Version = $tools.verus.version; Status = 'failed'; TrustedCompiled = $false; OwnedIdentity = $null; Entries = @(); Rejected = @(); Seconds = 0.0 }
+$summary = [ordered]@{ Version = $null; Status = 'failed'; TrustedCompiled = $false; OwnedIdentity = $null; Entries = @(); Rejected = @(); Seconds = 0.0 }
 $entries = @('node', 'roots', 'storage', 'canonical', 'write', 'diff', 'rc', 'owner')
 $cases = @(
     @{ Source = 'node'; Cfg = 'reject_node_mask'; Function = 'reject_node_mask' },
@@ -78,11 +73,13 @@ try {
     if ($identityModel -match '\b(assume|admit|assume_specification)\b' -or $identityModel -match '\binclude(?:_str|_bytes)?\s*!|\bmod\s|#\[path\b' -or [regex]::Matches($identityModel, '\bexternal(?:_\w+)?\b').Count -ne 1 -or [regex]::Matches($identityModel, 'verifier::external_body').Count -ne 1 -or [regex]::Matches($identityModel, '\buninterp\b').Count -ne 3 -or $identityModel -notmatch 'pub tracked struct Permission' -or $modelNames.Count -ne 3 -or (Compare-Object @('view', 'cell', 'global_authority') $modelNames)) {
         throw '身份可信模型只允许不透明 Permission 及许可、单元、静态 authority 三个元数据视图'
     }
-    $compiler = (Get-Command $Verus -ErrorAction Stop).Source
+    $tool = & (Join-Path $taskRoot 'scripts/verus.ps1') -Verus $Verus
+    $compiler = $tool.Path
+    $summary.Version = $tool.Version
     $version = Invoke-CheckedProcess -FilePath $compiler -ArgumentList @('--version') -WorkingDirectory $taskRoot -TimeoutSeconds $TimeoutSeconds -LogPrefix (Join-Path $logs 'version')
     $versionText = [IO.File]::ReadAllText($version.StdoutPath) + [IO.File]::ReadAllText($version.StderrPath)
-    if ($versionText -notmatch ('Version:\s*' + [regex]::Escape($tools.verus.version) + '(\s|$)')) {
-        throw "Verus 版本与 scripts/tools.json 不符：$($tools.verus.version)"
+    if ($versionText -notmatch ('Version:\s*' + [regex]::Escape($tool.Version) + '(\s|$)')) {
+        throw "Verus 版本须为 $($tool.Version)"
     }
     $cargo = (Get-Command cargo -ErrorAction Stop).Source
     $dependencyStdout = [Console]::Out

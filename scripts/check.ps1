@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('cpu', 'features', 'build', 'docs', 'compute', 'rt')][string]$Suite = 'cpu',
+    [ValidateSet('cpu', 'features', 'docs', 'compute', 'rt')][string]$Suite = 'cpu',
     [ValidateRange(1, 86400)][int]$TimeoutSeconds = 900
 )
 $ErrorActionPreference = 'Stop'
@@ -114,11 +114,6 @@ try {
                 Invoke-Cargo "$package-system" @('check', '--locked', '-p', $package, '--no-default-features', '--all-targets')
             }
         }
-        'build' {
-            Invoke-Cargo 'workspace-test' @('test', '--locked', '--workspace')
-            Invoke-Cargo 'clippy' @('clippy', '--locked', '--workspace', '--all-targets')
-            Invoke-Cargo 'wasm' @('check', '--locked', '-p', 'simple_engine', '--features', 'webgpu,render2d_gpu', '--target', 'wasm32-unknown-unknown')
-        }
         'docs' {
             $previousDocFlags = $env:RUSTDOCFLAGS
             $docFlags = '-F missing_docs -F rustdoc::broken_intra_doc_links -F rustdoc::private_intra_doc_links -F rustdoc::invalid_html_tags'
@@ -152,7 +147,9 @@ try {
             $previousDebug = $env:WGPU_DEBUG
             $previousValidation = $env:WGPU_VALIDATION
             $previousSync = $env:VK_LAYER_VALIDATE_SYNC
+            $previousLayerPath = $env:VK_LAYER_PATH
             try {
+                $env:VK_LAYER_PATH = & (Join-Path $PSScriptRoot 'validation.ps1')
                 $env:WGPU_DEBUG = '1'
                 $env:WGPU_VALIDATION = '1'
                 $env:VK_LAYER_VALIDATE_SYNC = '1'
@@ -173,6 +170,7 @@ try {
                 $env:WGPU_DEBUG = $previousDebug
                 $env:WGPU_VALIDATION = $previousValidation
                 $env:VK_LAYER_VALIDATE_SYNC = $previousSync
+                $env:VK_LAYER_PATH = $previousLayerPath
             }
         }
         'rt' {
@@ -180,7 +178,9 @@ try {
             $previousDebug = $env:WGPU_DEBUG
             $previousValidation = $env:WGPU_VALIDATION
             $previousSync = $env:VK_LAYER_VALIDATE_SYNC
+            $previousLayerPath = $env:VK_LAYER_PATH
             try {
+                $env:VK_LAYER_PATH = & (Join-Path $PSScriptRoot 'validation.ps1')
                 $env:WGPU_DEBUG = '1'
                 $env:WGPU_VALIDATION = '1'
                 $env:VK_LAYER_VALIDATE_SYNC = '1'
@@ -197,6 +197,7 @@ try {
                 $env:WGPU_DEBUG = $previousDebug
                 $env:WGPU_VALIDATION = $previousValidation
                 $env:VK_LAYER_VALIDATE_SYNC = $previousSync
+                $env:VK_LAYER_PATH = $previousLayerPath
             }
         }
     }

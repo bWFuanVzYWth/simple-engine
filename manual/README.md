@@ -15,6 +15,7 @@ cargo doc --locked --workspace --all-features --no-deps
 完整文档检查与 Web 目标生成：
 
 ```powershell
+rustup target add wasm32-unknown-unknown
 powershell -NoProfile -File scripts/check.ps1 -Suite docs
 ```
 

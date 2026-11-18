@@ -1,7 +1,8 @@
 //! Streamline 2.14.1 / DLSS RR 的可选 Windows x86-64 接入，所有档位使用 preset F。
 //!
-//! `dlss_rr` feature 从显式 `STREAMLINE_SDK` 构建桥接，按本 crate 的锁校验 SDK；
-//! 初始化仅加载桥接模块同目录的 runtime。安装见仓库 `scripts/install_streamline.ps1`。
+//! `dlss_rr` feature 自动发现 `local/tools/streamline/` 中的安装，也接受 `STREAMLINE_SDK` 覆盖。
+//! 构建按本 crate 的锁校验 SDK，初始化仅加载桥接模块同目录的 runtime。
+//! 安装入口为 `crates/vulkan/streamline/setup.ps1`。
 //! SDK 类型不跨 FFI，宿主提供应用身份并拥有设备、命令、图像与提交完成证明。
 //!
 //! 进程只允许一个 [`Runtime`]。early interposer 宿主先 [`bootstrap`]，再经同目录

@@ -11,7 +11,7 @@
 //! 发布或仍有消费者时不能释放；释放换代后旧标识失效；generation 用尽后不复用。
 //! Rust 的所有权不保证析构一定运行，本模型也不证明最终释放或无泄漏。
 //!
-//! 运行入口：`scripts/verify_vulkan.ps1`；协议来源：
+//! 验证入口为 `crates/vulkan/verify/check.ps1`。协议来源：
 //! <https://docs.vulkan.org/refpages/latest/refpages/source/vkDestroyBuffer.html>、
 //! <https://docs.vulkan.org/refpages/latest/refpages/source/vkQueueWaitIdle.html>。
 

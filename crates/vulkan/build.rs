@@ -23,7 +23,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &["../../shaders"],
         &[],
     )?;
-    println!("cargo:rerun-if-env-changed=STREAMLINE_SDK");
     #[cfg(feature = "dlss_rr")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         build_streamline()?;
@@ -39,12 +38,7 @@ fn build_streamline() -> Result<(), Box<dyn std::error::Error>> {
         return Err("锁定的 Streamline SDK 仅支持 Windows x86-64".into());
     }
 
-    let sdk = PathBuf::from(std::env::var_os("STREAMLINE_SDK").ok_or(
-        "dlss_rr 需要显式 STREAMLINE_SDK；运行 scripts/install_streamline.ps1 安装锁定 SDK",
-    )?);
-    if !sdk.is_absolute() {
-        return Err("STREAMLINE_SDK 必须为绝对路径".into());
-    }
+    println!("cargo:rerun-if-env-changed=STREAMLINE_SDK");
     for path in [
         "streamline/bridge.cpp",
         "streamline/bridge.h",
@@ -53,7 +47,6 @@ fn build_streamline() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         println!("cargo:rerun-if-changed={path}");
     }
-    println!("cargo:rerun-if-changed={}", sdk.display());
     let verification = Command::new("powershell.exe")
         // PowerShell 7 的 PSModulePath 不适用于系统 Windows PowerShell。
         .env_remove("PSModulePath")
@@ -61,12 +54,9 @@ fn build_streamline() -> Result<(), Box<dyn std::error::Error>> {
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
-            "-File",
-            "streamline/setup.ps1",
-            "-SdkRoot",
+            "-Command",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); & './streamline/setup.ps1' -VerifyOnly -PassThru",
         ])
-        .arg(&sdk)
-        .arg("-VerifyOnly")
         .output()?;
     if !verification.status.success() {
         return Err(format!(
@@ -76,6 +66,12 @@ fn build_streamline() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    let sdk = String::from_utf8(verification.stdout)?;
+    let sdk = PathBuf::from(sdk.trim_end_matches(['\r', '\n']));
+    if !sdk.is_absolute() {
+        return Err("Streamline SDK 校验未返回绝对路径".into());
+    }
+    println!("cargo:rerun-if-changed={}", sdk.display());
     cc::Build::new()
         .cpp(true)
         .std("c++17")

@@ -5,7 +5,7 @@
 ## 打开终端并确认位置
 
 1. 安装 rustup。它会根据仓库的 [rust-toolchain.toml](../rust-toolchain.toml) 选择所需版本的 Rust，并提供构建工具 Cargo。Windows 默认使用 MSVC 版 Rust，请同时准备 x64 C++ 构建工具和 Windows SDK。可从官方页面安装。[Rust 安装](https://rust-lang.org/tools/install/)、[微软 C++ 构建工具](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-2. 打开 **PowerShell 7**。把下面命令里的路径替换为你存放引擎源码的目录，再回车。引擎根目录是含有 `Cargo.toml` 和 `rust-toolchain.toml` 的那一层。[PowerShell 7 安装](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows)
+2. 打开 Windows 自带的 **Windows PowerShell**，也可使用已安装的 PowerShell 7。把下面命令里的路径替换为你存放引擎源码的目录，再回车。引擎根目录是含有 `Cargo.toml` 和 `rust-toolchain.toml` 的那一层。
 
 ```powershell
 Set-Location 'D:/projects/simple_engine'

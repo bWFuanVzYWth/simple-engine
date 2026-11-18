@@ -52,7 +52,7 @@
 //!
 //! # 形式化验证
 //!
-//! `scripts/verify_sip_hash.ps1` 直接装配生产源码，验证下列性质及违规反例；
+//! `crates/sip_hash/verify/check.ps1` 直接装配生产源码，验证下列性质及违规反例；
 //! `perlin_noise` 实际调用的 `SipHash<1, 3>::hash_u32x3_simd` 包含在同源范围内。
 //!
 //! | 范围 | 性质 | 排除的缺陷 |

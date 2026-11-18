@@ -33,6 +33,7 @@ Cargo feature 会叠加。检查裁剪效果时独立检查根包，避免 works
 ```powershell
 cargo check --locked -p simple_engine --no-default-features
 cargo check --locked -p simple_engine --no-default-features --features color,voxel_mesh
+rustup target add wasm32-unknown-unknown
 powershell -NoProfile -File scripts/check.ps1 -Suite features
 ```
 

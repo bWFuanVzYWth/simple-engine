@@ -83,4 +83,4 @@
 - 命名表达当前职责、物理量或状态阶段；避免历史前缀、无意义缩写和用存储槽位代替语义。数学记号在公式上下文中可以保持简短。
 - 优先内联没有独立语义的单消费者包装与中间量；关键语义、所有权和阶段边界保留具名节点，避免巨型函数、表达式与魔数。
 - 共享常量和重复实现归维护其契约的所有者；仅数值相同不构成合并理由，不为消除少量重复增加无实际用途的抽象。
-- 安装钩子：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1`。
+- 在仓库根目录执行 `git config --local core.hooksPath .githooks` 启用格式钩子。

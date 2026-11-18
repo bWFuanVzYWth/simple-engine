@@ -70,7 +70,7 @@ cargo bench --locked -p atmosphere --bench runtime
 A/B 比较先分别保存两个版本的 release 可执行文件，保存在 `temp/` 避免后续构建覆盖：
 
 ```powershell
-powershell -NoProfile -File scripts/gpu/bench_gpu.ps1 -Before temp/shader-bench-before.exe -After temp/shader-bench-after.exe -Pairs 7
+powershell -NoProfile -File tests/shaders/bench_gpu.ps1 -Before temp/shader-bench-before.exe -After temp/shader-bench-after.exe -Pairs 7
 ```
 
 脚本临时关闭 debug/validation，结束后恢复；交替运行顺序，核对设备、驱动与输入身份。默认保存到 `temp/gpu-ab/<unique>/`，包含原始 JSON、`pairs.csv` 和 `summary.json`，可用 `-Output` 指定新目录。比较时同时保存版本、工具链、负载和工作集信息，统计结果用于分析，不自动判定性能回归。

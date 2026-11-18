@@ -18,4 +18,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/process.ps1
 
 超时终止不保证失效驱动立即恢复，不继续复用原 GPU 环境。保留日志并按设备状态决定恢复方式；受测程序应等待自己的工作子进程结束。
 
-A/B 测量可传 `scripts/gpu/bench_gpu.ps1 -TimeoutSeconds 300`，分别限制每个受测进程；validation 环境仍在清理阶段恢复。
+A/B 测量可传 `tests/shaders/bench_gpu.ps1 -TimeoutSeconds 300`，分别限制每个受测进程；validation 环境仍在清理阶段恢复。
