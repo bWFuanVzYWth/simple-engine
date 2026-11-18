@@ -175,7 +175,7 @@ impl<P: Payloads, B> Life<P, B> {
     }
 
     /// 接管 Pending 记录；状态或分配失败归还原值。
-    /// 构建根须由内部创建路径提供本 owner 的当前 AS 输出，此 native 调用关系尚未验证。
+    /// 构建根来自同一 owner 本次创建的 AS 或灯树；验证核以此作为 native 调用前提。
     #[cfg_attr(verus_only, verus_spec(result => requires old(self).records_valid(), old(self).resources_valid(),
         proof::build_inputs(old(self), &record),
         ensures proof::record_inserted(old(self), final(self), record, result),

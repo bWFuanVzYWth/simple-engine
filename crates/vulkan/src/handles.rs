@@ -63,6 +63,27 @@ pub struct AccelerationStructure {
     pub(crate) key: Key,
 }
 
+/// 不可变的世界光源树版本。保留为发布根时，Context 同时保活各区块子树。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(verus_only, verus_verify)]
+pub struct LightWorld {
+    pub(crate) key: Key,
+    pub(crate) bytes: u64,
+}
+
+/// 已提交或已完成的不可变区块子树。其身份在当前 Context 中有效，复制身份不延长寿命。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(verus_only, verus_verify)]
+pub struct LightRegion {
+    pub(crate) key: Key,
+    pub(crate) address: u64,
+    pub(crate) bytes: u64,
+    pub(crate) grid: [i32; 3],
+    pub(crate) count: u32,
+    pub(crate) records: bool,
+    pub(crate) power_bits: u64,
+}
+
 /// 同步构建完成的 2-state OMM；输入和 scratch 已可释放。
 ///
 /// Copy ID 不保活资源。Context 按 TLAS→BLAS→OMM 版本依赖保留真实数据。
@@ -191,6 +212,7 @@ roots!(
     ComputePipeline,
     TriangleBlas,
     AccelerationStructure,
+    LightWorld,
     OpacityMicromap,
     TimestampQueries
 );

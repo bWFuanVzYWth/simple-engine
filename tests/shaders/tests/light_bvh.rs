@@ -2,6 +2,14 @@
 use simple_engine::{
     gpu_test::{Capability, Gpu, Shader},
     light_bvh::{Quad, Tree},
+    vulkan::{
+        interop::{CommandBuffer, RayShader, WgpuContext},
+        native::{
+            Binding, Bindings, Buffer, Commands, ComputePipeline, LightRegionInput, LightWorld,
+            LightWorldInput,
+        },
+    },
+    wgpu,
 };
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -21,6 +29,151 @@ fn quad(x: f32, power: f32) -> Quad {
         vertices: [[x, 0.0, 0.0], [x, 1.0, 0.0], [x, 1.0, 1.0], [x, 0.0, 1.0]],
         power,
     }
+}
+
+const WORLD_SAMPLES: usize = 512;
+const QUERY_POINTS: [[f32; 3]; 3] = [[-126.0, 0.5, 0.5], [65.0, 3.0, 1.0], [256.0, 0.5, 0.5]];
+
+fn record_world_probe(
+    context: &mut WgpuContext,
+    tree: LightWorld,
+) -> Result<(Buffer, CommandBuffer)> {
+    let mut parameters = vec![[WORLD_SAMPLES as u32, 0, 0, 0]];
+    parameters.extend(QUERY_POINTS.map(|[x, y, z]| [x.to_bits(), y.to_bits(), z.to_bits(), 0]));
+    let bytes: Vec<_> = parameters
+        .into_iter()
+        .flatten()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let device = context.native();
+    let input = Buffer::upload(device, &bytes)?;
+    let outcome = Buffer::new(
+        device,
+        (QUERY_POINTS.len() * WORLD_SAMPLES * 16) as u64,
+        true,
+    )?;
+    let bindings = Bindings::new(
+        device,
+        &[
+            Binding::StorageBuffer(input),
+            Binding::StorageBuffer(outcome),
+            Binding::LightWorld(tree),
+        ],
+    )?;
+    let pipeline = ComputePipeline::new(
+        device,
+        bindings,
+        RayShader {
+            spirv: include_bytes!(concat!(env!("OUT_DIR"), "/light_world_main.spv")),
+            entry: c"light_world_main",
+        },
+    )?;
+    let mut commands = Commands::new(device)?;
+    commands.dispatch(
+        pipeline,
+        [(WORLD_SAMPLES / 64) as u32, QUERY_POINTS.len() as u32, 1],
+    )?;
+    let record = commands.finish(device)?;
+    Ok((outcome, context.record_native(record)?))
+}
+
+#[test]
+#[ignore = "需要真实 Vulkan；完整比较更新前后的两级 PMF 与记录保活"]
+fn local_light_rebuild_reuses_subtrees_across_versions() -> Result {
+    let mut gpu = Gpu::new(Capability::RayTracing, 0, false)?;
+    let context = gpu.context_mut();
+    context.native().prepare_quad_expansion()?;
+    let mut vertices = Vec::new();
+    let mut leaves = Vec::new();
+    for (slot, grid) in std::iter::repeat_n(-2i32, 70)
+        .chain([1, 4, 4, 4, 4, -2])
+        .enumerate()
+    {
+        let power = slot as f32 + 1.0;
+        let geometry = quad((slot % 19) as f32, power);
+        for (corner, position) in geometry.vertices.into_iter().enumerate() {
+            vertices.extend(position.into_iter().flat_map(f32::to_le_bytes));
+            vertices.extend(if corner == 0 { grid } else { 0 }.to_le_bytes());
+        }
+        leaves.push([slot as u32, power.to_bits(), slot as u32, 0]);
+    }
+    let vertices = Buffer::upload(context.native(), &vertices)?;
+    let original = context.native().build_light_world(LightWorldInput {
+        vertices,
+        leaves: &leaves[..75],
+        regions: &[
+            LightRegionInput::Build {
+                grid: [-2, 0, 0],
+                count: 70,
+            },
+            LightRegionInput::Build {
+                grid: [1, 0, 0],
+                count: 1,
+            },
+            LightRegionInput::Build {
+                grid: [4, 0, 0],
+                count: 4,
+            },
+        ],
+        records: false,
+        source: None,
+    })?;
+    let previous = context.native_ref().light_regions(original)?.to_vec();
+    let (before_pixels, before) = record_world_probe(context, original)?;
+    leaves[70] = leaves[75];
+    let (updated, build) = context.record_light_world(LightWorldInput {
+        vertices,
+        leaves: &leaves[..71],
+        regions: &[
+            LightRegionInput::Build {
+                grid: [-2, 0, 0],
+                count: 71,
+            },
+            LightRegionInput::Reuse(previous[1]),
+            LightRegionInput::Reuse(previous[2]),
+        ],
+        records: false,
+        source: None,
+    })?;
+    assert!(context.native_ref().light_regions(updated).is_err());
+    let (after_pixels, after) = record_world_probe(context, updated)?;
+    // 旧世界只由已经录制的消费者保活，包含本批已替换的子树。
+    context
+        .native()
+        .collect(&[updated.into(), before_pixels.into(), after_pixels.into()])?;
+    let submitted = context.submit([before, build, after])?;
+    context.parts().1.poll(wgpu::PollType::Wait {
+        submission_index: Some(submitted),
+        timeout: Some(std::time::Duration::from_secs(10)),
+    })?;
+    let current = context.native_ref().light_regions(updated)?;
+    assert_ne!(current[0], previous[0]);
+    assert_eq!(&current[1..], &previous[1..]);
+    for (buffer, count) in [(before_pixels, 75), (after_pixels, 76)] {
+        let mut bytes = vec![0; QUERY_POINTS.len() * WORLD_SAMPLES * 16];
+        buffer.read(context.native(), 0, &mut bytes)?;
+        for point in bytes.chunks_exact(WORLD_SAMPLES * 16) {
+            let mut total = 0.0f64;
+            for (index, row) in point.chunks_exact(16).enumerate() {
+                let words: [u32; 4] = std::array::from_fn(|i| {
+                    u32::from_le_bytes(row[i * 4..i * 4 + 4].try_into().unwrap())
+                });
+                assert!(words[0] < count);
+                assert_eq!(words[1], words[2]);
+                let reverse = f32::from_bits(words[3]);
+                if index < count as usize {
+                    assert!(reverse >= STEP);
+                    total += f64::from(reverse);
+                } else {
+                    assert_eq!(reverse, 0.0);
+                }
+            }
+            assert_eq!(total, 1.0);
+        }
+    }
+    context.native().collect(&[])?;
+    gpu.finish()?;
+    Ok(())
 }
 
 fn run(trees: &[Tree], queries: &[Query]) -> Result<Vec<[u32; 4]>> {

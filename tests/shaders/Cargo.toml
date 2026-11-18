@@ -31,7 +31,12 @@ harness = false
 name = "kernels"
 harness = false
 
+[[bench]]
+name = "light_forest"
+harness = false
+
 [dev-dependencies]
+bytemuck.workspace = true
 half = "2.7.1"
 
 [dependencies]

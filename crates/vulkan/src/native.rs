@@ -7,8 +7,8 @@ use crate::graph;
 use crate::handles::RecordId;
 #[doc(inline)]
 pub use crate::handles::{
-    Bindings, Buffer, ComputePipeline, ExternalBinding, ExternalKind, Image, RayTracingPipeline,
-    Resource, ResourceAccess, Sampler,
+    Bindings, Buffer, ComputePipeline, ExternalBinding, ExternalKind, Image, LightRegion,
+    LightWorld, RayTracingPipeline, Resource, ResourceAccess, Sampler,
 };
 use crate::interop::{RayShader, SampledTexture, SharedBuffer, SharedTexture, WgpuContext};
 use crate::lifecycle::{self, Life, Op, resource as meta};
@@ -65,6 +65,11 @@ use commands::memory_barrier;
 #[path = "native_light_tree.rs"]
 mod light_tree;
 pub use light_tree::DeviceLightTree;
+#[path = "native_light_world.rs"]
+mod light_world;
+pub use light_world::{LightRegionInput, LightWorldInput};
+#[path = "native_light_pages.rs"]
+mod light_pages;
 #[path = "terrain_flight.rs"]
 mod terrain_flight;
 
@@ -158,6 +163,7 @@ pub struct Context {
     pub(crate) device: Device,
     pub(crate) life: Life<Native, BuildBuffers>,
     as_pool: BufferPool,
+    light_pages: light_pages::LightPages,
     buffer_retirement: Option<crate::buffer_retirement::BufferRetirement>,
     quad_expansion: Option<crate::quad_expansion::Expansion>,
     light_builder: Option<crate::quad_expansion::Expansion>,
@@ -277,6 +283,7 @@ impl Context {
             device,
             life: Life::new(owner),
             as_pool: BufferPool::default(),
+            light_pages: light_pages::LightPages::default(),
             buffer_retirement: None,
             quad_expansion: None,
             light_builder: None,
@@ -309,7 +316,7 @@ impl Context {
                 self.pipeline_cache(),
                 include_bytes!(concat!(env!("OUT_DIR"), "/light_build.spv")),
                 c"build_level",
-                88,
+                light_tree::BUILD_PUSH_BYTES as u32,
             )?);
         }
         Ok(())
@@ -472,7 +479,11 @@ impl Context {
             .records()
             .map(|(_, record)| record.metadata_bytes())
             .sum();
-        (self.life.retained_bytes() + data + records + self.as_pool.retained_bytes()) as u64
+        (self.life.retained_bytes()
+            + data
+            + records
+            + self.as_pool.retained_bytes()
+            + self.light_pages.retained()) as u64
     }
     #[cfg(all(feature = "dlss_rr", target_os = "windows"))]
     pub(crate) fn record_pending(&self, key: RecordId) -> bool {
@@ -498,7 +509,11 @@ impl Context {
     }
     fn discard(&mut self, key: Key) {
         if let Some(data) = self.life.take_resource(key) {
+            if matches!(data, Data::Buffer(_)) {
+                self.light_pages.forget(key);
+            }
             match (data, &mut self.buffer_retirement) {
+                (Data::LightRegion(slice), _) => self.light_pages.release(slice),
                 (Data::Buffer(buffer), Some(queue)) => {
                     if let Err(mut immediate) = queue.enqueue(&self.device, buffer) {
                         immediate.destroy(&self.device);
@@ -516,7 +531,7 @@ impl Context {
         if let Some(producer) = self.get(key)?.producer()
             && !matches!(self.record(producer)?.state(), State::Submitted(_))
         {
-            return Err(Error::InvalidState("AS 构建尚未提交"));
+            return Err(Error::InvalidState("资源构建尚未提交"));
         }
         Ok(())
     }
@@ -570,14 +585,16 @@ impl Context {
                         && !preceding.contains(&producer)
                         && !matches!(producer_record.state(), State::Submitted(_))
                     {
-                        return Err(Error::InvalidState("AS producer 必须先于消费者提交"));
+                        return Err(Error::InvalidState("构建命令必须先于消费者提交"));
                     }
                 }
                 visited.try_reserve(1)?;
                 visited.insert(resource);
-                // 已构建或已排队的 AS 已证明子 producer；仅本次新建输出检查其子依赖。
-                if matches!(data, Data::Blas(_) | Data::Acceleration(_))
-                    && data.producer() != Some(key)
+                // 已构建或已排队的资源已验证子依赖；仅本次新建输出再检查。
+                if matches!(
+                    data,
+                    Data::Blas(_) | Data::Acceleration(_) | Data::LightWorld(_)
+                ) && data.producer() != Some(key)
                 {
                     continue;
                 }
@@ -956,6 +973,7 @@ impl Data {
 
     fn retained_bytes(&self) -> usize {
         match self {
+            Self::LightWorld(data) => data.regions.capacity() * size_of::<LightRegion>(),
             Self::Bindings(data) => {
                 data.resource_capacity() * size_of::<StoredBinding>()
                     + data.raw().views.capacity() * size_of::<wgpu::TextureView>()
@@ -970,6 +988,8 @@ impl Destroy for Data {
         match self {
             Self::Timestamps(v) => v.destroy(device),
             Self::Buffer(v) => v.destroy(device),
+            Self::LightWorld(v) => v.raw.destroy(device),
+            Self::LightRegion(_) => {}
             Self::Image(v) => v.destroy(device),
             Self::Sampler(v) => v.destroy(device),
             Self::Bindings(v) => v.raw_mut().destroy(device),

@@ -44,7 +44,7 @@ powershell -NoProfile -File scripts/check.ps1 -Suite features
 - [CPU 2D 场景](../target/doc/render2d/index.html)与[wgpu 编码](../target/doc/render2d/gpu/index.html)
 - [体素表面提取](../target/doc/voxel_mesh/index.html)
 - [DAG 局部构建](../target/doc/hash_dag/struct.LocalBuilder.html)与[批量导入](../target/doc/hash_dag/struct.HashDag.html#method.set_built_regions)：内核不创建线程，由应用持有结果槽并调度
-- [quad 光源 BVH](../target/doc/light_bvh/index.html)与[共享 Slang 采样、RR、MIS](../target/doc/simple_engine/shader_library/index.html)
+- [GPU 区块光源树更新](../target/doc/vulkan/interop/struct.WgpuContext.html#method.record_light_world)与[共享 Slang 采样、RR、MIS](../target/doc/simple_engine/shader_library/index.html)
 - [primeDRT 参数准备](../target/doc/simple_engine/display/index.html)与共享 `display.prime_drt` Slang 模块
 - [OpenPBR 能力子集](../target/doc/openpbr/index.html)与[运行时大气](../target/doc/atmosphere/index.html)；GPU owner 由调用方显式共享、排序和提交
 - [Vulkan 光追与二值 OMM](../target/doc/vulkan/index.html)

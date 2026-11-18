@@ -335,6 +335,18 @@ fn main() -> Result<(), shader_build::Error> {
             "light_bvh_main.spv",
         ),
         (
+            "shaders/light_bvh.slang",
+            "light_world_main",
+            "compute",
+            "light_world_main.spv",
+        ),
+        (
+            "shaders/light_bvh.slang",
+            "light_world_power",
+            "compute",
+            "light_world_power.spv",
+        ),
+        (
             "shaders/light_bvh_bench.slang",
             "light_bvh_sample_bench",
             "compute",

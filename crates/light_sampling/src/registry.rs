@@ -1,6 +1,6 @@
-//! 稳定数据槽、紧凑活动序列与稀疏反查的单一CPU所有者；准备不修改已发布表。
+//! 稳定数据槽、活动集合与稀疏反查的单一CPU所有者；准备不修改已发布表。
 
-use crate::{self as light_sampling, bvh as light_bvh};
+use crate as light_sampling;
 use std::collections::HashMap;
 
 /// 活动光源表输入、事务或构建失败。
@@ -12,16 +12,6 @@ pub enum Error {
     /// CPU 内存申请失败，保留来源。
     #[error(transparent)]
     Allocation(#[from] std::collections::TryReserveError),
-    /// 位置树输入或构建失败。
-    #[error(transparent)]
-    Tree(#[from] light_bvh::Error),
-}
-
-struct CellScale(f32);
-impl Default for CellScale {
-    fn default() -> Self {
-        Self(1.0)
-    }
 }
 
 const INITIAL_CAPACITY: usize = 16;
@@ -30,15 +20,13 @@ const VERTICES: u8 = 2;
 const REGION: u8 = 4;
 const POWER: u8 = 8;
 
-/// 五个GPU缓冲的完整容量镜像；只在显式容量增长时产生。
+/// 四列的完整容量镜像；只在显式容量增长时产生。
 pub struct Tables {
-    /// 选择头、锚点、活动槽与 BVH 的连续 16B 行。
-    pub selection: Vec<[u32; 4]>,
     /// 每槽面积协议与 quad 身份。
     pub meta: Vec<[u32; 4]>,
     /// 每槽三个 float4 的局部四角。
     pub vertices: Vec<[f32; 4]>,
-    /// 每槽网格坐标与活动序号、发射侧。
+    /// 每槽网格坐标与区块内灯序号、发射侧。
     pub regions: Vec<[u32; 4]>,
     /// quad 身份到稳定槽的线性探测表。
     pub inverse: Vec<[u32; 4]>,
@@ -47,15 +35,13 @@ pub struct Tables {
 /// 已校验的互不重叠16B行；顺序不影响发布，不要求按索引排序。
 #[derive(Default)]
 pub struct TablePatches {
-    /// 选择头、活动槽与 BVH 的变化行。
-    pub selection: Vec<(usize, [u32; 4])>,
     /// 面积协议与 quad 身份的变化行。
     pub meta: Vec<(usize, [u32; 4])>,
     /// 局部四角的变化行。
     pub vertices: Vec<(usize, [f32; 4])>,
     /// 反查哈希桶的变化行。
     pub inverse: Vec<(usize, [u32; 4])>,
-    /// 网格位置、活动序号与侧掩码的变化行。
+    /// 网格位置、区块内灯序号与侧掩码的变化行。
     pub regions: Vec<(usize, [u32; 4])>,
 }
 
@@ -67,7 +53,7 @@ pub struct Record {
     pub meta: [u32; 4],
     /// 每槽三个 float4 的局部四角。
     pub vertices: [[f32; 4]; 3],
-    /// 有符号网格坐标位模式及侧掩码；活动序号由目录写入。
+    /// 网格坐标位模式。w 为区块内灯序号左移两位后与侧掩码合并。
     pub region: [u32; 4],
     /// 有限正的光源提案功率。
     pub power: f32,
@@ -79,10 +65,9 @@ struct Edit {
 }
 
 #[derive(Default)]
-/// 活动灯的单一所有者；默认格长为 1，槽删除可复用而不移动其他灯。
-/// 几何变化重建 BVH，再计算差异行；此类型不声称增量构树。
+/// 活动灯的单一所有者；槽删除可复用而不移动其他灯。
+/// 发布稳定灯槽与稀疏反查；活动顺序只用于 CPU 槽回收。
 pub struct Registry {
-    cell_scale: CellScale,
     capacity: usize,
     span: u32,
     free: Vec<u32>,
@@ -92,37 +77,11 @@ pub struct Registry {
     regions: Vec<[u32; 4]>,
     powers: Vec<f32>,
     inverse: Vec<[u32; 4]>,
-    proposal: Proposal,
-}
-
-#[derive(Default)]
-struct Proposal {
-    anchor: [u32; 3],
-    words: Vec<u32>,
-}
-/// GPU 构树的紧凑活动序列。rank 同正反向 PDF 的当前活动顺序，位置从驻留 quad 读取。
-pub struct DeviceProposal {
-    /// 构树所用的区域原点。
-    pub anchor: [i32; 3],
-    /// 每灯依次为几何槽、功率 bits、两个保留 word。
-    pub leaves: Vec<[u32; 4]>,
-}
-
-fn tree_base(capacity: usize) -> usize {
-    2 + capacity.div_ceil(4)
-}
-
-fn selection_rows(capacity: usize) -> Result<usize, Error> {
-    let tree_words =
-        light_bvh::storage_words(capacity).ok_or(Error::Invalid("发光位置树容量溢出"))?;
-    tree_base(capacity)
-        .checked_add(tree_words / 4)
-        .ok_or(Error::Invalid("发光选择表容量溢出"))
+    ranks: Vec<u32>,
 }
 
 /// 未发布的稀疏修改；仅适用于产生它的目录版本，丢弃不修改目录。
 pub struct Delta {
-    device_tree: bool,
     capacity: usize,
     span: u32,
     count: usize,
@@ -134,7 +93,7 @@ pub struct Delta {
     added_active: Vec<u32>,
     added_start: usize,
     inverse: HashMap<usize, [u32; 4]>,
-    proposal: Option<Proposal>,
+    ranks: HashMap<u32, usize>,
 }
 
 /// 借用当前目录收集修改；先删改，再批量新增，最后 finish。
@@ -175,20 +134,6 @@ fn mapped<K: std::hash::Hash + Eq, V>(
 }
 
 impl Registry {
-    /// 空目录，region.xyz 为有符号网格坐标，cell_extent 为正且有限的格长。
-    /// GPU 端须使用相同格长与 proposal anchor，保证远坐标先相减再转换。
-    /// # Errors
-    /// 无效格长返回输入错误；不分配。
-    pub fn new(cell_extent: f32) -> Result<Self, Error> {
-        if !cell_extent.is_finite() || cell_extent <= 0.0 {
-            return Err(Error::Invalid("光源格长须正且有限"));
-        }
-        Ok(Self {
-            cell_scale: CellScale(cell_extent),
-            ..Self::default()
-        })
-    }
-
     /// 已发布data span之外按零记录读取，不初始化未使用的CPU尾部。
     pub fn record(&self, id: u32) -> Record {
         let index = id as usize;
@@ -208,6 +153,9 @@ impl Registry {
     /// 校验完整表并预留提交内存；失败只改变保留容量，不发布记录。
     /// delta 与 tables 必须来自本目录当前版本的同一次 finish。
     pub fn reserve(&mut self, delta: &Delta, tables: Option<&Tables>) -> Result<(), Error> {
+        self.ranks
+            .try_reserve_exact(delta.capacity.saturating_sub(self.ranks.len()))
+            .map_err(allocation)?;
         self.powers
             .try_reserve_exact(delta.capacity.saturating_sub(self.powers.len()))
             .map_err(allocation)?;
@@ -217,13 +165,7 @@ impl Registry {
                 || tables.vertices.len() != delta.capacity * 3
                 || tables.regions.len() != delta.capacity
                 || tables.inverse.len() != delta.capacity * 2 + 1
-                || tables.selection.len()
-                    != if delta.device_tree {
-                        tree_base(delta.capacity)
-                    } else {
-                        selection_rows(delta.capacity)?
-                    }
-                || tables.selection[0][0] as usize != delta.count
+                || tables.inverse[0][0] as usize != delta.count
             {
                 return Err(Error::Invalid("发光完整表与准备容量不匹配"));
             }
@@ -252,7 +194,7 @@ impl Registry {
 
     /// GPU 上传成功后发布同一次 reserve 已校验的候选，不分配。
     /// 调用方须独占目录并保证 reserve 后没有其他发布，tables 不得被修改。
-    pub fn commit(&mut self, mut delta: Delta, tables: Option<Tables>) {
+    pub fn commit(&mut self, delta: Delta, tables: Option<Tables>) {
         self.powers.resize(delta.span as usize, 0.);
         for (&id, edit) in &delta.records {
             if edit.mask & POWER != 0 {
@@ -262,8 +204,12 @@ impl Registry {
         for &(id, record) in &delta.additions {
             self.powers[id as usize] = record.power;
         }
-        if let Some(proposal) = delta.proposal.take() {
-            self.proposal = proposal;
+        self.ranks.resize(delta.span as usize, 0);
+        for (&id, &rank) in &delta.ranks {
+            self.ranks[id as usize] = rank as u32;
+        }
+        for (rank, &id) in (delta.added_start..).zip(&delta.added_active) {
+            self.ranks[id as usize] = rank as u32;
         }
         if self.moves_active(&delta) {
             self.active = delta.added_active;
@@ -327,7 +273,6 @@ impl<'a> Writer<'a> {
         Self {
             current,
             delta: Delta {
-                device_tree: false,
                 capacity: current.capacity,
                 span: current.span,
                 count: current.active.len(),
@@ -339,7 +284,7 @@ impl<'a> Writer<'a> {
                 added_active: Vec::new(),
                 added_start: current.active.len(),
                 inverse: HashMap::new(),
-                proposal: None,
+                ranks: HashMap::new(),
             },
             removals: Vec::new(),
             insertions: Vec::new(),
@@ -352,6 +297,20 @@ impl<'a> Writer<'a> {
             .records
             .get(&id)
             .map_or_else(|| self.current.record(id), |v| v.record)
+    }
+
+    fn rank(&self, id: u32) -> usize {
+        self.delta
+            .ranks
+            .get(&id)
+            .copied()
+            .or_else(|| {
+                self.current
+                    .ranks
+                    .get(id as usize)
+                    .map(|&rank| rank as usize)
+            })
+            .unwrap_or(usize::MAX)
     }
 
     fn active(&self, rank: usize) -> u32 {
@@ -394,7 +353,7 @@ impl<'a> Writer<'a> {
             return Err(Error::Invalid("发光删除必须先于批量新增"));
         }
         let record = self.record(id);
-        let rank = (record.region[3] >> 2) as usize;
+        let rank = self.rank(id);
         if rank >= self.delta.count || self.active(rank) != id {
             return Err(Error::Invalid("发光数据身份不属于当前活动集合"));
         }
@@ -404,9 +363,7 @@ impl<'a> Writer<'a> {
         mapped(&mut self.delta.active, last_rank, 0)?;
         if rank != last_rank {
             mapped(&mut self.delta.active, rank, last_id)?;
-            let mut moved = self.record(last_id);
-            moved.region[3] = ((rank as u32) << 2) | (moved.region[3] & 3);
-            self.edit(last_id, moved)?;
+            mapped(&mut self.delta.ranks, last_id, rank)?;
         }
         let key = record.meta[3]
             .checked_add(1)
@@ -416,16 +373,15 @@ impl<'a> Writer<'a> {
     }
 
     /// 替换当前活动记录并保留活动序号；必须先于新增，非活动身份返回错误。
-    pub fn replace(&mut self, id: u32, mut record: Record) -> Result<(), Error> {
+    pub fn replace(&mut self, id: u32, record: Record) -> Result<(), Error> {
         if !self.delta.additions.is_empty() {
             return Err(Error::Invalid("发光修改必须先于批量新增"));
         }
         let old = self.record(id);
-        let rank = (old.region[3] >> 2) as usize;
+        let rank = self.rank(id);
         if rank >= self.delta.count || self.active(rank) != id {
             return Err(Error::Invalid("发光数据身份不属于当前活动集合"));
         }
-        record.region[3] = (old.region[3] & !3) | (record.region[3] & 3);
         if old.meta[3] != record.meta[3] {
             pushed(
                 &mut self.removals,
@@ -450,7 +406,7 @@ impl<'a> Writer<'a> {
     }
 
     /// 复用空槽或追加记录，返回稳定槽号；容量或身份溢出返回错误。
-    pub fn add(&mut self, mut record: Record) -> Result<u32, Error> {
+    pub fn add(&mut self, record: Record) -> Result<u32, Error> {
         if self.delta.count >= light_sampling::SELECTORS as usize {
             return Err(Error::Invalid("活动发光quad数量超过24-bit均匀采样支持域"));
         }
@@ -471,7 +427,6 @@ impl<'a> Writer<'a> {
                 .ok_or(Error::Invalid("发光数据槽身份溢出"))?;
             id
         };
-        record.region[3] = ((self.delta.count as u32) << 2) | (record.region[3] & 3);
         if self.delta.added_active.is_empty() {
             self.delta.added_start = self.delta.count;
         }
@@ -491,25 +446,11 @@ impl<'a> Writer<'a> {
         Ok(id)
     }
 
-    /// 校验反查身份、构树并产出候选；容量增长返回完整表，否则返回差异行。
-    /// 失败不改变已发布目录；返回的三项须作为同一事务提交。
-    pub fn finish(self) -> Result<(Delta, Option<Tables>, TablePatches), Error> {
-        self.finish_with(false).map(|(d, t, p, _)| (d, t, p))
-    }
-
-    /// 生成供设备构树的活动槽，仅发生提案变化时返回叶表。选择缓冲只保留头和活动序列。
-    /// 目录所有者须始终使用相同后端，GPU 成功准备后提交事务。错误保留当前目录。
-    pub fn finish_for_gpu(
-        self,
-    ) -> Result<(Delta, Option<Tables>, TablePatches, Option<DeviceProposal>), Error> {
-        self.finish_with(true)
-    }
-
-    fn finish_with(
-        mut self,
-        device: bool,
-    ) -> Result<(Delta, Option<Tables>, TablePatches, Option<DeviceProposal>), Error> {
-        self.delta.device_tree = device;
+    /// 校验反查身份并准备目录写入。
+    /// 容量增长返回完整表，其余返回稀疏行。GPU 准备成功后由目录所有者提交。
+    /// # Errors
+    /// 输入、容量或反查身份不合法时保留当前发布版本。
+    pub fn finish_for_gpu(mut self) -> Result<(Delta, Option<Tables>, TablePatches), Error> {
         let needed = self.delta.span as usize;
         if needed > self.delta.capacity {
             self.delta.capacity = needed
@@ -518,42 +459,8 @@ impl<'a> Writer<'a> {
                 .ok_or(Error::Invalid("发光缓冲容量溢出"))?;
         }
         let grow = self.delta.capacity != self.current.capacity;
-        let proposal_changed = grow
-            || self.delta.count != self.current.active.len()
-            || !self.delta.active.is_empty()
-            || !self.delta.additions.is_empty()
-            || self
-                .delta
-                .records
-                .values()
-                .any(|edit| edit.mask & (VERTICES | REGION | POWER) != 0);
-        let mut device_proposal = None;
-        if proposal_changed && device {
-            let anchor = if self.delta.count == 0 {
-                [0; 3]
-            } else {
-                self.ranked_record(0).region[..3]
-                    .try_into()
-                    .expect("三轴区域键")
-            };
-            let mut leaves = reserved(self.delta.count)?;
-            for rank in 0..self.delta.count {
-                let rec = self.ranked_record(rank);
-                leaves.push([rec.meta[3], rec.power.to_bits(), 0, 0]);
-            }
-            self.delta.proposal = Some(Proposal {
-                anchor,
-                words: Vec::new(),
-            });
-            device_proposal = Some(DeviceProposal {
-                anchor: anchor.map(|v| v as i32),
-                leaves,
-            });
-        } else if proposal_changed {
-            self.delta.proposal = Some(self.build_proposal()?);
-        }
         let tables = if grow {
-            Some(self.full_tables(device)?)
+            Some(self.full_tables()?)
         } else {
             None
         };
@@ -619,76 +526,15 @@ impl<'a> Writer<'a> {
                 );
                 patches.regions.push((id as usize, record.region));
             }
-            let mut rows = HashMap::new();
-            if let Some(proposal) = &self.delta.proposal {
-                mapped(
-                    &mut rows,
-                    0,
-                    [
-                        self.delta.count as u32,
-                        tree_base(self.delta.capacity) as u32,
-                        0,
-                        0,
-                    ],
-                )?;
-                if proposal.anchor != self.current.proposal.anchor {
-                    mapped(
-                        &mut rows,
-                        1,
-                        [
-                            proposal.anchor[0],
-                            proposal.anchor[1],
-                            proposal.anchor[2],
-                            0,
-                        ],
-                    )?;
-                }
-                for (index, &row) in proposal.words.as_chunks::<4>().0.iter().enumerate() {
-                    if self.current.proposal.words.as_chunks::<4>().0.get(index) != Some(&row) {
-                        mapped(&mut rows, tree_base(self.delta.capacity) + index, row)?;
-                    }
-                }
-            }
-            for &rank in self.delta.active.keys() {
-                let index = rank / 4;
-                let row = std::array::from_fn(|column| self.active(index * 4 + column));
-                let old = std::array::from_fn(|column| {
-                    self.current
-                        .active
-                        .get(index * 4 + column)
-                        .copied()
-                        .unwrap_or(0)
-                });
-                if row != old {
-                    mapped(&mut rows, index + 2, row)?;
-                }
-            }
-            if !self.delta.added_active.is_empty() {
-                for index in self.delta.added_start / 4..self.delta.count.div_ceil(4) {
-                    let row = std::array::from_fn(|column| self.active(index * 4 + column));
-                    let old = std::array::from_fn(|column| {
-                        self.current
-                            .active
-                            .get(index * 4 + column)
-                            .copied()
-                            .unwrap_or(0)
-                    });
-                    if row != old {
-                        mapped(&mut rows, index + 2, row)?;
-                    }
-                }
-            }
-            patches.selection = reserved(rows.len())?;
-            patches.selection.extend(rows);
             patches.inverse = reserved(self.delta.inverse.len())?;
             patches
                 .inverse
                 .extend(self.delta.inverse.iter().map(|(&i, &row)| (i, row)));
         }
-        Ok((self.delta, tables, patches, device_proposal))
+        Ok((self.delta, tables, patches))
     }
 
-    fn full_tables(&self, device: bool) -> Result<Tables, Error> {
+    fn full_tables(&self) -> Result<Tables, Error> {
         let capacity = self.delta.capacity;
         let mut meta = reserved(capacity)?;
         let mut vertices = reserved(capacity * 3)?;
@@ -717,30 +563,6 @@ impl<'a> Writer<'a> {
             vertices[index * 3..index * 3 + 3].copy_from_slice(&record.vertices);
             regions[index] = record.region;
         }
-        let proposal = self
-            .delta
-            .proposal
-            .as_ref()
-            .unwrap_or(&self.current.proposal);
-        let selection_len = if device {
-            tree_base(capacity)
-        } else {
-            selection_rows(capacity)?
-        };
-        let mut selection = reserved(selection_len)?;
-        selection.push([self.delta.count as u32, tree_base(capacity) as u32, 0, 0]);
-        selection.push([
-            proposal.anchor[0],
-            proposal.anchor[1],
-            proposal.anchor[2],
-            0,
-        ]);
-        selection.extend(
-            (0..capacity.div_ceil(4))
-                .map(|row| std::array::from_fn(|column| self.active(row * 4 + column))),
-        );
-        selection.extend_from_slice(proposal.words.as_chunks::<4>().0);
-        selection.resize(selection_len, [0; 4]);
         let buckets = capacity
             .checked_mul(2)
             .ok_or(Error::Invalid("发光反查容量溢出"))?;
@@ -766,49 +588,10 @@ impl<'a> Writer<'a> {
             }
         }
         Ok(Tables {
-            selection,
             meta,
             vertices,
             regions,
             inverse,
-        })
-    }
-
-    fn ranked_record(&self, rank: usize) -> Record {
-        if rank >= self.delta.added_start {
-            self.delta.additions[rank - self.delta.added_start].1
-        } else {
-            self.record(self.active(rank))
-        }
-    }
-    /// 几何/活动顺序改变时才重建位置提案；准备失败或未提交不会修改旧树。
-    /// 发光功率来自资源亮度估计×面积×发射侧数，不读取或复制纹理发光实值。
-    fn build_proposal(&self) -> Result<Proposal, Error> {
-        let anchor = if self.delta.count == 0 {
-            [0; 3]
-        } else {
-            self.ranked_record(0).region[..3]
-                .try_into()
-                .expect("三维region")
-        };
-        let mut quads = reserved(self.delta.count)?;
-        for rank in 0..self.delta.count {
-            let record = self.ranked_record(rank);
-            let local = light_sampling::unpack_vertices(record.vertices);
-            let translation = std::array::from_fn::<_, 3, _>(|axis| {
-                (i64::from(record.region[axis] as i32) - i64::from(anchor[axis] as i32)) as f32
-                    * self.current.cell_scale.0
-            });
-            quads.push(light_bvh::Quad {
-                vertices: local
-                    .map(|point| std::array::from_fn(|axis| point[axis] + translation[axis])),
-                power: record.power,
-            });
-        }
-        let tree = light_bvh::Tree::build(&quads)?;
-        Ok(Proposal {
-            anchor,
-            words: tree.into_words(),
         })
     }
 }
@@ -906,7 +689,7 @@ mod tests {
                 [1., 0., 1., 1.],
                 [0., 0., 1., 0.],
             ],
-            region: [0, 0, 0, 3],
+            region: [0, 0, 0, (slot << 2) | 3],
             power: 1.,
         }
     }
@@ -917,7 +700,7 @@ mod tests {
         for slot in 0..count {
             assert_eq!(writer.add(record(slot)).unwrap(), slot);
         }
-        let (delta, tables, _) = writer.finish().unwrap();
+        let (delta, tables, _) = writer.finish_for_gpu().unwrap();
         registry.reserve(&delta, tables.as_ref()).unwrap();
         let shadow = copy_tables(tables.as_ref().unwrap());
         registry.commit(delta, tables);
@@ -933,14 +716,13 @@ mod tests {
             writer.replace(0, record(2)),
             Err(Error::Invalid(_))
         ));
-        let (_, _, patches) = writer.finish().unwrap();
+        let (_, _, patches) = writer.finish_for_gpu().unwrap();
         assert!(patches.meta.is_empty());
     }
 
     fn copy_tables(tables: &Tables) -> Tables {
         // 独立CPU数组模拟设备副本，生产路径直接移交唯一wire存储。
         Tables {
-            selection: tables.selection.clone(),
             meta: tables.meta.clone(),
             vertices: tables.vertices.clone(),
             regions: tables.regions.clone(),
@@ -949,9 +731,6 @@ mod tests {
     }
 
     fn apply(tables: &mut Tables, patches: &TablePatches) {
-        for &(row, value) in &patches.selection {
-            tables.selection[row] = value;
-        }
         for &(row, value) in &patches.meta {
             tables.meta[row] = value;
         }
@@ -983,7 +762,6 @@ mod tests {
     }
 
     fn validate(registry: &Registry, tables: &Tables) {
-        assert_eq!(tables.selection[0][0] as usize, registry.active.len());
         assert_eq!(tables.inverse[0][0] as usize, registry.active.len());
         assert_eq!(tables.meta[..registry.meta.len()], registry.meta);
         assert_eq!(
@@ -992,18 +770,10 @@ mod tests {
         );
         assert_eq!(tables.regions[..registry.regions.len()], registry.regions);
         assert_eq!(tables.inverse, registry.inverse);
-        assert_eq!(&tables.selection[1][..3], &registry.proposal.anchor);
-        let tree_base = tables.selection[0][1] as usize;
-        assert_eq!(
-            tables.selection[tree_base..tree_base + registry.proposal.words.len() / 4]
-                .as_flattened(),
-            registry.proposal.words
-        );
         let mut identities = HashSet::new();
         for (rank, &id) in registry.active.iter().enumerate() {
             assert!(identities.insert(id));
-            assert_eq!(tables.selection[2 + rank / 4][rank % 4], id);
-            assert_eq!(registry.regions[id as usize][3] >> 2, rank as u32);
+            assert_eq!(registry.ranks[id as usize], rank as u32);
             assert_eq!(registry.regions[id as usize][3] & 3, 3);
             assert_eq!(
                 lookup(&tables.inverse, registry.meta[id as usize][3] + 1),
@@ -1013,50 +783,24 @@ mod tests {
     }
 
     #[test]
-    fn a_single_removal_keeps_data_slots_and_only_patches_the_moved_rank() {
+    fn removal_does_not_patch_another_regions_moved_slot() {
         let (mut registry, mut tables) = initial(1_000);
         let old_last = registry.active[999];
         let mut writer = Writer::new(&registry);
         writer.remove(17).unwrap();
-        let (delta, grown, patches) = writer.finish().unwrap();
+        let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
         assert!(grown.is_none());
         assert!(patches.meta.is_empty());
         assert!(patches.vertices.is_empty());
-        assert_eq!(patches.regions.len(), 1);
-        let tree_base = tables.selection[0][1] as usize;
-        assert!(
-            patches
-                .selection
-                .iter()
-                .filter(|(row, _)| *row < tree_base)
-                .count()
-                <= 3
-        );
+        assert!(patches.regions.is_empty());
         apply(&mut tables, &patches);
         registry.reserve(&delta, None).unwrap();
         registry.commit(delta, None);
         assert_eq!(registry.active[17], old_last);
         assert_eq!(registry.record(old_last).meta[3], 999);
+        assert_eq!(registry.record(old_last).region[3] >> 2, 999);
         assert_eq!(lookup(&registry.inverse, 18), None);
         validate(&registry, &tables);
-    }
-
-    #[test]
-    fn proposal_keeps_region_local_detail_far_from_the_world_origin() {
-        let build = |anchor: i32| {
-            let registry = Registry::default();
-            let mut writer = Writer::new(&registry);
-            for slot in 0..2 {
-                let mut value = record(slot);
-                value.region[0] = (anchor + slot as i32) as u32;
-                writer.add(value).unwrap();
-            }
-            writer.finish().unwrap().0.proposal.unwrap()
-        };
-        let near = build(0);
-        let far = build(2_000_000_000);
-        assert_eq!(near.words, far.words);
-        assert_eq!(far.anchor[0] as i32, 2_000_000_000);
     }
 
     #[test]
@@ -1064,9 +808,8 @@ mod tests {
         let (registry, tables) = initial(4);
         let mut writer = Writer::new(&registry);
         writer.remove(0).unwrap();
-        let (delta, _, patches) = writer.finish().unwrap();
-        assert!(delta.proposal.is_some());
-        assert!(!patches.selection.is_empty());
+        let (delta, _, patches) = writer.finish_for_gpu().unwrap();
+        assert!(!patches.inverse.is_empty());
         drop(delta);
         validate(&registry, &tables);
     }
@@ -1077,7 +820,7 @@ mod tests {
         let mut writer = Writer::new(&registry);
         writer.remove(4).unwrap();
         assert_eq!(writer.add(record(1_000)).unwrap(), 4);
-        let (delta, grown, patches) = writer.finish().unwrap();
+        let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
         assert!(grown.is_none());
         assert_eq!(patches.meta.len(), 1);
         assert_eq!(patches.vertices.len(), 3);
@@ -1092,11 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn appending_into_reserved_tail_only_writes_the_new_slot_and_selector() {
+    fn appending_into_reserved_tail_only_writes_the_new_slot() {
         let (mut registry, mut tables) = initial(3);
         let mut writer = Writer::new(&registry);
         assert_eq!(writer.add(record(3)).unwrap(), 3);
-        let (delta, grown, patches) = writer.finish().unwrap();
+        let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
         assert!(grown.is_none());
         assert_eq!(patches.meta.len(), 1);
         assert_eq!(patches.vertices.len(), 3);
@@ -1116,7 +859,7 @@ mod tests {
         for slot in 0..3 {
             writer.add(record(slot)).unwrap();
         }
-        let (delta, tables, _) = writer.finish().unwrap();
+        let (delta, tables, _) = writer.finish_for_gpu().unwrap();
         let tables = tables.unwrap();
         let storage = (
             tables.meta.as_ptr(),
@@ -1139,7 +882,7 @@ mod tests {
         for slot in 3..16 {
             let mut writer = Writer::new(&registry);
             writer.add(record(slot)).unwrap();
-            let (delta, tables, _) = writer.finish().unwrap();
+            let (delta, tables, _) = writer.finish_for_gpu().unwrap();
             assert!(tables.is_none());
             registry.reserve(&delta, None).unwrap();
             registry.commit(delta, None);
@@ -1167,7 +910,7 @@ mod tests {
         for &key in &keys {
             writer.add(record(key - 1)).unwrap();
         }
-        let (delta, tables, _) = writer.finish().unwrap();
+        let (delta, tables, _) = writer.finish_for_gpu().unwrap();
         registry.reserve(&delta, tables.as_ref()).unwrap();
         let mut shadow = copy_tables(tables.as_ref().unwrap());
         registry.commit(delta, tables);
@@ -1175,7 +918,7 @@ mod tests {
         for id in [1, 3, 5, 7, 9, 11, 13, 15] {
             writer.remove(id).unwrap();
         }
-        let (delta, grown, patches) = writer.finish().unwrap();
+        let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
         assert!(grown.is_none());
         apply(&mut shadow, &patches);
         registry.reserve(&delta, None).unwrap();
@@ -1194,9 +937,8 @@ mod tests {
         let (mut registry, _) = initial(16);
         let mut writer = Writer::new(&registry);
         assert_eq!(writer.add(record(16)).unwrap(), 16);
-        let (delta, tables, patches) = writer.finish().unwrap();
+        let (delta, tables, _) = writer.finish_for_gpu().unwrap();
         assert_eq!(tables.as_ref().unwrap().meta.len(), 32);
-        assert!(patches.selection.is_empty());
         registry.reserve(&delta, tables.as_ref()).unwrap();
         let shadow = copy_tables(tables.as_ref().unwrap());
         registry.commit(delta, tables);
@@ -1209,7 +951,7 @@ mod tests {
         let (registry, tables) = initial(8);
         let mut writer = Writer::new(&registry);
         writer.replace(1, record(0)).unwrap();
-        assert!(writer.finish().is_err());
+        assert!(writer.finish_for_gpu().is_err());
         validate(&registry, &tables);
     }
 
@@ -1226,7 +968,7 @@ mod tests {
             let mut writer = Writer::new(&registry);
             writer.remove(id).unwrap();
             assert_eq!(writer.add(record(10_000 + sequence)).unwrap(), id);
-            let (delta, grown, patches) = writer.finish().unwrap();
+            let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
             assert!(grown.is_none());
             apply(&mut tables, &patches);
             registry.reserve(&delta, None).unwrap();
@@ -1237,43 +979,18 @@ mod tests {
     }
 
     #[test]
-    fn swap_removal_and_same_transaction_reuse_preserve_the_actual_rank_pmf() {
+    fn a_recycled_slot_publishes_its_new_region_local_index() {
         let (mut registry, mut tables) = initial(7);
         let mut writer = Writer::new(&registry);
         writer.remove(2).unwrap();
-        writer.remove(3).unwrap();
-        writer.add(record(100)).unwrap();
-        let (delta, grown, patches) = writer.finish().unwrap();
+        let id = writer.add(record(100)).unwrap();
+        let (delta, grown, patches) = writer.finish_for_gpu().unwrap();
         assert!(grown.is_none());
         apply(&mut tables, &patches);
         registry.reserve(&delta, None).unwrap();
         registry.commit(delta, None);
-        let count = tables.selection[0][0];
-        assert_eq!(count, 6);
-        for selector in [
-            0,
-            1,
-            light_sampling::SELECTORS / 3,
-            light_sampling::SELECTORS / 2,
-            light_sampling::SELECTORS - 1,
-        ] {
-            let forward = light_sampling::uniform_sample(count, selector)
-                .unwrap()
-                .unwrap();
-            let rank = forward.index as usize;
-            let id = tables.selection[2 + rank / 4][rank % 4];
-            let key = tables.meta[id as usize][3] + 1;
-            let reverse_id = lookup(&tables.inverse, key).unwrap();
-            let reverse_rank = tables.regions[reverse_id as usize][3] >> 2;
-            assert_eq!(id, reverse_id);
-            assert_eq!(
-                forward.pmf.to_bits(),
-                light_sampling::uniform_pmf(count, reverse_rank)
-                    .unwrap()
-                    .to_bits()
-            );
-        }
-        assert_ne!(tables.selection[2][2], 2);
+        assert_eq!(lookup(&tables.inverse, 101), Some(id));
+        assert_eq!(tables.regions[id as usize][3] >> 2, 100);
         validate(&registry, &tables);
     }
 }

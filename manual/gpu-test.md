@@ -91,6 +91,15 @@ cargo bench --locked -p shader_tests --bench kernels -- transport
 
 省略目录名时运行全部 kernel 负载，报告每项 GPU 时间、输入和输出指纹。
 
+在支持 Vulkan 光追和时间戳的设备上，从仓库根目录测量驻留光源的构建时间：
+
+```powershell
+cargo bench --locked -p shader_tests --bench light_forest
+```
+
+同一组 64m 区块发光面对照全量发布与单点改灯，覆盖 4096、100 万和 300 万盏灯。
+终端逐行输出 JSON，记录重建区块及灯数、GPU 与主机耗时、显存大小及根节点功率。网格构造、输入上传和结果读回在计时外。
+
 软件光追的 4K 步进基准覆盖单体素推进、均匀区域跳跃及平行轴、等时边界：
 
 ```powershell

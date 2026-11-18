@@ -46,6 +46,8 @@ pub(crate) enum ResourceKind {
     Compute,
     Blas,
     Acceleration,
+    LightWorld,
+    LightRegion,
     Micromap,
 }
 
@@ -61,6 +63,7 @@ pub(crate) enum Binding<P: Payloads> {
     SampledTexture(P::SampledTexture),
     Sampler(handles::Sampler),
     Acceleration(handles::AccelerationStructure),
+    LightWorld(handles::LightWorld),
     External(handles::ExternalBinding),
 }
 
@@ -74,6 +77,7 @@ impl<P: Payloads> Binding<P> {
             Self::StorageImage(value) | Self::SampledImage(value) => Some(value.key),
             Self::Sampler(value) => Some(value.key),
             Self::Acceleration(value) => Some(value.key),
+            Self::LightWorld(value) => Some(value.key),
             _ => None,
         }
     }
@@ -262,6 +266,21 @@ impl<R> Acceleration<R> {
 }
 
 #[cfg_attr(verus_only, verus_verify)]
+pub(crate) struct WorldLights<R> {
+    pub(crate) regions: Vec<handles::LightRegion>,
+    pub(crate) producer: Option<RecordId>,
+    pub(crate) raw: R,
+}
+
+#[cfg_attr(verus_only, verus_verify)]
+#[derive(Clone, Copy)]
+pub(crate) struct LightSlice {
+    pub(crate) page: handles::Buffer,
+    pub(crate) offset: u64,
+    pub(crate) len: u64,
+}
+
+#[cfg_attr(verus_only, verus_verify)]
 pub(crate) enum Data<P: Payloads> {
     Timestamps(P::Queries),
     Buffer(P::Buffer),
@@ -275,6 +294,8 @@ pub(crate) enum Data<P: Payloads> {
     Compute(Version),
     Blas(Blas<P::Structure>),
     Acceleration(Acceleration<P::Structure>),
+    LightWorld(WorldLights<P::Buffer>),
+    LightRegion(LightSlice),
     Micromap(P::Micromap),
 }
 
@@ -289,8 +310,8 @@ impl<P: Payloads> Data<P> {
             Self::RayProgram(_) | Self::ComputeProgram(_) => 2,
             Self::Layout(_) => 3,
             Self::Acceleration(_) => 4,
-            Self::Blas(_) => 5,
-            Self::Micromap(_) => 6,
+            Self::Blas(_) | Self::LightWorld(_) => 5,
+            Self::Micromap(_) | Self::LightRegion(_) => 6,
             _ => 7,
         }
     }
@@ -300,6 +321,7 @@ impl<P: Payloads> Data<P> {
         match self {
             Self::Blas(data) => data.producer,
             Self::Acceleration(data) => data.producer,
+            Self::LightWorld(data) => data.producer,
             _ => None,
         }
     }
@@ -316,6 +338,10 @@ impl<P: Payloads> Data<P> {
                 true
             }
             Self::Acceleration(data) => {
+                data.producer = producer;
+                true
+            }
+            Self::LightWorld(data) => {
                 data.producer = producer;
                 true
             }
@@ -355,6 +381,8 @@ impl<P: Payloads> Data<P> {
                 }
             }
             Self::Acceleration(data) => data.bottoms.len(),
+            Self::LightWorld(data) => data.regions.len(),
+            Self::LightRegion(_) => 1,
             _ => 0,
         }
     }
@@ -401,6 +429,14 @@ impl<P: Payloads> Data<P> {
                 }
             }
             Self::Acceleration(data) => Some(data.bottoms.get(index)?.key),
+            Self::LightWorld(data) => Some(data.regions.get(index)?.key),
+            Self::LightRegion(data) => {
+                if index == 0 {
+                    Some(data.page.key)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

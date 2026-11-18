@@ -38,6 +38,8 @@ pub enum Binding {
     Sampler(Sampler),
     /// 同设备 AS。
     Acceleration(crate::AccelerationStructure),
+    /// 同设备世界光源树。绑定版本保活世界目录和引用的区块子树。
+    LightWorld(LightWorld),
     /// 宿主资源。
     External(ExternalBinding),
 }
@@ -53,6 +55,7 @@ impl Binding {
             Self::SampledTexture(v) => StoredBinding::SampledTexture(v.clone()),
             Self::Sampler(v) => StoredBinding::Sampler(*v),
             Self::Acceleration(v) => StoredBinding::Acceleration(*v),
+            Self::LightWorld(v) => StoredBinding::LightWorld(*v),
             Self::External(v) => StoredBinding::External(*v),
         }
     }
@@ -62,6 +65,7 @@ impl Binding {
             Self::StorageImage(v) | Self::SampledImage(v) => v.key.owner,
             Self::Sampler(v) => v.key.owner,
             Self::Acceleration(v) => v.key.owner,
+            Self::LightWorld(v) => v.key.owner,
             Self::SharedBuffer(v) => v.device,
             Self::SharedTexture(v) => v.device,
             Self::SampledTexture(v) => v.device,
@@ -74,6 +78,7 @@ impl Binding {
             Self::StorageImage(v) | Self::SampledImage(v) => Some(v.key),
             Self::Sampler(v) => Some(v.key),
             Self::Acceleration(v) => Some(v.key),
+            Self::LightWorld(v) => Some(v.key),
             _ => None,
         }
     }
@@ -81,6 +86,7 @@ impl Binding {
         match self {
             Self::UniformBuffer(_) => vk::DescriptorType::UNIFORM_BUFFER,
             Self::StorageBuffer(_)
+            | Self::LightWorld(_)
             | Self::SharedBuffer(_)
             | Self::External(ExternalBinding {
                 kind: ExternalKind::StorageBuffer { .. },
@@ -112,6 +118,7 @@ impl StoredBinding {
         match self {
             Self::UniformBuffer(_) => vk::DescriptorType::UNIFORM_BUFFER,
             Self::StorageBuffer(_)
+            | Self::LightWorld(_)
             | Self::SharedBuffer(_)
             | Self::External(ExternalBinding {
                 kind: ExternalKind::StorageBuffer { .. },
@@ -370,6 +377,13 @@ pub(super) fn create_bindings(
         let handles;
         let mut acceleration;
         match resource {
+            StoredBinding::LightWorld(world) => {
+                let data = world.data(context)?;
+                buffer_info = [vk::DescriptorBufferInfo::default()
+                    .buffer(data.raw.raw)
+                    .range(data.raw.len as u64)];
+                write = write.buffer_info(&buffer_info);
+            }
             StoredBinding::StorageBuffer(v) | StoredBinding::UniformBuffer(v) => {
                 buffer_info = [vk::DescriptorBufferInfo::default()
                     .buffer(v.data(context)?.raw)

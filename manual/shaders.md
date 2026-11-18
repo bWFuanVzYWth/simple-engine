@@ -23,6 +23,6 @@ import geometry.ray;
 
 模块按职责放在 `shaders/` 下，例如 `openpbr/closure/base.slang`。输出 PT 图像时，用 `pt::resolve_linear_hdr` 取得线性结果并检查 `.w`，需要显示色时再把有效的 `.xyz` 交给 `display::prime_drt_linear_bt709`。
 
-四边形灯面的正向采样和反向 PDF 都接收调用方提供的选灯概率。使用光源树时，让同一个 `light_bvh::LightBvhProposal` 按接收点采样和查询 PMF，再把结果交给 `light_sampling.quad`。
+四边形灯面的正向采样和反向 PDF 接收同一世界树版本提供的选灯概率。按区块重建子树，再用各区块摘要生成世界树。命中反查与正向选灯共用区块内灯号和同一组随机格点。构建与提交见 [`WgpuContext::record_light_world`](../target/doc/vulkan/interop/struct.WgpuContext.html#method.record_light_world)。
 
 [模块 API 索引](../target/doc/simple_engine/shader_library/index.html)链接来源与硬件边界；参数、数值前提及返回语义保留在对应 [Slang 声明](../shaders)。不要从手册复制误差系数、矩阵或内存布局。修改后运行[生产 shader 测试](gpu-test.md)，按实际涉及的 compute/RT 路径选择设备；移植几何算法时同时核对 [NVIDIA 许可证](../LICENSES/NVIDIA-self-intersection-avoidance.txt)。

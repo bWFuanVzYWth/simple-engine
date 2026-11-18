@@ -250,7 +250,8 @@ pub(crate) open(in crate::lifecycle) spec fn finishing<P: Payloads, B>(before: &
 pub(crate) open(in crate::lifecycle) spec fn roots_valid<P: Payloads>(resources: &Arena<Data<P>>, owner: u64, roots: Seq<Key>, count: int) -> bool {
     0 <= count <= roots.len() && forall|i: int| #![auto] 0 <= i < count ==> roots[i].owner == owner
         && resources.lookup(roots[i]) is Some && (resources.lookup(roots[i])->Some_0.kind_value() == ResourceKind::Blas
-            || resources.lookup(roots[i])->Some_0.kind_value() == ResourceKind::Acceleration)
+            || resources.lookup(roots[i])->Some_0.kind_value() == ResourceKind::Acceleration
+            || resources.lookup(roots[i])->Some_0.kind_value() == ResourceKind::LightWorld)
 }
 
 pub(crate) open(in crate::lifecycle) spec fn build_inputs<P: Payloads, B>(life: &Life<P, B>, record: &Record<B>) -> bool {

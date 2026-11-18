@@ -106,8 +106,17 @@ impl Commands {
     }
     /// 固化 ID/ABI、保活根及直接资源访问；返回票据由 owner 显式提交或取消。
     pub fn finish(self, context: &mut Context) -> Result<Recorded, Error> {
+        self.finish_build(context, Vec::new())
+    }
+
+    // 仅构建器将本次独占创建、未关联 producer 的输出传进记录。
+    pub(super) fn finish_build(
+        self,
+        context: &mut Context,
+        outputs: Vec<Key>,
+    ) -> Result<Recorded, Error> {
         let uses = self.validate(context)?;
-        let record = Record::new(self.operations, uses, Vec::new(), BuildBuffers::default());
+        let record = Record::new(self.operations, uses, outputs, BuildBuffers::default());
         let key = context
             .life
             .insert_record(record)

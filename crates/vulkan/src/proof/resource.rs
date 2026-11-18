@@ -21,7 +21,8 @@ impl<P: Payloads> Binding<P> {
             Self::StorageBuffer(_) | Self::UniformBuffer(_) => Some(ResourceKind::Buffer),
             Self::StorageImage(_) | Self::SampledImage(_) => Some(ResourceKind::Image),
             Self::Sampler(_) => Some(ResourceKind::Sampler),
-            Self::Acceleration(_) => Some(ResourceKind::Acceleration), _ => None,
+            Self::Acceleration(_) => Some(ResourceKind::Acceleration),
+            Self::LightWorld(_) => Some(ResourceKind::LightWorld), _ => None,
         }
     }
     pub(crate) open(super) spec fn dependency_view(&self) -> Option<Key> {
@@ -30,6 +31,7 @@ impl<P: Payloads> Binding<P> {
             Self::StorageImage(value) | Self::SampledImage(value) => Some(value.key),
             Self::Sampler(value) => Some(value.key),
             Self::Acceleration(value) => Some(value.key),
+            Self::LightWorld(value) => Some(value.key),
             _ => None,
         }
     }
@@ -72,14 +74,15 @@ pub(crate) open spec fn rank(kind: ResourceKind) -> u8 {
         ResourceKind::Bindings => 1,
         ResourceKind::RayProgram | ResourceKind::ComputeProgram => 2,
         ResourceKind::Layout => 3, ResourceKind::Acceleration => 4,
-        ResourceKind::Blas => 5, ResourceKind::Micromap => 6, _ => 7,
+        ResourceKind::Blas | ResourceKind::LightWorld => 5,
+        ResourceKind::Micromap | ResourceKind::LightRegion => 6, _ => 7,
     }
 }
 impl ResourceKind {
     pub(crate) open spec fn rank(self) -> u8 { rank(self) }
 }
 pub(crate) open spec fn is_build(kind: ResourceKind) -> bool {
-    kind == ResourceKind::Blas || kind == ResourceKind::Acceleration
+    kind == ResourceKind::Blas || kind == ResourceKind::Acceleration || kind == ResourceKind::LightWorld
 }
 
 impl<P: Payloads> Data<P> {
@@ -91,16 +94,22 @@ impl<P: Payloads> Data<P> {
             Self::RayProgram(_) => ResourceKind::RayProgram, Self::ComputeProgram(_) => ResourceKind::ComputeProgram,
             Self::Ray(_) => ResourceKind::Ray, Self::Compute(_) => ResourceKind::Compute,
             Self::Blas(_) => ResourceKind::Blas, Self::Acceleration(_) => ResourceKind::Acceleration,
+            Self::LightWorld(_) => ResourceKind::LightWorld,
+            Self::LightRegion(_) => ResourceKind::LightRegion,
             Self::Micromap(_) => ResourceKind::Micromap,
         }
     }
     pub(crate) open(super) spec fn producer_value(&self) -> Option<RecordId> {
-        match self { Self::Blas(data) => data.producer, Self::Acceleration(data) => data.producer, _ => None }
+        match self {
+            Self::Blas(data) => data.producer, Self::Acceleration(data) => data.producer,
+            Self::LightWorld(data) => data.producer, _ => None,
+        }
     }
     pub(crate) open(super) spec fn with_producer(&self, producer: Option<RecordId>) -> Self {
         match self {
             Self::Blas(data) => Self::Blas(Blas { opacity: data.opacity, producer, raw: data.raw }),
             Self::Acceleration(data) => Self::Acceleration(Acceleration { bottoms: data.bottoms, producer, raw: data.raw }),
+            Self::LightWorld(data) => Self::LightWorld(WorldLights { regions: data.regions, producer, raw: data.raw }),
             _ => *self,
         }
     }
@@ -122,7 +131,7 @@ impl<P: Payloads> Data<P> {
     {}
     pub(crate) proof fn producer_is_build_output(&self)
         requires self.producer_value() is Some,
-        ensures self.kind_value() == ResourceKind::Blas || self.kind_value() == ResourceKind::Acceleration,
+        ensures is_build(self.kind_value()),
     {}
     pub(crate) proof fn expected_kind(&self, index: int)
         requires index >= 0,
@@ -142,6 +151,8 @@ impl<P: Payloads> Data<P> {
             Self::RayProgram(_) | Self::ComputeProgram(_) => if index == 0 { Some(ResourceKind::Layout) } else { None },
             Self::Blas(data) => if index == 0 && data.opacity is Some { Some(ResourceKind::Micromap) } else { None },
             Self::Acceleration(data) => if 0 <= index < data.bottoms@.len() { Some(ResourceKind::Blas) } else { None },
+            Self::LightWorld(data) => if 0 <= index < data.regions@.len() { Some(ResourceKind::LightRegion) } else { None },
+            Self::LightRegion(_) => if index == 0 { Some(ResourceKind::Buffer) } else { None },
             _ => None,
         }
     }
@@ -158,6 +169,8 @@ impl<P: Payloads> View for Data<P> {
             Self::ComputeProgram(data) => seq![Some(data.set_layout)],
             Self::Blas(data) => match data.opacity { Some(map) => seq![Some(map.key)], None => Seq::empty() },
             Self::Acceleration(data) => data.bottoms@.map(|i: int, blas: handles::TriangleBlas| Some(blas.key)),
+            Self::LightWorld(data) => data.regions@.map(|i: int, region: handles::LightRegion| Some(region.key)),
+            Self::LightRegion(data) => seq![Some(data.page.key)],
             _ => Seq::empty(),
         }
     }
@@ -169,7 +182,9 @@ pub(super) proof fn edge_shape<P: Payloads>(data: &Data<P>)
         Data::Ray(_) | Data::Compute(_) => 2,
         Data::RayProgram(_) | Data::ComputeProgram(_) => 1,
         Data::Blas(value) => if value.opacity is Some { 1nat } else { 0nat },
-        Data::Acceleration(value) => value.bottoms@.len(), _ => 0,
+        Data::Acceleration(value) => value.bottoms@.len(),
+        Data::LightWorld(value) => value.regions@.len(),
+        Data::LightRegion(_) => 1, _ => 0,
     },
 {
     broadcast use vstd::seq_lib::group_seq_properties;
@@ -188,6 +203,8 @@ pub(super) proof fn edge_at<P: Payloads>(data: &Data<P>, index: int)
         Data::ComputeProgram(value) => if index == 0 { Some(value.set_layout) } else { None },
         Data::Blas(value) => if index == 0 { match value.opacity { Some(map) => Some(map.key), None => None } } else { None },
         Data::Acceleration(value) => if index < value.bottoms@.len() { Some(value.bottoms@[index].key) } else { None },
+        Data::LightWorld(value) => if index < value.regions@.len() { Some(value.regions@[index].key) } else { None },
+        Data::LightRegion(value) => if index == 0 { Some(value.page.key) } else { None },
         _ => None,
     },
 {

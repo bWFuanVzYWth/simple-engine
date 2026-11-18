@@ -1351,7 +1351,6 @@ dependencies = [
 name = "light_sampling"
 version = "0.1.0"
 dependencies = [
- "light_bvh",
  "scene_cache",
  "thiserror 2.0.21",
 ]
@@ -2587,6 +2586,7 @@ name = "shader_tests"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "bytemuck",
  "half",
  "serde_json",
  "simple_engine",

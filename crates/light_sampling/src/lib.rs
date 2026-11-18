@@ -1,4 +1,4 @@
-//! 光源采样统一入口：软化叶节点的功率距离 BVH、灯面 alias 与活动光源目录。
+//! 灯面采样、纹理 alias 与活动光源目录。
 //!
 //! 资源准备算法不拥有纹理、材质或设备，不决定发光功率和发射侧。
 //! [`registry`] 可选地维护活动槽与反查身份；应用负责 GPU 发布与完成边界。
@@ -9,7 +9,7 @@
 //! 正反向概率以同一个 24-bit 均匀整数选择器为准。正权至少获得一个选择器，
 //! 因而不会承诺与理想浮点权重完全成比例；MIS 须使用编码中的实际 PMF。
 //! 对应 shader 为 `shaders/light_sampling/quad.slang`，独立于场景和 BSDF。
-//! [`emitter`]补充资源期纹理texel裁剪与静态alias；与 [`bvh`] 的位置提案组合；可见性仍由输运查询决定。
+//! [`emitter`]处理资源期纹理 texel 裁剪与静态 alias。灯面提案与 GPU 选灯概率组合，可见性由输运查询决定。
 
 #![forbid(unsafe_code)]
 
@@ -19,12 +19,10 @@ mod quad;
 pub mod registry;
 
 pub use alias::{AliasSample, AliasTable};
-/// 功率距离 BVH；叶节点软化和正反向 24-bit PMF 遵循同一协议。
-pub use light_bvh as bvh;
 pub use quad::QuadArea;
 
 /// CPU 与 shader 共享的均匀整数选择器总数。
-pub use bvh::SELECTORS;
+pub const SELECTORS: u32 = 1 << 24;
 
 /// 沿几何法线正侧发射，对应 shader `LIGHT_FRONT`。
 pub const FRONT_SIDE: u32 = 1;

@@ -130,7 +130,7 @@ impl Context {
             }
             Ok(())
         })?;
-        self.submit_terrain(raw, Default::default(), |op| {
+        self.submit_terrain(raw, Default::default(), Vec::new(), |op| {
             op.access(source.into())?;
             for &(dst, _, _, _) in ranges {
                 op.access(dst.into())?;
@@ -161,7 +161,7 @@ impl Context {
             }
             Ok(())
         })?;
-        self.submit_terrain(raw, Default::default(), |op| {
+        self.submit_terrain(raw, Default::default(), Vec::new(), |op| {
             op.access(src.into())?;
             op.access(dst.into())
         })
@@ -171,13 +171,14 @@ impl Context {
         &mut self,
         mut raw: Recording,
         buffers: [BuildBuffers; 2],
+        outputs: Vec<Key>,
         roots: impl FnOnce(&mut Commands) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let result = (|| {
             self.terrain_flights.try_reserve(1)?;
             let mut op = Commands::new(self)?;
             roots(&mut op)?;
-            let record = op.finish(self)?;
+            let record = op.finish_build(self, outputs)?;
             // SAFETY: 私有 command 属于同一设备队列；此 owner 接管唯一完成票据。
             let flight = unsafe { record.encode(self, raw.command.as_raw())? };
             let submit = unsafe {
