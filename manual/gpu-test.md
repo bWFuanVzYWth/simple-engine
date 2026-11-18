@@ -91,6 +91,20 @@ cargo bench --locked -p shader_tests --bench kernels -- transport
 
 省略目录名时运行全部 kernel 负载，报告每项 GPU 时间、输入和输出指纹。
 
+软件光追的 4K 步进基准覆盖单体素推进、均匀区域跳跃及平行轴、等时边界：
+
+```powershell
+cargo bench --locked -p shader_tests --bench kernels -- voxel
+```
+
+这项测量只运行步进算法。若已检出 `app/game`，在引擎仓库根目录运行下面的命令，可补测
+默认 3072×64×3072 地形上的生产 DAG 遍历。游戏入口的验证图像为 192×128，JSON 记录与 CPU
+逐条对照的射线数及派发到完成的总墙钟。命中身份不一致时进程以非零状态退出。
+
+```powershell
+cargo run --locked --release --manifest-path app/game/Cargo.toml --bin game -- --renderer software --world-size 3072 --bench-traversal 64 --output temp/game/voxel.png
+```
+
 通用 shader benchmark 测量生产 geometry 的三角端点与连接构造，不含硬件求交。按需选择 `all`、`coherent`、`incoherent`、`grazing` 分布及坐标尺度：
 
 ```powershell

@@ -119,6 +119,12 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-light_sampling.spv",
         ),
         (
+            "shaders/voxel_bench.slang",
+            "dda_main",
+            "compute",
+            "bench-voxel.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",

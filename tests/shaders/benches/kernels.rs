@@ -51,6 +51,13 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "emitter_main",
         ),
     ),
+    (
+        "voxel",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-voxel.spv")),
+            "dda_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {
