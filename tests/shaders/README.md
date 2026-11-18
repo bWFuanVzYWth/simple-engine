@@ -49,6 +49,16 @@ grid/clustered × 24/4096/65536 灯、两种查询顺序，共24项。`--case` �
 cargo run --release -p shader_tests --bin light_bvh_bench -- --case grid/4096/coherent --output temp/light-bvh/baseline
 ```
 
+大规模场景可用 `--lights` 指定一个或多个灯数。以下命令测 100 万和 300 万盏网格光源，接收点分布在整棵树的空间范围内。
+
+```powershell
+cargo run --release -p shader_tests --bin light_bvh_bench -- --lights 1000000 --lights 3000000 --case grid/ --record hashes --output temp/light-bvh/millions
+```
+
+设备须能将整棵树绑定为一个 storage buffer。`--record hashes` 保留原始计时样本和二进制指纹，省去重复保存大型树。需要保留原始缓冲时使用默认的 `--record raw`。
+
+每次运行保存两个查询入口的 SPIR-V。比较使用相同布局的版本时，把上次的输出目录传给 `--reference` 并指定新的 `--output`。两版管线按轮次交换先后顺序，共用同一设备上的树、查询和输出缓冲，报告各自的计时样本与结果指纹。
+
 [入口](src/bin/light_bvh_bench.rs)记录 CPU build、分配、完成上传、encode/submit/completion/
 timequery 与 GPU timestamp。树和查询在稳态轮次中不更新；完整输出回读、校验另计。
 GPU 时间包含每次 dispatch 独立 pass 的 WAW 依赖。各入口重复记录共享的树构建／上传及

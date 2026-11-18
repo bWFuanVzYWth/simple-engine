@@ -42,15 +42,10 @@ func light_bvh_pair(words: StructuredBuffer<uint4>, base: uint, packets: uint, a
     let a : float4 = asfloat(words[block_base + 2u * within]);
     let b : float4 = asfloat(words[block_base + 2u * within + 1u]);
     let topology = words[block_base + 2u * block_count + (within >> 1u)];
-    let children : uint2 = (within & 1u) == 0 ? topology.xy : topology.zw;
-    first.center = a.xyz;
-    first.power = a.w;
-    first.child = children.x;
-    first.leaves = leaves >> 1u;
-    second.center = b.xyz;
-    second.power = b.w;
-    second.child = children.y;
-    second.leaves = leaves - first.leaves;
+    let children = select((within & 1u) == 0, topology.xy, topology.zw);
+    let left_leaves = leaves >> 1u;
+    first = { a.xyz, a.w, children.x, left_leaves };
+    second = { b.xyz, b.w, children.y, leaves - left_leaves };
 }
 
 func light_bvh_metrics(words: StructuredBuffer<uint4>, leaf_base: uint, node: LightBvhNode,
@@ -84,7 +79,8 @@ func light_bvh_left_count(words: StructuredBuffer<uint4>, leaf_base: uint, first
     precise let scaled = float(count) * probability;
     let integral = uint(scaled);
     let fraction = scaled - float(integral);
-    let left : uint = integral + uint(fraction > 0.5 || (fraction == 0.5 && (integral & 1u) != 0));
+    let odd_tie = (fraction == 0.5) & ((integral & 1u) != 0);
+    let left = integral + uint((fraction > 0.5) | odd_tie);
     return clamp(left, first.leaves, count - second.leaves);
 }
 
@@ -95,47 +91,31 @@ func light_bvh_left_count(words: StructuredBuffer<uint4>, leaf_base: uint, first
 public func sample_light_bvh(words: StructuredBuffer<uint4>, base: uint, light_count: uint,
                              point_value: float3, sample_value: float)
     ->LightBvhSample {
-    var result : LightBvhSample;
-    result.light = 0xffffffffu;
-    result.pmf = 0;
     if (light_count == 0)
-        return result;
-    if (light_count == 1) {
-        result.light = 0;
-        result.pmf = 1;
-        return result;
-    }
+        return { 0xffffffffu, 0.0 };
+    if (light_count == 1)
+        return { 0u, 1.0 };
     let packets = light_count - 1u;
     let leaf_base : uint = base + (((10u * packets + 7u) & ~7u) >> 2u);
-    let target = uint(sample_value * float(LIGHT_BVH_SELECTORS));
-    var first : uint = 0;
-    var count : uint = LIGHT_BVH_SELECTORS;
-    var at : uint = 0;
-    var leaves : uint = light_count;
+    // selector 始终以当前子树的第一个格点为原点。
+    var selector = uint(sample_value * float(LIGHT_BVH_SELECTORS));
+    var count = LIGHT_BVH_SELECTORS;
+    var at = 0u;
+    var leaves = light_count;
     while (true) {
         var a : LightBvhNode;
         var b : LightBvhNode;
         light_bvh_pair(words, base, packets, at, leaves, a, b);
         let left = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
-        var child : uint;
-        if (target < first + left) {
-            count = left;
-            child = a.child;
-            leaves = a.leaves;
-        } else {
-            first += left;
-            count -= left;
-            child = b.child;
-            leaves = b.leaves;
-        }
-        if ((child & LIGHT_BVH_LEAF) != 0) {
-            result.light = child & ~LIGHT_BVH_LEAF;
-            break;
-        }
+        let right = selector >= left;
+        selector -= select(right, left, 0u);
+        count = select(right, count - left, left);
+        let child = select(right, b.child, a.child);
+        leaves = select(right, b.leaves, a.leaves);
+        if ((child & LIGHT_BVH_LEAF) != 0)
+            return { child & ~LIGHT_BVH_LEAF, float(count) * LIGHT_BVH_INVERSE_SELECTORS };
         at = child;
     }
-    result.pmf = float(count) * LIGHT_BVH_INVERSE_SELECTORS;
-    return result;
 }
 
 /// 在相同接收点重算指定灯的真实选择 PMF；空树及不在输入目录中的索引返回零。
@@ -160,9 +140,9 @@ public func light_bvh_pmf(words: StructuredBuffer<uint4>, base: uint, light_coun
         light_bvh_pair(words, base, packets, at, leaves, a, b);
         let left = light_bvh_left_count(words, leaf_base, a, b, point_value, count);
         let second : bool = ((path >> depth) & 1u) != 0;
-        count = second ? count - left : left;
-        at = second ? b.child : a.child;
-        leaves = second ? b.leaves : a.leaves;
+        count = select(second, count - left, left);
+        at = select(second, b.child, a.child);
+        leaves = select(second, b.leaves, a.leaves);
     }
     return float(count) * LIGHT_BVH_INVERSE_SELECTORS;
 }

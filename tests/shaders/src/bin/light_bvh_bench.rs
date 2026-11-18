@@ -1,9 +1,11 @@
 //! 常驻树和查询的 light BVH 吞吐基线；每 lane 查询一次，没有 shader 内重复或输出反馈。
 //!
-//! grid/clustered × 24/4096/65536 灯，分别测 sample 与 reverse PMF。coherent 每64项
+//! 默认 grid/clustered × 24/4096/65536 灯，分别测 sample 与 reverse PMF。coherent 每64项
 //! 共享接收点，selector/反查灯 ID 仍独立变化；incoherent 仅打乱完全相同的查询集合。
 //! 两种顺序按原序号还原后必须逐位相同。输出、输入指纹及几何保存在新目录，供布局改动
-//! 核对；有限值检查与最终回读在稳态计时外，布局间差异须按数学契约审查。
+//! 核对；用 --record hashes 仅保留指纹和原始时序样本，适合多轮比较大型树。
+//! --reference 读取上次运行保存的 SPIR-V，与当前管线交替查询同一棵常驻树。
+//! 有限值检查与最终回读在稳态计时外，布局间差异须按数学契约审查。
 //!
 //! GPU timestamp 包围整批 dispatch、各 pass 间依赖及边界，主机 encode/submit/completion/
 //! timequery 分列。timequery 是16B查询结果的复制、等待与映射；不含完整输出回读。
@@ -58,6 +60,9 @@ struct Args {
     output: PathBuf,
     filter: String,
     timestamps: bool,
+    lights: Vec<u32>,
+    record_payloads: bool,
+    reference: Option<PathBuf>,
 }
 
 const SEED: u32 = 0x1357_2468;
@@ -83,14 +88,17 @@ fn args() -> Result<Option<Args>> {
         output: format!("temp/light-bvh/query-{}", std::process::id()).into(),
         filter: String::new(),
         timestamps: true,
+        lights: Vec::new(),
+        record_payloads: true,
+        reference: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(key) = arguments.next() {
         if key == "--help" {
             println!(
                 "light_bvh_bench --count N --dispatches N --rounds N --adapter N \
-                 --case 子串 --timing gpu|host --output 新目录\n\
-                 case: grid|clustered / 24|4096|65536 / coherent|incoherent / sample|reverse"
+                 --lights N --case 子串 --timing gpu|host --record raw|hashes --reference 基线目录 --output 新目录\n\
+                 case: grid|clustered / 灯数 / coherent|incoherent / sample|reverse"
             );
             return Ok(None);
         }
@@ -104,6 +112,15 @@ fn args() -> Result<Option<Args>> {
             "--adapter" => result.adapter = value.parse()?,
             "--case" => result.filter = value,
             "--output" => result.output = value.into(),
+            "--lights" => result.lights.push(value.parse()?),
+            "--reference" => result.reference = Some(value.into()),
+            "--record" => {
+                result.record_payloads = match value.as_str() {
+                    "raw" => true,
+                    "hashes" => false,
+                    _ => return Err(Error::Argument("record 只支持 raw/hashes".into())),
+                }
+            }
             "--timing" => {
                 result.timestamps = match value.as_str() {
                     "gpu" => true,
@@ -116,6 +133,18 @@ fn args() -> Result<Option<Args>> {
     }
     if result.count == 0 || result.dispatches == 0 || result.rounds == 0 {
         return Err(Error::Argument("count/dispatches/rounds 须为正数".into()));
+    }
+    if result
+        .lights
+        .iter()
+        .any(|&count| !(1..=1 << 24).contains(&count))
+    {
+        return Err(Error::Argument("灯数须在 1..=16777216".into()));
+    }
+    result.lights.sort_unstable();
+    result.lights.dedup();
+    if result.lights.is_empty() {
+        result.lights.extend([24, 4096, 65_536]);
     }
     Ok(Some(result))
 }
@@ -139,9 +168,9 @@ fn bytes(words: &[u32]) -> Result<Vec<u8>> {
 
 fn geometry(count: u32, clustered: bool) -> Result<(Vec<Quad>, Vec<u8>)> {
     let mut quads = Vec::new();
-    let mut words = Vec::new();
+    let mut encoded = Vec::new();
     quads.try_reserve_exact(count as usize)?;
-    words.try_reserve_exact(count as usize * 13)?;
+    encoded.try_reserve_exact(count as usize * 52)?;
     for index in 0..count {
         let [x, y, z] = if clustered {
             [(index % 7) as f32 * 0.01, 0.0, 0.0]
@@ -162,12 +191,12 @@ fn geometry(count: u32, clustered: bool) -> Result<(Vec<Quad>, Vec<u8>)> {
             power: 1.0 + (index % 17) as f32,
         };
         for vertex in quad.vertices {
-            words.extend(vertex.map(f32::to_bits));
+            encoded.extend(vertex.into_iter().flat_map(f32::to_le_bytes));
         }
-        words.push(quad.power.to_bits());
+        encoded.extend(quad.power.to_le_bytes());
         quads.push(quad);
     }
-    Ok((quads, bytes(&words)?))
+    Ok((quads, encoded))
 }
 
 fn queries(count: u32, lights: u32, clustered: bool, shuffled: bool) -> Result<Vec<u8>> {
@@ -180,6 +209,13 @@ fn queries(count: u32, lights: u32, clustered: bool, shuffled: bool) -> Result<V
                 (tile % 32) as f32 * 0.005 - 0.08,
                 ((tile / 32) % 32) as f32 * 0.005 - 0.08,
                 0.25 + ((tile / 1024) % 16) as f32 * 0.125,
+            ]
+        } else if lights > 65_536 {
+            let anchor = mix(tile ^ SEED) % lights;
+            [
+                (anchor % 64) as f32 * 4.0 + 0.5,
+                ((anchor / 64) % 64) as f32 * 4.0 + 0.5,
+                (anchor / 4096) as f32 * 4.0 - 2.0,
             ]
         } else {
             [
@@ -228,11 +264,12 @@ struct Timestamps {
 struct Programs {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::ComputePipeline; 2],
+    reference: [Option<(wgpu::ComputePipeline, blake3::Hash)>; 2],
     timestamps: Option<Timestamps>,
 }
 
 impl Programs {
-    fn new(gpu: &Gpu, timestamps: bool) -> Result<Self> {
+    fn new(gpu: &Gpu, args: &Args) -> Result<Self> {
         let context = gpu.context();
         let device = context.device();
         let entries = std::array::from_fn::<_, 3, _>(|index| wgpu::BindGroupLayoutEntry {
@@ -256,10 +293,9 @@ impl Programs {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let mut pipelines = Vec::new();
-        for (_, entry, spirv) in KERNELS {
+        let create = |entry, spirv: &[u8]| -> Result<_> {
             let module = context.shader(spirv, entry, [64, 1, 1])?;
-            pipelines.push(
+            Ok(
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry),
                     layout: Some(&pipeline_layout),
@@ -268,9 +304,18 @@ impl Programs {
                     compilation_options: Default::default(),
                     cache: None,
                 }),
-            );
+            )
+        };
+        let mut pipelines = Vec::new();
+        let mut reference = [None, None];
+        for (kernel, (_, entry, spirv)) in KERNELS.into_iter().enumerate() {
+            pipelines.push(create(entry, spirv)?);
+            if let Some(directory) = &args.reference {
+                let bytes = std::fs::read(directory.join(format!("{entry}.spv")))?;
+                reference[kernel] = Some((create(entry, &bytes)?, blake3::hash(&bytes)));
+            }
         }
-        let timestamps = timestamps.then(|| Timestamps {
+        let timestamps = args.timestamps.then(|| Timestamps {
             set: device.create_query_set(&wgpu::QuerySetDescriptor {
                 label: Some("light BVH time"),
                 ty: wgpu::QueryType::Timestamp,
@@ -286,6 +331,7 @@ impl Programs {
         Ok(Self {
             layout,
             pipelines: pipelines.try_into().unwrap(),
+            reference,
             timestamps,
         })
     }
@@ -330,7 +376,7 @@ fn dispatch(
     gpu: &mut Gpu,
     programs: &Programs,
     bindings: &wgpu::BindGroup,
-    kernel: usize,
+    pipeline: &wgpu::ComputePipeline,
     count: u32,
     dispatches: u32,
 ) -> Result<serde_json::Value> {
@@ -349,7 +395,7 @@ fn dispatch(
     // 每个 dispatch 独占一个 pass，由 wgpu 在 pass 边界排序重复写 output 的 WAW 依赖。
     for _ in 0..dispatches {
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&programs.pipelines[kernel]);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bindings, &[]);
         pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
     }
@@ -441,12 +487,12 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
         ));
     }
     let start = Instant::now();
-    let programs = Programs::new(gpu, args.timestamps)?;
+    let programs = Programs::new(gpu, args)?;
     gpu.check()?;
     let pipeline_seconds = start.elapsed().as_secs_f64();
     let mut cases = Vec::new();
     for kind in ["grid", "clustered"] {
-        for lights in [24, 4096, 65_536] {
+        for &lights in &args.lights {
             let prefix = format!("{kind}/{lights}");
             if !["coherent", "incoherent"].into_iter().any(|order| {
                 KERNELS.iter().any(|(operation, _, _)| {
@@ -463,15 +509,22 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
             let start = Instant::now();
             let tree = Tree::build(&quads)?;
             let build_seconds = start.elapsed().as_secs_f64();
+            drop(quads);
+            let nodes = tree.node_count();
             let tree_bytes = bytes(tree.words())?;
+            drop(tree);
             if tree_bytes.len() as u64 > limits.max_storage_buffer_binding_size {
                 return Err(Error::Argument("树超过设备 storage binding 上限".into()));
             }
             let checksum_start = Instant::now();
             let tree_hash = blake3::hash(&tree_bytes).to_hex().to_string();
             let tree_checksum_seconds = checksum_start.elapsed().as_secs_f64();
-            std::fs::write(directory.join("quads.bin"), &geometry)?;
-            std::fs::write(directory.join("tree.bin"), &tree_bytes)?;
+            let geometry_hash = blake3::hash(&geometry).to_hex();
+            if args.record_payloads {
+                std::fs::write(directory.join("quads.bin"), &geometry)?;
+                std::fs::write(directory.join("tree.bin"), &tree_bytes)?;
+            }
+            drop(geometry);
             let start = Instant::now();
             let tree_buffer = buffer(
                 gpu,
@@ -481,6 +534,7 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
             );
             let tree_allocation_seconds = start.elapsed().as_secs_f64();
             let tree_upload = upload(gpu, &tree_buffer, &tree_bytes)?;
+            drop(tree_bytes);
             let mut canonical: [Option<Vec<u8>>; 2] = [None, None];
             for order in ["coherent", "incoherent"] {
                 let active: [bool; 2] = std::array::from_fn(|index| {
@@ -497,7 +551,9 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
                     order == "incoherent",
                 )?;
                 let query_seconds = start.elapsed().as_secs_f64();
-                std::fs::write(directory.join(format!("{order}-queries.bin")), &input)?;
+                if args.record_payloads {
+                    std::fs::write(directory.join(format!("{order}-queries.bin")), &input)?;
+                }
                 let start = Instant::now();
                 let query_buffer = buffer(
                     gpu,
@@ -535,14 +591,25 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
                 let io_allocation_binding_seconds = start.elapsed().as_secs_f64();
                 let query_upload = upload(gpu, &query_buffer, &input)?;
                 let mut samples: [Vec<serde_json::Value>; 2] = [Vec::new(), Vec::new()];
+                let mut reference_samples: [Vec<serde_json::Value>; 2] = [Vec::new(), Vec::new()];
                 for (kernel, &enabled) in active.iter().enumerate() {
                     if enabled {
                         for _ in 0..2 {
+                            if let Some((pipeline, _)) = &programs.reference[kernel] {
+                                dispatch(
+                                    gpu,
+                                    &programs,
+                                    &bindings,
+                                    pipeline,
+                                    args.count,
+                                    args.dispatches,
+                                )?;
+                            }
                             dispatch(
                                 gpu,
                                 &programs,
                                 &bindings,
-                                kernel,
+                                &programs.pipelines[kernel],
                                 args.count,
                                 args.dispatches,
                             )?;
@@ -553,17 +620,34 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
                     for position in 0..2 {
                         let kernel = (position + round as usize) % 2;
                         if active[kernel] {
-                            let mut sample = dispatch(
-                                gpu,
-                                &programs,
-                                &bindings,
-                                kernel,
-                                args.count,
-                                args.dispatches,
-                            )?;
-                            sample["round"] = round.into();
-                            sample["position"] = position.into();
-                            samples[kernel].push(sample);
+                            let reference = programs.reference[kernel]
+                                .as_ref()
+                                .map(|(pipeline, _)| (true, pipeline));
+                            let mut variants =
+                                [reference, Some((false, &programs.pipelines[kernel]))];
+                            if round % 2 != 0 {
+                                variants.swap(0, 1);
+                            }
+                            for (variant_position, (is_reference, pipeline)) in
+                                variants.into_iter().flatten().enumerate()
+                            {
+                                let mut sample = dispatch(
+                                    gpu,
+                                    &programs,
+                                    &bindings,
+                                    pipeline,
+                                    args.count,
+                                    args.dispatches,
+                                )?;
+                                sample["round"] = round.into();
+                                sample["position"] = position.into();
+                                sample["variant_position"] = variant_position.into();
+                                if is_reference {
+                                    reference_samples[kernel].push(sample);
+                                } else {
+                                    samples[kernel].push(sample);
+                                }
+                            }
                         }
                     }
                 }
@@ -572,7 +656,14 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
                         continue;
                     }
                     let name = format!("{prefix}/{order}/{}", KERNELS[kernel].0);
-                    dispatch(gpu, &programs, &bindings, kernel, args.count, 1)?;
+                    dispatch(
+                        gpu,
+                        &programs,
+                        &bindings,
+                        &programs.pipelines[kernel],
+                        args.count,
+                        1,
+                    )?;
                     let start = Instant::now();
                     let raw = gpu.readback(&output)?;
                     let output_readback_seconds = start.elapsed().as_secs_f64();
@@ -589,22 +680,42 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
                     canonical[kernel] = Some(normalized);
                     let output_checksum_seconds = start.elapsed().as_secs_f64();
                     let output_file = format!("{order}-{}.bin", KERNELS[kernel].0);
-                    std::fs::write(directory.join(&output_file), &raw)?;
+                    if args.record_payloads {
+                        std::fs::write(directory.join(&output_file), &raw)?;
+                    }
+                    let reference_output = if let Some((pipeline, _)) = &programs.reference[kernel]
+                    {
+                        dispatch(gpu, &programs, &bindings, pipeline, args.count, 1)?;
+                        let reference = gpu.readback(&output)?;
+                        canonical_output(&reference, args.count, lights, &name)?;
+                        if args.record_payloads {
+                            std::fs::write(
+                                directory
+                                    .join(format!("{order}-{}-reference.bin", KERNELS[kernel].0)),
+                                &reference,
+                            )?;
+                        }
+                        Some(blake3::hash(&reference).to_hex().to_string())
+                    } else {
+                        None
+                    };
                     let report = serde_json::json!({
-                        "case":name,"lights":lights,"nodes":tree.node_count(),"queries":args.count,
-                        "geometry_blake3":blake3::hash(&geometry).to_hex().as_str(),
+                        "case":name,"lights":lights,"nodes":nodes,"queries":args.count,
+                        "geometry_blake3":geometry_hash.as_str(),
                         "query_blake3":blake3::hash(&input).to_hex().as_str(),
                         "tree_blake3":tree_hash,"output_blake3":blake3::hash(&raw).to_hex().as_str(),
                         "canonical_output_blake3":canonical_hash,"order_comparison_bitwise":if compared_order {Some(true)}else{None},
-                        "output_file":format!("{kind}-{lights}/{output_file}"),
+                        "output_file":args.record_payloads.then(|| format!("{kind}-{lights}/{output_file}")),
                         "geometry_seconds":geometry_seconds,"build_seconds":build_seconds,
                         "tree_checksum_seconds":tree_checksum_seconds,"query_seconds":query_seconds,
                         "tree_allocation_seconds":tree_allocation_seconds,"tree_upload":tree_upload,
                         "io_allocation_binding_seconds":io_allocation_binding_seconds,"query_upload":query_upload,
-                        "tree_bytes":tree_bytes.len(),"query_bytes":input.len(),"output_bytes":output.size(),
+                        "tree_bytes":tree_buffer.size(),"query_bytes":input.len(),"output_bytes":output.size(),
                         "resident_buffer_bytes":tree_buffer.size()+query_buffer.size()+output.size(),
                         "output_readback_seconds":output_readback_seconds,"output_checksum_seconds":output_checksum_seconds,
-                        "samples":samples[kernel]
+                        "samples":samples[kernel],
+                        "reference_samples":reference_samples[kernel],
+                        "reference_output_blake3":reference_output,
                     });
                     write_json(
                         &directory.join(format!("{order}-{}.json", KERNELS[kernel].0)),
@@ -627,10 +738,12 @@ fn run_cases(gpu: &mut Gpu, args: &Args) -> Result<serde_json::Value> {
         "version":1,"layout":"median_packet_block4_v3","seed":SEED,"device":device.name,"driver":device.driver_info,
         "timing":if args.timestamps {"gpu_timestamp_and_host"}else{"host_only_explicit"},
         "count":args.count,"dispatches":args.dispatches,"rounds":args.rounds,"warmup_batches":2,
+        "record":if args.record_payloads {"raw"} else {"hashes"},
         "pipeline_seconds":pipeline_seconds,"slang":shader_tests::SLANG_VERSION,
         "source_blake3":shader_tests::SOURCE_BLAKE3,"shader_build_blake3":shader_tests::SHADER_BUILD_BLAKE3,
         "executable_blake3":executable.finalize().to_hex().as_str(),
         "kernels":KERNELS.map(|(name,entry,spirv)|serde_json::json!({"name":name,"entry":entry,"spirv_blake3":blake3::hash(spirv).to_hex().as_str()})),
+        "reference_spirv_blake3":programs.reference.each_ref().map(|reference|reference.as_ref().map(|(_, hash)| hash.to_hex().to_string())),
         "profile":if cfg!(debug_assertions){"debug"}else{"release"},
         "scope":"常驻单层quad light BVH查询；不含TraceRay、BSDF、图像与游戏调度，不外推整帧",
         "query_contract":"4-word header(count,lights,base,reserved)+8 words(point.xyz,sample,reverseID,0,0,originalID)；反查ID固定散列，不是前向查询结果",
@@ -658,6 +771,9 @@ fn run() -> Result {
     let mut report = result?;
     cleanup?;
     report["setup_seconds"] = setup_seconds.into();
+    for (_, entry, spirv) in KERNELS {
+        std::fs::write(args.output.join(format!("{entry}.spv")), spirv)?;
+    }
     write_json(&args.output.join("report.json"), &report)?;
     println!("{}：{}", report["device"], args.output.display());
     Ok(())
