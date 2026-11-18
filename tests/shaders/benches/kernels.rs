@@ -86,6 +86,13 @@ const KERNELS: &[(&str, Shader<'static>)] = &[
             "dual_sample_main",
         ),
     ),
+    (
+        "restir_pt",
+        shader(
+            include_bytes!(concat!(env!("OUT_DIR"), "/bench-restir_pt.spv")),
+            "reuse_main",
+        ),
+    ),
 ];
 
 const fn shader(spirv: &'static [u8], entry: &'static str) -> Shader<'static> {

@@ -149,6 +149,12 @@ fn main() -> Result<(), shader_build::Error> {
             "bench-pt-dual.spv",
         ),
         (
+            "shaders/restir_pt_bench.slang",
+            "reuse_main",
+            "compute",
+            "bench-restir_pt.spv",
+        ),
+        (
             "shaders/reconstruction.slang",
             "rigid_motion_main",
             "compute",
