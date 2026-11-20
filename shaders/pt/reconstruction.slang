@@ -156,10 +156,21 @@ public func guide_delta_direction(material: transport::SurfaceMaterial, normal: 
     return reflect(direction, normal);
 }
 
-func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
-                             first_reflection: bool)
-    ->GuideEndpoint
-    where Scene : IGuideScene {
+/// 观察固定导引已经选定的界面。可积累沿途的辐射权重，不能改变导引方向、预算或终点。
+public interface IGuidePrefix {
+    [mutating]
+    func boundary(vertex: GuideEndpoint, reflection: bool)->void;
+};
+struct NoGuidePrefix : IGuidePrefix {
+    [mutating]
+    func boundary(vertex: GuideEndpoint, reflection: bool)->void {
+    }
+};
+
+/// 与 trace_guide 共享查询与回退。观察值只有在返回实际终点或天空时才可用于传输。
+public func trace_guide_observed<Scene : IGuideScene, Prefix : IGuidePrefix>(
+    scene: Scene, first: TransportCall, budget: uint, first_reflection: bool, inout prefix: Prefix)
+    ->GuideEndpoint {
     var result : GuideEndpoint = {};
     result.hit = first.hit;
     result.incident = first.path.medium;
@@ -205,6 +216,7 @@ func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
             result.interface_specular = interface_guides.specular_albedo;
             result.use_interface_specular = true;
         }
+        prefix.boundary(result, reflection);
         result.psr = psr_append(result.psr, result.hit.surface.position,
                                 shading_normal(result.hit, result.material), reflection, refracted,
                                 result.pose.fixed);
@@ -234,7 +246,8 @@ func trace_guide_impl<Scene>(scene: Scene, first: TransportCall, budget: uint,
 /// 后缀串行迭代，不分配、不调度；最坏增加 budget-1 次查询，不改写 first 或照明。
 public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)->GuideEndpoint
     where Scene : IGuideScene {
-    return trace_guide_impl(scene, first, budget, false);
+    var prefix = NoGuidePrefix();
+    return trace_guide_observed(scene, first, budget, false, prefix);
 }
 
 /// 首面强制独立理想反射，之后沿规范 delta 链；用于显式反射运动代理。
@@ -243,7 +256,8 @@ public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
 public func trace_reflection_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
     ->GuideEndpoint
     where Scene : IGuideScene {
-    return trace_guide_impl(scene, first, budget, true);
+    var prefix = NoGuidePrefix();
+    return trace_guide_observed(scene, first, budget, true, prefix);
 }
 
 /// 终点方向能量，不乘路径吞吐/照明/曝光；首透明面保留接口 specular，diffuse 取终点。

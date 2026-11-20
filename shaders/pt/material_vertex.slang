@@ -43,6 +43,7 @@ public struct MaterialCall {
         var call : MaterialCall;
         call.origin_pixel = float3(asfloat(sample_value), asfloat(lane), 0);
         call.radiance = radiance;
+        call.previous_pdf = 0;
         return call;
     }
     /// 首面叶子建立相机路径的不变量，避免调度器为常量初态搬运完整路径。
@@ -95,7 +96,7 @@ func visible_light<let flow : uint, let solar : bool, Scene : IFlowScene>(
     light: light_sampling::LightSample, test_visibility: bool = true)
     ->VisibleLight {
     var visible : VisibleLight = {};
-    if (light.pdf <= 0 ||
+    if (light.pdf <= 0 || !light_side_supported<flow>(hit, material, view, light.direction) ||
         !openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
                                           light.direction, incident, material.transmitted) ||
         (test_visibility && scene.occluded(light.visibility)))
@@ -221,14 +222,16 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
             consumer);
+    let continues =
+        scatter && next.events != 0 && scatter_side_supported(hit, material, view, next);
     call.radiance = consumer.radiance;
     if (observe) {
         signals.sun = consumer.direct_sun;
         signals.local = consumer.direct_local;
         signals.local_light = float4(lamp.direction, lamp.distance);
-        signals.events = next.events;
+        signals.events = continues ? next.events : 0;
     }
-    if (!scatter || next.events == 0) {
+    if (!continues) {
         call.direction = incoming;
         call.finish_vertex(depth, events,
                            limited && continuation ? PATH_DIELECTRIC_LIMIT : PATH_DONE);

@@ -7,7 +7,10 @@ public struct SignalLane {
     public var diffuse_direction : uint2;
     public var specular_direction : uint2;
     public var sun : uint2;
+    /// RGB 是独立合成的发光和互补光路，w 为几何表面与采样太阳方向夹角余弦的绝对值。
     public var emission : uint2;
+    /// 追踪期间为漫反射比例与事件。交付时 lane 0 为虚拟观察方向，lane 1 为光学前缀 RGB 吞吐；
+    /// 两者的 w 均为单位 view-Z 对应的像素高度。
     public var fraction : uint2;
 };
 public func pack_signal(v: float4)->uint2 {

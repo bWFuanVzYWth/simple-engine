@@ -20,6 +20,7 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
                                                                   inout data: TransportCall)
     ->float {
     var distance : float = FAR;
+    let initial_depth = data.path.depth;
     while (data.path.status == PATH_ACTIVE) {
         let ray : RayDesc = { data.path.origin, 0, data.path.direction, FAR };
         var unused : uint = 0;
@@ -38,7 +39,7 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
                 guides.surface_hit(found, data);
             }
         }
-        if (secondary_distance && data.path.depth == 1)
+        if (secondary_distance && data.path.depth == initial_depth)
             distance = found.GetRayDesc().TMax;
         let program : uint = provider.program(found, data.path.medium);
         found.SetShaderTableIndex(program + 1u);

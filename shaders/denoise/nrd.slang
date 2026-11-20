@@ -71,7 +71,7 @@ func pack(id: uint3: SV_DispatchThreadID)->void {
     let spec = f0.Load(pos);
     let base = albedo.Load(pos);
     packed_normal[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(n.xyz, n.w, spec.w);
-    disocclusion[id.xy] = float(spec.w == 2);
+    disocclusion[id.xy] = float(base.w > 1 || spec.w == 2);
     if (base.w == 0) {
         diffuse0[id.xy] = 0;
         diffuse1[id.xy] = 0;
@@ -121,9 +121,17 @@ func resolve(id: uint3: SV_DispatchThreadID)->void {
     let diff = REBLUR_BackEnd_UnpackSh(diffuse0[id.xy], diffuse1[id.xy].xyz);
     let spec = REBLUR_BackEnd_UnpackSh(specular0[id.xy], specular1[id.xy].xyz);
     let direct = (unpack_signal(a.sun).xyz + unpack_signal(b.sun).xyz) * .5;
-    let surface = unpack_signal(a.emission).xyz +
-                  direct * SIGMA_BackEnd_UnpackShadow(shadow.Load(pos)) +
-                  NRD_SG_ResolveDiffuse(diff, n.xyz, v, n.w) * df +
-                  NRD_SG_ResolveSpecular(spec, n.xyz, v, n.w) * sf;
+    // 在双方均被遮挡的接触处保留亚像素硬影；半影超过一个像素时完全使用 SIGMA。
+    let distance = max(unpack_signal(a.sun).w, unpack_signal(b.sun).w);
+    let radius = SIGMA_FrontEnd_PackPenumbra(distance, asfloat(c.z));
+    let cos_light = min(unpack_signal(a.emission).w, unpack_signal(b.emission).w);
+    let footprint = max(abs(depths.Load(pos)) * unpack_signal(a.fraction).w * cos_light, 1e-9);
+    let contact_weight = distance >= NRD_FP16_MAX ? 1 : smoothstep(0.25, 1, radius / footprint);
+    let visibility = contact_weight * SIGMA_BackEnd_UnpackShadow(shadow.Load(pos));
+    let weight = base.w > 1 ? unpack_signal(b.fraction).xyz : float3(1);
+    let emitted = (unpack_signal(a.emission).xyz + unpack_signal(b.emission).xyz) * .5;
+    let surface =
+        emitted + weight * (direct * visibility + NRD_SG_ResolveDiffuse(diff, n.xyz, v, n.w) * df +
+                            NRD_SG_ResolveSpecular(spec, n.xyz, v, n.w) * sf);
     surface_radiance[index] = float4(max(surface, 0), raw.w);
 }

@@ -46,6 +46,15 @@ public func shading_normal(hit: Hit, material: transport::SurfaceMaterial)->floa
     return any(material.normal != 0) ? material.normal : hit.surface.normal;
 }
 
+/// 贴图法线可偏转波瓣，反射与透射仍须满足几何面的同侧或异侧约束。
+public func scatter_side_supported(hit: Hit, material: transport::SurfaceMaterial, view: float3,
+                                   scattered: openpbr::Sample)
+    ->bool {
+    let side = dot(view, hit.surface.normal) * dot(scattered.direction, hit.surface.normal);
+    let supported = select((scattered.events & openpbr::TRANSMISSION) != 0, side < 0, side > 0);
+    return select(any(material.normal), supported, true);
+}
+
 /// 非采样天空与独立太阳策略分项；sun_pdf 为当前方向的竞争密度，零表示无竞争。
 public struct Environment {
     public var sky : float3;

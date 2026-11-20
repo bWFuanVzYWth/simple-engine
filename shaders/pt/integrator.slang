@@ -114,12 +114,21 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
     data.path = path;
 }
 
+/// 单侧反射只能连接几何表面同侧的光源；法线贴图只改变该半球内的响应。
+public func light_side_supported<let flow : uint>(hit: Hit, material: transport::SurfaceMaterial,
+                                                  view: float3, direction: float3)
+    ->bool {
+    return (flow & (openpbr::FLOW_SOLID_TRANSMISSION | openpbr::FLOW_THIN_TRANSMISSION)) != 0 ||
+           ((flow & openpbr::FLOW_SUBSURFACE) != 0 && material.pbr.surface.z > 0) ||
+           dot(view, hit.surface.normal) * dot(direction, hit.surface.normal) > 0;
+}
+
 func visible_flow<let flow : uint, Scene, let deferred : bool = false>(
     scene: Scene, hit: Hit, material: transport::SurfaceMaterial, view: float3,
     light: light_sampling::LightSample, medium: float4)
     ->bool
     where Scene : IFlowScene {
-    return light.pdf > 0 &&
+    return light.pdf > 0 && light_side_supported<flow>(hit, material, view, light.direction) &&
            openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
                                             light.direction, medium, material.transmitted) &&
            (deferred || !scene.occluded(light.visibility));
@@ -332,7 +341,7 @@ public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 
             return;
         }
     }
-    if (scattered.events == 0) {
+    if (scattered.events == 0 || !scatter_side_supported(hit, material, view, scattered)) {
         if (complete_transport)
             finish(path, PATH_DONE);
         else
