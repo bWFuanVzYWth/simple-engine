@@ -16,6 +16,8 @@
 | Noto Sans SC 字体 | [来源](assets/fonts/README.md)、[SIL Open Font License 1.1](assets/fonts/OFL.txt) |
 | CIE 1931 2° 标准观察者与 CIE D65 光谱数据，International Commission on Illumination | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)、[数据来源与格式转换](crates/color/data/README.md) |
 
+NRD 4.18 的 Vulkan 适配使用上游编译的 SPIR-V，链接 NRI 191、ShaderMake、MathLib 和 Vulkan Memory Allocator。上游源代码由构建脚本按 Git 修订取得。[锁定修订](crates/vulkan/nrd/setup.ps1) · [NVIDIA RTX SDKs 许可](LICENSES/NVIDIA-NRD.txt) · [NRI 许可](LICENSES/NVIDIA-NRI.txt) · [ShaderMake 许可](LICENSES/NVIDIA-ShaderMake.txt) · [MathLib 许可](LICENSES/NVIDIA-MathLib.txt) · [VMA 许可](LICENSES/AMD-VulkanMemoryAllocator.txt)
+
 外部 Rust 依赖保留各自的许可证和版权；实际版本见 `Cargo.lock`，许可信息见对应上游 crate。
 
 ## 极线体积光

@@ -27,6 +27,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         build_streamline()?;
     }
+    #[cfg(feature = "nrd")]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build_nrd()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "nrd")]
+fn build_nrd() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{path::PathBuf, process::Command};
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    let cache = std::path::absolute(cache)?;
+    println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+    for file in ["nrd/setup.ps1", "nrd/bridge.cpp"] {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    let status = Command::new("pwsh")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "nrd/setup.ps1",
+            "-Cache",
+        ])
+        .arg(&cache)
+        .status()?;
+    if !status.success() {
+        return Err(format!("NRD SDK 构建失败 {status}").into());
+    }
+    let nrd = cache.join("nrd-src-4.18");
+    let nri = cache.join("nri-src-v191");
+    let sdk_shaders = nrd.join("Shaders");
+    shader_build::build(
+        &["pack", "resolve"].map(|entry| shader_build::Recipe {
+            source: "../../shaders/denoise/nrd.slang",
+            entry,
+            stage: "compute",
+            output: if entry == "pack" {
+                "nrd_pack.spv"
+            } else {
+                "nrd_resolve.spv"
+            },
+            target: shader_build::Target::Spirv("spirv_1_4"),
+            args: &["-DNRD_COMPILER_DXC=1"],
+        }),
+        &[
+            "../../shaders",
+            sdk_shaders.to_str().ok_or("NRD shader 路径不是 UTF-8")?,
+        ],
+        &[],
+    )?;
+    cc::Build::new()
+        .cpp(true)
+        .std("c++17")
+        .flag_if_supported("/EHsc")
+        .flag_if_supported("/utf-8")
+        .include(nrd.join("Include"))
+        .include(nrd.join("Integration"))
+        .include(nri.join("Include"))
+        .file("nrd/bridge.cpp")
+        .try_compile("engine_nrd")?;
+    for (dir, lib) in [(nrd, "NRD"), (nri, "NRI")] {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            dir.join("_Bin/Release").display()
+        );
+        println!("cargo:rustc-link-lib=static={lib}");
+    }
+    for (path, name) in [
+        ("nrd-nri-build/Release", "NRI_VK"),
+        ("nrd-nri-build/Release", "NRI_Shared"),
+        (
+            "nrd-build-git/_deps/shadermake-build/Release",
+            "ShaderMakeBlob",
+        ),
+    ] {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            cache.join(path).display()
+        );
+        println!("cargo:rustc-link-lib=static={name}");
+    }
     Ok(())
 }
 

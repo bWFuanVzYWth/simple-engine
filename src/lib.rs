@@ -43,6 +43,7 @@
 //! | `wgpu` / `webgpu` | wgpu API；后者选择 WebGPU backend 与 WGSL 输入 |
 //! | `vulkan` | native 设备接入、SPIR-V 直通与光追，同时选择 Vulkan backend |
 //! | `dlss_rr` | Windows Streamline／DLSS RR；SDK 路径由 `STREAMLINE_SDK` 显式指定 |
+//! | `nrd` | Windows x64 Vulkan 的 REBLUR SH 与 SIGMA，使用 NRD 官方 SPIR-V |
 //! | `gpu_test` | native GPU 检验，包含 vulkan 与 gpu_log |
 //! | `shader_build` / `shader_library` | Slang 构建工具与数值模块源码入口 |
 //!

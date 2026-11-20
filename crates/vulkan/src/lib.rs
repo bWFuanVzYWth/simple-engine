@@ -74,6 +74,8 @@ pub mod interop;
 mod lifecycle;
 mod micromap;
 pub mod native;
+#[cfg(all(feature = "nrd", target_os = "windows"))]
+pub mod nrd;
 mod owner;
 mod pipeline_cache;
 mod quad_expansion;

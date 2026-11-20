@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = []
 dlss_rr = ["dep:cc"]
+nrd = ["dep:cc"]
 
 [build-dependencies]
 shader_build = { path = "../shader_build" }

@@ -87,17 +87,18 @@ struct VisibleLight {
     var direction : float3;
     var incident_radiance : float3;
     var pdf : float;
+    var distance : float;
 };
 
 func visible_light<let flow : uint, let solar : bool, Scene : IFlowScene>(
     scene: Scene, hit: Hit, material: transport::SurfaceMaterial, view: float3, incident: float4,
-    light: light_sampling::LightSample)
+    light: light_sampling::LightSample, test_visibility: bool = true)
     ->VisibleLight {
     var visible : VisibleLight = {};
     if (light.pdf <= 0 ||
         !openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
                                           light.direction, incident, material.transmitted) ||
-        scene.occluded(light.visibility))
+        (test_visibility && scene.occluded(light.visibility)))
         return visible;
     var extinction : float3 = incident.yzw;
     if ((flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0 &&
@@ -107,37 +108,55 @@ func visible_light<let flow : uint, let solar : bool, Scene : IFlowScene>(
                                 transport::segment_transmittance(extinction, light.distance);
     visible.direction = light.direction;
     visible.pdf = light.pdf;
+    visible.distance = light.distance;
     return visible;
 }
 
 // evaluation_mask 只请求 pdf>0 的方向；即时折叠到已有辐射，不保留 BSDF 结果。
-struct DirectEvaluationConsumer : openpbr::IFlowEvaluationConsumer {
+public struct PrimaryLighting {
+    public var sun : float3;
+    public var sun_ray : geometry::Ray;
+    public var local : float3;
+    public var local_light : float4;
+    public var emitted : float3;
+    public var events : uint;
+};
+
+struct DirectEvaluationConsumer<let observe : bool> : openpbr::IFlowEvaluationConsumer {
     var first : float4;
     var second : float4;
     var throughput : float3;
     var radiance : float3;
     var continuation : bool;
+    var direct_sun : float3;
+    var direct_local : float3;
 
     [mutating]
     func consume(direction: uint, evaluated: openpbr::Evaluation)->void {
         let light = direction == 0 ? first : second;
-        if (any(evaluated.response > 0))
-            radiance += throughput *
-                        transport::triple_product(evaluated.response, light.xyz,
-                                                  transport::power_heuristic_over_pdf(
-                                                      light.w, continuation ? evaluated.pdf : 0));
+        if (any(evaluated.response > 0)) {
+            let term = throughput *
+                       transport::triple_product(evaluated.response, light.xyz,
+                                                 transport::power_heuristic_over_pdf(
+                                                     light.w, continuation ? evaluated.pdf : 0));
+            if (!observe || direction != 0)
+                radiance += term;
+            if (observe && direction == 0)
+                direct_sun = term;
+            if (observe && direction == 1)
+                direct_local = term;
+        }
     }
 };
 
 /// 已解码的本次命中由一个材质入口消费；路径结果直接原位发布。
 /// primary 为 true 时，调用方保证 primary_lane 是固定双样本中的第 0 或 1 条路径。
-public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask : uint = 3,
-                           let primary : bool = false>(scene: Scene, inout call: MaterialCall,
-                                                       hit: Hit,
-                                                       material: transport::SurfaceMaterial,
-                                                       incoming: float3, settings: Settings,
-                                                       primary_lane: uint = 0)
+public func shade_material_observed<let flow : uint, Scene : IFlowScene, let light_mask : uint,
+                                    let primary : bool, let observe : bool>(
+    scene: Scene, inout call: MaterialCall, hit: Hit, material: transport::SurfaceMaterial,
+    incoming: float3, settings: Settings, primary_lane: uint, out signals: PrimaryLighting)
     ->void {
+    signals = {};
     let depth = call.state & 127u;
     var events : uint = (call.state >> 7u) & 127u;
     let sample = asuint(call.origin_pixel.x);
@@ -148,6 +167,8 @@ public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask :
                                                          scene.emission_pdf(hit, call.previous))
                             : 1;
         call.radiance += call.throughput * material.emission * w;
+        if (observe)
+            signals.emitted = call.throughput * material.emission * w;
     }
     let continuation = depth < settings.budget;
     let solid : bool = (flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0;
@@ -163,36 +184,50 @@ public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask :
     var lamp : VisibleLight = {};
     if (continuous &&
         !openpbr::is_discrete_only_flow<flow>(material.pbr, call.medium, material.transmitted)) {
-        if ((light_mask & 1u) != 0)
-            sun = visible_light<flow, true>(scene, hit, material, view, call.medium,
-                                            scene.sample_sun(hit.surface, sampler.sun(depth)));
+        if ((light_mask & 1u) != 0) {
+            let proposal = scene.sample_sun(hit.surface, sampler.sun(depth));
+            sun = visible_light<flow, true>(scene, hit, material, view, call.medium, proposal,
+                                            !observe);
+            if (observe && sun.pdf > 0)
+                signals.sun_ray = proposal.visibility;
+        }
         if ((light_mask & 2u) != 0)
             lamp =
                 visible_light<flow, false>(scene, hit, material, view, call.medium,
                                            scene.sample_light(hit.surface, sampler.light(depth)));
     }
     let scatter = continuation && !limited;
-    var consumer : DirectEvaluationConsumer = { float4(sun.incident_radiance, sun.pdf),
-                                                float4(lamp.incident_radiance, lamp.pdf),
-                                                call.throughput, call.radiance, continuation };
+    var consumer : DirectEvaluationConsumer<observe> = { float4(sun.incident_radiance, sun.pdf),
+                                                         float4(lamp.incident_radiance, lamp.pdf),
+                                                         call.throughput,
+                                                         call.radiance,
+                                                         continuation,
+                                                         0,
+                                                         0 };
     var next : openpbr::Sample;
 #if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
     if (primary)
-        next = openpbr::shade_primary_flow_consume<flow, openpbr::Energy, DirectEvaluationConsumer,
-                                                   continuous ? light_mask : 0u>(
+        next = openpbr::shade_primary_flow_consume<
+            flow, openpbr::Energy, DirectEvaluationConsumer<observe>, continuous ? light_mask : 0u>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
             2u, primary_lane, consumer);
     else
 #endif
-        next = openpbr::shade_flow_consume<flow, openpbr::Energy, DirectEvaluationConsumer,
+        next = openpbr::shade_flow_consume<flow, openpbr::Energy, DirectEvaluationConsumer<observe>,
                                            continuous ? light_mask : 0u>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
             consumer);
     call.radiance = consumer.radiance;
+    if (observe) {
+        signals.sun = consumer.direct_sun;
+        signals.local = consumer.direct_local;
+        signals.local_light = float4(lamp.direction, lamp.distance);
+        signals.events = next.events;
+    }
     if (!scatter || next.events == 0) {
         call.direction = incoming;
         call.finish_vertex(depth, events,
@@ -223,5 +258,17 @@ public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask :
             call.throughput = transport::roulette_reweight(call.throughput, survival);
     }
     call.finish_vertex(depth, events, status);
+}
+
+public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask : uint = 3,
+                           let primary : bool = false>(scene: Scene, inout call: MaterialCall,
+                                                       hit: Hit,
+                                                       material: transport::SurfaceMaterial,
+                                                       incoming: float3, settings: Settings,
+                                                       primary_lane: uint = 0)
+    ->void {
+    var unused : PrimaryLighting;
+    shade_material_observed<flow, Scene, light_mask, primary, false>(
+        scene, call, hit, material, incoming, settings, primary_lane, unused);
 }
 }

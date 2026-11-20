@@ -15,8 +15,9 @@ public interface IHitScene : IScene {
 
 /// 只调度下一段主射线，材质closest-hit独占每次命中的解码和完整路径状态更新。
 /// miss保留公共环境处理；辅助量观察独立于照明路径。reorder 在编译期选择 SER。
-public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder : bool>(
-    provider: Scene, guides: Guides, inout data: TransportCall)
+public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder : bool,
+                           let secondary_distance : bool = false>(provider: Scene, guides: Guides,
+                                                                  inout data: TransportCall)
     ->float {
     var distance : float = FAR;
     while (data.path.status == PATH_ACTIVE) {
@@ -37,6 +38,8 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
                 guides.surface_hit(found, data);
             }
         }
+        if (secondary_distance && data.path.depth == 1)
+            distance = found.GetRayDesc().TMax;
         let program : uint = provider.program(found, data.path.medium);
         found.SetShaderTableIndex(program + 1u);
         var call : MaterialCall = MaterialCall::input(data);

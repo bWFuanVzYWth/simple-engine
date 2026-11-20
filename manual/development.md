@@ -38,6 +38,8 @@ Windows 上检查 Streamline 桥接的退出失败处理：先按 [DLSS RR 手�
 
 ## 工具链
 
+在 Windows x64 上构建 NRD 降噪组件需要 PowerShell 7、Git、CMake、Visual Studio C++ x64 工具和带有 `Bin/dxc.exe` 的 Vulkan SDK。确认 `VULKAN_SDK` 指向安装目录，在引擎根目录的 PowerShell 中运行 `cargo check --locked -p vulkan --features nrd`。首次构建会在 `target/` 下载锁定版本的 [NRD](https://github.com/NVIDIA-RTX/NRD/tree/v4.18.0) 及其依赖，生成静态库和 SPIR-V。终端显示 `Finished` 即完成。若配置失败，可从 Cargo 输出检查 Git 下载、CMake 生成器或 DXC 路径。
+
 本机路径、私有环境与凭据放在被忽略的 `local/`，模板、显式加载和 Cargo 覆盖方式见[本机配置](local.md)。
 
 Rust 日期由 `rust-toolchain.toml` 固定。Slang 发行包与 clang-format 版本记录在 `tools.json`；CI 使用这些基线。本地在同一 PowerShell 会话中安装并构建：

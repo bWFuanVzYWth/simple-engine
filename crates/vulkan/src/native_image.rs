@@ -16,6 +16,8 @@ pub enum ImageFormat {
     Rgba16Float,
     /// UNORM 输出。
     Rgba8Unorm,
+    /// NRD 的打包世界法线、粗糙度和 2 bit 材质编号。
+    Rgb10a2Unorm,
     /// 自动解码的 sRGB atlas。
     Rgba8Srgb,
 }
@@ -28,6 +30,7 @@ impl ImageFormat {
             Self::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
             Self::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
             Self::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            Self::Rgb10a2Unorm => vk::Format::A2B10G10R10_UNORM_PACK32,
             Self::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
         }
     }
