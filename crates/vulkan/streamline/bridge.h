@@ -82,6 +82,7 @@ extern "C"
                             SeSlSize *size);
     // -100：SDK 异常，命令缓冲不可提交；其它失败保留 GENERAL，调用者可回退 noisy。
     int32_t se_sl_evaluate(void *context, const SeSlFrame *frame);
+    int32_t se_sl_evaluate_masked(void *context, const SeSlFrame *frame, const SeSlImage *mask);
     int32_t se_sl_destroy(void *context);
     // 线程局部诊断，必须在下一次 bridge 调用前复制。
     const char *se_sl_last_error(void);

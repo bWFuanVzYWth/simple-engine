@@ -5,6 +5,7 @@ __exported import pt.scene;
 __exported import pt.key_guides;
 import camera.pinhole;
 import denoise.guide;
+import pt.optical_history;
 
 namespace pt {
 /// alpha 的内部标记，SDK 的 diffuse/specular 仍只消费 RGB。
@@ -29,10 +30,29 @@ public struct GuideFrame {
     public var history : bool;
 };
 
-/// escape 的 motion 使用原相机方向；光学链中的 escape 仍由 flags 保留前景和代理事实。
+/// 在两路虚拟表面都已投影后，可用跨帧稳定的几何记录修正运动。
+public interface IGuideHistory : IOpticalPathKey {
+    static func apply(primary: GuideEndpoint, reflected: GuideEndpoint, frame: GuideFrame,
+                      pixel: uint2, film: float2, inout motion: float2,
+                      inout specular_motion: float2)
+        ->void;
+};
+public struct ProjectedGuideHistory : IGuideHistory {
+    public static func boundary(key: uint, hit: uint4, front: bool, reflection: bool, eta: float)
+        ->uint {
+        return 0;
+    }
+    public static func apply(primary: GuideEndpoint, reflected: GuideEndpoint, frame: GuideFrame,
+                             pixel: uint2, film: float2, inout motion: float2,
+                             inout specular_motion: float2)
+        ->void {
+    }
+};
+
+/// 返回两路共用的天空投影，包括旧相机不可见的标记，供应用判定历史可用性。
 public func write_sky_guide(images: GuideImages, p: GuideFrame, pixel: uint2, film: float2,
                             direction: float3, flags: uint)
-    ->void {
+    ->GuideProjection {
     var images = images;
     var flags = flags;
     var motion : float2 = 0;
@@ -40,7 +60,7 @@ public func write_sky_guide(images: GuideImages, p: GuideFrame, pixel: uint2, fi
         (!denoise::denoise_motion(p.previous, film, direction, true, p.extent, motion) ||
          any(abs(motion) > 65504))) {
         motion = 0;
-        flags |= pt::GUIDE_MOTION_PROXY;
+        flags |= pt::GUIDE_MOTION_PROXY | pt::GUIDE_UNPROJECTABLE;
     }
     images.depth[pixel] = denoise::DENOISE_SKY_DEPTH;
     images.motion[pixel] = motion;
@@ -49,75 +69,79 @@ public func write_sky_guide(images: GuideImages, p: GuideFrame, pixel: uint2, fi
     images.specular[pixel] = float4(0.5, 0.5, 0.5, 0);
     images.distance[pixel] = 0;
     images.specular_motion[pixel] = motion;
+    return { denoise::DENOISE_SKY_DEPTH, float3(0), motion, flags | GUIDE_SKY };
 }
 
-/// 规范后缀与照明状态独立；两者只共享已经 resolve_hit 的实际首命中。
-/// water/glass/TIR 使用真实完整材料。粗糙首面反射运动使用独立理想反射代理，
-/// 不声称等于随机粗反射光流；每条 guide 最多另查 N-1 次，不改写照明。
-public func write_surface_guides<Scene>(scene: Scene, images: GuideImages, p: GuideFrame,
-                                        pixel: uint2, film: float2, first: pt::TransportCall)
-    ->void
-    where Scene : pt::IGuideScene {
-    var images = images;
-    let endpoint : pt::GuideEndpoint = pt::trace_guide(scene, first, p.max_depth);
-    if ((endpoint.flags & pt::GUIDE_SKY) != 0) {
-        write_sky_guide(images, p, pixel, film, first.path.direction,
-                        endpoint.flags | GUIDE_FOREGROUND);
-        if (endpoint.use_interface_specular)
-            images.specular[pixel] = float4(endpoint.interface_specular, 0);
-    } else {
-        let projection : pt::GuideProjection = pt::project_guide(endpoint, p.current, p.previous,
-                                                                 film, p.extent, p.history);
-        let albedos : denoise::DenoiseGuides = pt::guide_albedos(scene.energy(), endpoint);
-        images.depth[pixel] = projection.depth;
-        images.motion[pixel] = projection.motion;
-        images.normal[pixel] = float4(projection.normal, albedos.normal_roughness.w);
-        images.diffuse[pixel] = float4(albedos.diffuse_albedo,
-                                       float(projection.flags | GUIDE_FOREGROUND) * (1.0 / 255.0));
-        images.specular[pixel] = float4(albedos.specular_albedo, 0);
-    }
-    let reflection : pt::GuideEndpoint = pt::trace_reflection_guide(scene, first, p.max_depth);
-    let reflected : pt::GuideProjection = pt::project_guide(reflection, p.current, p.previous, film,
-                                                            p.extent, p.history);
-    images.distance[pixel] = (reflection.flags & pt::GUIDE_SKY) != 0 ? 0 : reflection.distance;
-    images.specular_motion[pixel] =
-        (reflected.flags & pt::GUIDE_INVALID) != 0 ? images.motion[pixel] : reflected.motion;
+func write_projected_pair<History : IGuideHistory>(images: GuideImages, p: GuideFrame, pixel: uint2,
+                                                   film: float2, primary: GuideEndpoint,
+                                                   albedos: denoise::DenoiseGuides,
+                                                   reflection: GuideEndpoint)
+    ->void {
+    let surface = project_guide(primary, p.current, p.previous, film, p.extent, p.history);
+    let reflected = project_guide(reflection, p.current, p.previous, film, p.extent, p.history);
+    let sky = (primary.flags & GUIDE_SKY) != 0;
+    let specular = sky ? (primary.use_interface_specular ? primary.interface_specular : float3(0.5))
+                       : albedos.specular_albedo;
+    images.depth[pixel] = surface.depth;
+    images.normal[pixel] =
+        sky ? float4(0, 0, 0, 1) : float4(surface.normal, albedos.normal_roughness.w);
+    images.diffuse[pixel] = float4(sky ? float3(0.5) : albedos.diffuse_albedo,
+                                   float(surface.flags | GUIDE_FOREGROUND) / 255.0);
+    images.specular[pixel] = float4(specular, 0);
+    images.distance[pixel] = (reflection.flags & GUIDE_SKY) != 0 ? 0 : reflection.distance;
+    var motion = surface.motion;
+    var specular_motion = (reflected.flags & GUIDE_INVALID) != 0 ? motion : reflected.motion;
+    var primary = primary;
+    var reflection = reflection;
+    primary.flags = surface.flags;
+    reflection.flags = reflected.flags;
+    History.apply(primary, reflection, p, pixel, film, motion, specular_motion);
+    images.motion[pixel] = motion;
+    images.specular_motion[pixel] = specular_motion;
 }
-/// 生产HitObject/known-surface路径只消费按材质特化后返回的数值，不在RG求BSDF。
-public func write_key_guides<Scene : pt::IKeyGuideTrace>(
+
+/// 规范后缀与照明共享实际首命中；理想反射导引只表示该波瓣的代表运动。
+public func write_surface_guides<Scene, History : IGuideHistory = ProjectedGuideHistory>(
     scene: Scene, images: GuideImages, p: GuideFrame, pixel: uint2, film: float2,
-    first: pt::KeyGuideVertex, camera_origin: float3, camera_direction: float3,
+    first: TransportCall)
+    ->void
+    where Scene : IGuideScene {
+    let primary = trace_guide<Scene, History>(scene, first, p.max_depth);
+    var albedos : denoise::DenoiseGuides = {};
+    if ((primary.flags & GUIDE_SKY) == 0)
+        albedos = guide_albedos(scene.energy(), primary);
+    let reflection = trace_reflection_guide<Scene, History>(scene, first, p.max_depth);
+    write_projected_pair<History>(images, p, pixel, film, primary, albedos, reflection);
+}
+
+/// 材质特化的首命中及后续求交均提供稳定身份；不重复查询表面或计算材质。
+public func write_tracked_key_guides<Scene : IIdentifiedGuideTrace, History : IGuideHistory>(
+    scene: Scene, images: GuideImages, p: GuideFrame, pixel: uint2, film: float2,
+    first: KeyGuideVertex, identity: uint4, camera_origin: float3, camera_direction: float3,
     initial_medium: float4, delta_only: bool = false)
     ->void {
-    var images = images;
-    let keyed : pt::KeyGuideEndpoint =
-                    pt::trace_key_guide(scene, first, camera_origin, camera_direction,
-                                        initial_medium, p.max_depth, false, delta_only);
-    let endpoint : pt::GuideEndpoint = keyed.endpoint;
-    if ((endpoint.flags & pt::GUIDE_SKY) != 0) {
-        write_sky_guide(images, p, pixel, film, camera_direction,
-                        endpoint.flags | GUIDE_FOREGROUND);
-        if (endpoint.use_interface_specular)
-            images.specular[pixel] = float4(endpoint.interface_specular, 0);
-    } else {
-        let projection : pt::GuideProjection = pt::project_guide(endpoint, p.current, p.previous,
-                                                                 film, p.extent, p.history);
-        images.depth[pixel] = projection.depth;
-        images.motion[pixel] = projection.motion;
-        images.normal[pixel] = float4(projection.normal, keyed.albedos.normal_roughness.w);
-        images.diffuse[pixel] = float4(keyed.albedos.diffuse_albedo,
-                                       float(projection.flags | GUIDE_FOREGROUND) * (1.0 / 255.0));
-        images.specular[pixel] = float4(keyed.albedos.specular_albedo, 0);
-    }
-    let reflected_key : pt::KeyGuideEndpoint =
-                            pt::trace_key_guide(scene, first, camera_origin, camera_direction,
-                                                initial_medium, p.max_depth, true, delta_only);
-    let reflection : pt::GuideEndpoint = reflected_key.endpoint;
-    let reflected : pt::GuideProjection = pt::project_guide(reflection, p.current, p.previous, film,
-                                                            p.extent, p.history);
-    images.distance[pixel] = (reflection.flags & pt::GUIDE_SKY) != 0 ? 0 : reflection.distance;
-    images.specular_motion[pixel] =
-        (reflected.flags & pt::GUIDE_INVALID) != 0 ? images.motion[pixel] : reflected.motion;
+    let primary =
+        trace_key_path<Scene, History>(scene, first, identity, camera_origin, camera_direction,
+                                       initial_medium, p.max_depth, false, delta_only);
+    let reflection =
+        trace_key_path<Scene, History>(scene, first, identity, camera_origin, camera_direction,
+                                       initial_medium, p.max_depth, true, delta_only);
+    write_projected_pair<History>(images, p, pixel, film, primary.endpoint, primary.albedos,
+                                  reflection.endpoint);
+}
+
+/// 只使用虚拟平面投影的材质键导引，无跨帧光路表。
+public func write_key_guides<Scene : IKeyGuideTrace>(scene: Scene, images: GuideImages,
+                                                     p: GuideFrame, pixel: uint2, film: float2,
+                                                     first: KeyGuideVertex, camera_origin: float3,
+                                                     camera_direction: float3,
+                                                     initial_medium: float4,
+                                                     delta_only: bool = false)
+    ->void {
+    let trace : UntrackedGuideTrace<Scene> = { scene };
+    write_tracked_key_guides<UntrackedGuideTrace<Scene>, ProjectedGuideHistory>(
+        trace, images, p, pixel, film, first, 0, camera_origin, camera_direction, initial_medium,
+        delta_only);
 }
 
 /// SDK 的非负 FP16 HDR 输入；非有限分量归零，负估计只在此边界裁剪。

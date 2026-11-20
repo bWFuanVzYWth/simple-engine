@@ -82,7 +82,7 @@ impl Runtime {
     /// instance/physical/device 必须属于同一 Vulkan 1.3 宿主。逻辑设备需开启 push descriptor、
     /// descriptorBindingPartiallyBound、shaderFloat16、shaderInt16 与 shaderStorageImageWriteWithoutFormat。
     /// 图像须为同尺寸、同设备的非别名单采样单层图像，宿主应提供 sampled 和 storage 用途及 GENERAL 布局。
-    /// 2.5D 运动使用 RGBA16F，法线使用 A2B10G10R10_UNORM，SH 使用 RGBA16F，其余标量使用 R32F。
+    /// 2.5D 运动支持 RGBA16F 和 RGBA32F，法线使用 A2B10G10R10_UNORM，SH 使用 RGBA16F，其余标量使用 R32F。
     /// 宿主应将图像和设备保活到会话析构及 GPU 完成。每次录制前上一帧必须完成。
     pub unsafe fn new(
         handles: [u64; 3],

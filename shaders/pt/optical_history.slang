@@ -23,6 +23,14 @@ public func optical_sample(key: uint, uv: float2)->uint2 {
     let tag = max(key & 0xffffffu, 1u);
     return uint2((tag << 8) | (xy.x >> 12), (xy.x << 20) | xy.y);
 }
+/// 天空终点用立方体面的透视坐标。面号参与签名，插值不会跨越背向半球的参数接缝。
+public func optical_sky(key: uint, direction: float3)->uint2 {
+    let a = abs(direction);
+    let axis = a.x >= a.y && a.x >= a.z ? 0u : (a.y >= a.z ? 1u : 2u);
+    let uv = (axis == 0 ? direction.yz : (axis == 1 ? direction.zx : direction.xy)) / a[axis];
+    let face = 2u * axis + uint(direction[axis] < 0);
+    return optical_sample(optical_key(key, uint2(0), 4u + face), 0.5 + 0.5 * uv);
+}
 func coordinates(v: uint2)->float2 {
     return float2(((v.x & 255u) << 12) | (v.y >> 20), v.y & 0xfffffu);
 }
@@ -36,6 +44,8 @@ public func previous_optical_pixel<let reflected : bool>(RWStructuredBuffer<uint
     let key = current.x >> 8;
     if (key == 0 || any(extent < 2) || !all(isfinite(seed)))
         return false;
+    // 切平面的初值可落在屏外；只由实际旧采样的覆盖判断最终解是否可见。
+    result = clamp(seed, float2(0), float2(extent - 1));
     let target = coordinates(current);
     for (var iteration = 0u; iteration < 4u; ++iteration) {
         if (any(result < 0) || any(result > float2(extent - 1)))
@@ -69,14 +79,21 @@ public func previous_optical_pixel<let reflected : bool>(RWStructuredBuffer<uint
         let det = dx.x * dy.y - dx.y * dy.x;
         if (abs(det) < max(1.0, 1e-4 * length(dx) * length(dy)))
             return false;
+        // 当前和旧帧插值各有半个坐标量化单位的不确定度。通过逆雅可比换回输入像素，
+        // 在终点局部坐标过于粗糙或掠射退化处放弃复用，给迭代残差保留亚像素余量。
+        let uncertainty = float2(abs(dy.x) + abs(dy.y), abs(dx.x) + abs(dx.y));
+        if (dot(uncertainty, uncertainty) > (0.75 * det) * (0.75 * det))
+            return false;
         let uv = target - mapped;
         let offset = float2(uv.x * dy.y - uv.y * dy.x, dx.x * uv.y - dx.y * uv.x) / det;
         let local = anchor + offset;
         let next = float2(cell) + local;
         // 四点时反求双线性映射；三点时只在已知三角形内插值。
-        if (all(local >= 0) && all(local <= 1) &&
-            (mask == 15u ? all(abs(offset) < 0.02) : dot(offset, sign) <= 1)) {
-            result = next;
+        // 静止镜头的解常在单元角上。允许浮点舍入越边千分之一像素，避免把同一采样判为显露。
+        let edge_epsilon = 0.001;
+        if (all(local >= -edge_epsilon) && all(local <= 1 + edge_epsilon) &&
+            (mask == 15u ? all(abs(offset) < 0.02) : dot(offset, sign) <= 1 + edge_epsilon)) {
+            result = float2(cell) + saturate(local);
             return true;
         }
         if (all(abs(next - result) < 0.01))

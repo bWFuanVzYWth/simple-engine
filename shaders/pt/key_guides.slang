@@ -2,6 +2,7 @@
 module key_guides;
 import pt.scene;
 import pt.reconstruction;
+import pt.optical_history;
 import openpbr.flow;
 import geometry.ray;
 import denoise.guide;
@@ -82,6 +83,23 @@ public interface IKeyGuideTrace {
         ->bool;
 };
 
+/// 光路历史另需当前命中的几何身份与重心坐标。身份来自遍历结果，不占用材质 payload。
+public interface IIdentifiedGuideTrace {
+    func intersect_identified(origin: float3, direction: float3, incident: float4,
+                              out vertex: KeyGuideVertex, out identity: uint4)
+        ->bool;
+};
+
+public struct UntrackedGuideTrace<Scene : IKeyGuideTrace> : IIdentifiedGuideTrace {
+    public var scene : Scene;
+    public func intersect_identified(origin: float3, direction: float3, incident: float4,
+                                     out vertex: KeyGuideVertex, out identity: uint4)
+        ->bool {
+        identity = 0;
+        return scene.intersect_guide(origin, direction, incident, vertex);
+    }
+};
+
 /// 兼容原有投影记录，只在endpoint.material中使用数值着色法线，不再从记录求BSDF或albedo。
 public struct KeyGuideEndpoint {
     public var endpoint : GuideEndpoint;
@@ -99,11 +117,10 @@ func set_key_guide_vertex(inout result: KeyGuideEndpoint, vertex: KeyGuideVertex
 
 /// 与trace_guide相同的预算、PSR、候选回退及查询计数，首面材料只解码一次。
 /// firstReflection只选择首面的理想反射数值，不改变后续材质/随机域，不重解首面。
-public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuideVertex,
-                                                    camera_origin: float3, camera_direction: float3,
-                                                    initial_medium: float4, budget: uint,
-                                                    first_reflection: bool,
-                                                    delta_only: bool = false)
+public func trace_key_path<Scene : IIdentifiedGuideTrace, Key : IOpticalPathKey>(
+    scene: Scene, first: KeyGuideVertex, identity: uint4, camera_origin: float3,
+    camera_direction: float3, initial_medium: float4, budget: uint, first_reflection: bool,
+    delta_only: bool = false)
     ->KeyGuideEndpoint {
     var result : KeyGuideEndpoint = {};
     result.endpoint.incident = initial_medium;
@@ -111,6 +128,8 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
     result.endpoint.camera_origin = camera_origin;
     result.endpoint.camera_direction = camera_direction;
     result.endpoint.psr = psr_initial();
+    result.endpoint.hit.identity = identity;
+    result.endpoint.hit.front = dot(camera_direction, first.point.normal) < 0;
     result.endpoint.queries = 1;
     set_key_guide_vertex(result, first);
     var candidate : KeyGuideEndpoint = result;
@@ -138,6 +157,9 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
         let reflection : bool = forced || (vertex.flags & KEY_GUIDE_REFLECTION) != 0;
         let refracted : bool = !forced && (vertex.flags & KEY_GUIDE_REFRACTED) != 0;
         let next = forced ? vertex.reflection_direction : vertex.canonical_direction;
+        track_optical_boundary<Key>(result.endpoint, vertex.normal_roughness.xyz, reflection,
+                                    refracted,
+                                    refracted ? result.endpoint.incident.x / vertex.medium.x : 1.0);
         if (result.endpoint.queries == 1 && !reflection && !first_reflection) {
             result.endpoint.interface_specular = vertex.specular;
             result.endpoint.use_interface_specular = true;
@@ -153,15 +175,32 @@ public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuid
         result.endpoint.direction = next;
         ++result.endpoint.queries;
         var following : KeyGuideVertex;
-        if (!scene.intersect_guide(origin, next, result.endpoint.incident, following)) {
+        var hit_id : uint4;
+        if (!scene.intersect_identified(origin, next, result.endpoint.incident, following,
+                                        hit_id)) {
             result.endpoint.flags |= GUIDE_SKY;
             if (result.endpoint.psr.count != 0)
                 result.endpoint.flags |= GUIDE_MOTION_PROXY;
             return result;
         }
         vertex = following;
+        result.endpoint.hit.identity = hit_id;
+        result.endpoint.hit.front = dot(next, vertex.point.normal) < 0;
         result.endpoint.distance += vertex.distance;
         set_key_guide_vertex(result, vertex);
     }
+}
+
+/// 不保留光路历史的材质键导引，预算和代理语义同 trace_key_path。
+public func trace_key_guide<Scene : IKeyGuideTrace>(scene: Scene, first: KeyGuideVertex,
+                                                    camera_origin: float3, camera_direction: float3,
+                                                    initial_medium: float4, budget: uint,
+                                                    first_reflection: bool,
+                                                    delta_only: bool = false)
+    ->KeyGuideEndpoint {
+    let trace : UntrackedGuideTrace<Scene> = { scene };
+    return trace_key_path<UntrackedGuideTrace<Scene>, NoOpticalPathKey>(
+        trace, first, 0, camera_origin, camera_direction, initial_medium, budget, first_reflection,
+        delta_only);
 }
 }

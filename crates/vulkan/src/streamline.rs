@@ -160,7 +160,7 @@ pub struct Resource {
 ///
 /// 图像顺序：noisy/depth/motion/normal+roughness/diffuse/specular/output/distance/specularMotion。
 /// output 使用输出尺寸，其余使用 SDK optimal 输入尺寸。颜色、albedo、normal+roughness
-/// 为 RGBA16F，depth/distance 为 R32F，motion 为 RG16F；depth 是正 view-Z。
+/// 为 RGBA16F，depth/distance 为 R32F，两路 motion 各支持 RG16F 和 RG32F；depth 是正 view-Z。
 /// 运动为左上原点、输入像素 previous-current，不含 jitter；显式 specular motion 必需，
 /// distance 可全零，当前 bridge 永不同时 tag distance 与 specular motion。
 #[repr(C)]
@@ -224,6 +224,11 @@ unsafe extern "C" {
         size: *mut Size,
     ) -> i32;
     fn se_sl_evaluate(context: *mut c_void, frame: *const Frame) -> i32;
+    fn se_sl_evaluate_masked(
+        context: *mut c_void,
+        frame: *const Frame,
+        mask: *const Resource,
+    ) -> i32;
     fn se_sl_destroy(context: *mut c_void) -> i32;
     fn se_sl_last_error() -> *const c_char;
 }
@@ -351,6 +356,19 @@ impl Runtime {
     /// 输入、SDK 或同步错误日志导致失败；异常和可回退失败由 EvaluationFailure 区分。
     pub unsafe fn evaluate(&mut self, frame: &Frame) -> Result<(), EvaluationFailure> {
         check(unsafe { se_sl_evaluate(self.handle, frame) }).map_err(Into::into)
+    }
+
+    /// 在 Evaluate 时提交输入分辨率的 R8_UNORM 遮挡显露掩码。值 1 表示当前光路缺少可靠历史。
+    /// # Safety
+    /// 调用方遵守 [Self::evaluate] 的命令、同步及生命周期契约，掩码也须有效至 GPU 完成。
+    /// # Errors
+    /// 资源描述无效或 SDK 录制失败时返回同 evaluate 的错误分类。
+    pub unsafe fn evaluate_with_disocclusion(
+        &mut self,
+        frame: &Frame,
+        mask: &Resource,
+    ) -> Result<(), EvaluationFailure> {
+        check(unsafe { se_sl_evaluate_masked(self.handle, frame, mask) }).map_err(Into::into)
     }
 }
 

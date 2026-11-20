@@ -276,10 +276,11 @@ bool valid_frame(const Context &ctx, const SeSlFrame &frame)
             continue;
         const auto &image = frame.images[index];
         const auto size = index == SE_SL_OUTPUT ? ctx.output : ctx.input;
-        if (!image.image || !image.view || image.width != size.width ||
-            image.height != size.height || image.format != formats[index] ||
-            image.layout != VK_IMAGE_LAYOUT_GENERAL || image.reserved ||
-            !(image.usage & VK_IMAGE_USAGE_SAMPLED_BIT) ||
+        const bool fullPrecisionMotion =
+            (index == SE_SL_MOTION || index == SE_SL_SPECULAR_MOTION) && image.format == VK_FORMAT_R32G32_SFLOAT;
+        if (!image.image || !image.view || image.width != size.width || image.height != size.height ||
+            (image.format != formats[index] && !fullPrecisionMotion) || image.layout != VK_IMAGE_LAYOUT_GENERAL ||
+            image.reserved || !(image.usage & VK_IMAGE_USAGE_SAMPLED_BIT) ||
             !(image.usage & VK_IMAGE_USAGE_STORAGE_BIT))
             return false;
         if (index != SE_SL_OUTPUT && image.image == frame.images[SE_SL_OUTPUT].image)
@@ -513,6 +514,11 @@ catch (...)
 }
 
 extern "C" int32_t se_sl_evaluate(void *context, const SeSlFrame *frame)
+{
+    return se_sl_evaluate_masked(context, frame, nullptr);
+}
+
+extern "C" int32_t se_sl_evaluate_masked(void *context, const SeSlFrame *frame, const SeSlImage *mask)
 try
 {
     std::lock_guard lock(api_mutex);
@@ -521,6 +527,10 @@ try
         return fail("Invalid RR frame resources or constants");
     auto &ctx = *active;
     copy_matrix(ctx.options.worldToCameraView, frame->world_to_view);
+    if (mask && (!mask->image || !mask->view || mask->width != ctx.input.width || mask->height != ctx.input.height ||
+                 mask->format != VK_FORMAT_R8_UNORM || mask->layout != VK_IMAGE_LAYOUT_GENERAL || mask->reserved ||
+                 !(mask->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || mask->image == frame->images[SE_SL_OUTPUT].image))
+        return fail("Invalid RR disocclusion mask");
     copy_matrix(ctx.options.cameraViewToWorld, frame->view_to_world);
     int32_t result = check(ctx.set_options(ctx.viewport, ctx.options), "slDLSSDSetOptions");
     if (result)
@@ -544,7 +554,7 @@ try
                                         sl::kBufferTypeSpecularMotionVectors};
     std::array<sl::Resource, SE_SL_IMAGE_COUNT> resources;
     std::array<sl::ResourceTag, SE_SL_IMAGE_COUNT> tags;
-    std::array<const sl::BaseStructure *, SE_SL_IMAGE_COUNT + 1> inputs{};
+    std::array<const sl::BaseStructure *, SE_SL_IMAGE_COUNT + 2> inputs{};
     inputs[0] = &ctx.viewport;
     uint32_t count = 1;
     for (uint32_t index = 0; index < SE_SL_IMAGE_COUNT; ++index)
@@ -556,6 +566,16 @@ try
         tags[index] = sl::ResourceTag(&resources[index], types[index],
                                       sl::ResourceLifecycle::eValidUntilEvaluate, &extent);
         inputs[count++] = &tags[index];
+    }
+    sl::Resource maskResource{};
+    sl::ResourceTag maskTag{};
+    if (mask)
+    {
+        maskResource = make_resource(*mask);
+        const sl::Extent extent{0, 0, mask->width, mask->height};
+        maskTag = sl::ResourceTag(&maskResource, sl::kBufferTypeDisocclusionMask,
+                                  sl::ResourceLifecycle::eValidUntilEvaluate, &extent);
+        inputs[count++] = &maskTag;
     }
     ctx.evaluated = true;
     evaluating = true;

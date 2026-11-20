@@ -4,6 +4,8 @@ use super::*;
 /// 单 mip、单 sample 的图像格式。
 #[derive(Clone, Copy)]
 pub enum ImageFormat {
+    /// 单通道归一化遮罩。
+    R8Unorm,
     /// 单通道线性标量。
     R32Float,
     /// 双通道半精度向量。
@@ -24,6 +26,7 @@ pub enum ImageFormat {
 impl ImageFormat {
     pub(super) fn raw(self) -> vk::Format {
         match self {
+            Self::R8Unorm => vk::Format::R8_UNORM,
             Self::R32Float => vk::Format::R32_SFLOAT,
             Self::Rg16Float => vk::Format::R16G16_SFLOAT,
             Self::Rg32Float => vk::Format::R32G32_SFLOAT,
@@ -36,6 +39,7 @@ impl ImageFormat {
     }
     pub(super) const fn bytes(self) -> usize {
         match self {
+            Self::R8Unorm => 1,
             Self::Rgba32Float => 16,
             Self::Rgba16Float | Self::Rg32Float => 8,
             _ => 4,

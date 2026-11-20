@@ -28,6 +28,8 @@ public static const let GUIDE_BUDGET_PROXY = 8u;
 public static const let GUIDE_INVALID = 16u;
 /// 折射终点采用切平面代理，未恢复 inverse Snell 光学对应。
 public static const let GUIDE_REFRACTION_PROXY = 32u;
+/// 终点在旧相机背后或运动无法表示；有限占位不能作为静止历史。
+public static const let GUIDE_UNPROJECTABLE = 128u;
 
 /// 当前物理命中的前态；known 要求同一几何身份和重心坐标，fixed 指接口平面固定。
 /// 未知时 previous_position 不参与计算，不能从相似几何猜测对应关系。
@@ -143,7 +145,23 @@ public struct GuideEndpoint {
     public var optical_motion : OpticalMotion;
     /// 固定光路的有序界面签名，由消费端的稳定身份生成。
     public var optical_key : uint;
+    /// 折射或使用着色法线的反射，其旧像素由实测终点确认。
+    public var sampled_motion : bool;
 };
+
+/// 记录本次实际转向。几何镜面可精确展开，贴图法线定义的反射平面会随命中点移动。
+public func track_optical_boundary<Key : IOpticalPathKey>(inout end: GuideEndpoint, normal: float3,
+                                                          reflection: bool, refracted: bool,
+                                                          eta: float)
+    ->void {
+    let geometric = end.hit.surface.normal;
+    let mapped = any(normal != geometric) && any(normal != -geometric);
+    // 同一 quad 内不同的离散法线纹素可能产生不连续的终点，禁止跨阶跃插值。
+    let key = mapped ? optical_key(end.optical_key, asuint(normal.xy), asuint(normal.z))
+                     : end.optical_key;
+    end.optical_key = Key.boundary(key, end.hit.identity, end.hit.front, reflection, eta);
+    end.sampled_motion = end.sampled_motion || refracted || (reflection && mapped);
+}
 
 /// 只按几何和实际 IOR 选择规范事件：优先透射，TIR/conductor 反射。
 /// 材料须已证明整个闭包为 delta；不读取响应、吸收或随机概率。
@@ -286,13 +304,13 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
             result.attenuation *= response;
             if (glass && (result.material.pbr.control.x & 2u) == 0)
                 ++solid_events;
-            result.optical_key =
-                Key.boundary(result.optical_key, result.hit.identity, result.hit.front, reflection,
-                             result.incident.x / result.material.transmitted.x);
             result.optical_motion.scatter(result.direction, next, normal,
                                           result.incident.x / result.material.transmitted.x,
                                           reflection, refracted);
         }
+        track_optical_boundary<Key>(result, normal, reflection, refracted,
+                                    refracted ? result.incident.x / result.material.transmitted.x
+                                              : 1.0);
         result.psr = psr_append(result.psr, result.hit.surface.position,
                                 shading_normal(result.hit, result.material), reflection, refracted,
                                 result.pose.fixed);
@@ -320,10 +338,13 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
 /// 第 N 次得到非 delta 或 escape 仍完成；只在需要第 N+1 次时返回预算代理。
 /// 首命中须 resolve_hit；忽略照明 status、beta、radiance、depth、dielectric_limit 与随机数。
 /// 后缀串行迭代，不分配、不调度；最坏增加 budget-1 次查询，不改写 first 或照明。
-public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)->GuideEndpoint
+public func trace_guide<Scene, Key : IOpticalPathKey = NoOpticalPathKey>(scene: Scene,
+                                                                         first: TransportCall,
+                                                                         budget: uint)
+    ->GuideEndpoint
     where Scene : IGuideScene {
-    return trace_guide_impl(scene, first, budget, false,
-                            scene.guide_material(first.hit, first.path.medium));
+    return trace_guide_impl<Scene, 0u, Key>(scene, first, budget, false,
+                                            scene.guide_material(first.hit, first.path.medium));
 }
 
 /// 固定照明分量的几何导引。首面按所选波瓣的测度前进，后续纯 delta 界面透射优先。
@@ -340,11 +361,12 @@ public func trace_lobe_guide<let reflection : bool, Key : IOpticalPathKey, Scene
 /// 首面强制独立理想反射，之后沿规范 delta 链；用于显式反射运动代理。
 /// 粗糙表面的理想反射是局部几何代理，不等于随机照明路径或真实粗反射光流。
 /// 预算、查询与所有权约定同 trace_guide；budget=1 仅返回首接口预算代理。
-public func trace_reflection_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
+public func trace_reflection_guide<Scene, Key : IOpticalPathKey = NoOpticalPathKey>(
+    scene: Scene, first: TransportCall, budget: uint)
     ->GuideEndpoint
     where Scene : IGuideScene {
-    return trace_guide_impl(scene, first, budget, true,
-                            scene.guide_material(first.hit, first.path.medium));
+    return trace_guide_impl<Scene, 0u, Key>(scene, first, budget, true,
+                                            scene.guide_material(first.hit, first.path.medium));
 }
 
 /// 终点方向能量，不乘路径吞吐/照明/曝光；首透明面保留接口 specular，diffuse 取终点。
@@ -406,7 +428,7 @@ public func project_guide(endpoint: GuideEndpoint, current: camera::Camera,
         (!denoise::denoise_motion(previous, sample_uv, target, sky, extent, result.motion) ||
          any(abs(result.motion) > 65504))) {
         result.motion = 0;
-        result.flags |= GUIDE_MOTION_PROXY;
+        result.flags |= GUIDE_MOTION_PROXY | GUIDE_UNPROJECTABLE;
     }
     return result;
 }
