@@ -1,6 +1,9 @@
 //! NVIDIA NRD 4.18 的 Vulkan/SPIR-V 集成。会话拥有算法历史和描述符，宿主拥有输入、输出及提交。
 use std::{ffi::c_void, ptr::NonNull};
 
+/// 每个 NRD 像素的双样本暂存字节数。与 Slang 的两个六组 RGBA16F SignalLane 匹配。
+pub const SIGNAL_BYTES_PER_PIXEL: u64 = 2 * 6 * 8;
+
 /// 官方编码输入与解码输出的 Slang compute 入口 `pack`、`resolve`。
 pub const ADAPTERS: [&[u8]; 2] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/nrd_pack.spv")),
@@ -73,7 +76,7 @@ pub struct Runtime(NonNull<c_void>);
 // SAFETY: 独占移动，录制与销毁均在宿主渲染会话的串行提交边界执行。
 unsafe impl Send for Runtime {}
 impl Runtime {
-    /// 创建同设备同队列的视图会话。输入依次为 MV、打包法线、viewZ、四张 SH、半影、反遮挡因子、四张输出 SH 和阴影输出。
+    /// 创建同设备同队列的视图会话。输入依次为 MV、打包法线、viewZ、四张 SH、半影、反遮挡因子、四张输出 SH 和阴影输出，再附高光独立的 MV、打包法线、viewZ 与反遮挡因子。
     ///
     /// # Safety
     /// instance/physical/device 必须属于同一 Vulkan 1.3 宿主。逻辑设备需开启 push descriptor、
@@ -86,7 +89,7 @@ impl Runtime {
         family: u32,
         queue_index: u32,
         extent: [u32; 2],
-        images: [Image; 14],
+        images: [Image; 18],
     ) -> Result<Self, Error> {
         let [w, h] = extent.map(u16::try_from);
         let (w, h) = (w.map_err(|_| Error(-1))?, h.map_err(|_| Error(-1))?);
@@ -116,7 +119,7 @@ impl Runtime {
         }
         Ok(Self(NonNull::new(session).expect("SDK 成功创建会话")))
     }
-    /// 记录 REBLUR 与 SIGMA，恢复 GENERAL 布局。取消录制后下次必须清历史。
+    /// 分别以进入材质和界面反射的几何导引记录 REBLUR SH，并以主导引记录 SIGMA，恢复 GENERAL 布局。取消录制后下次必须清历史。
     ///
     /// # Safety
     /// command 须属于创建队列且正在 render pass 外独占录制。宿主保证此会话及图像存活到执行完成。

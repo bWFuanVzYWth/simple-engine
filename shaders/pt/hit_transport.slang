@@ -20,7 +20,7 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
                                                                   inout data: TransportCall)
     ->float {
     var distance : float = FAR;
-    let initial_depth = data.path.depth;
+    var lobe : LobeHitDistance = { FAR, false };
     while (data.path.status == PATH_ACTIVE) {
         let ray : RayDesc = { data.path.origin, 0, data.path.direction, FAR };
         var unused : uint = 0;
@@ -28,6 +28,8 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
         var found : HitObject = HitObject::TraceRay(provider.acceleration(), RAY_FLAG_NONE, 0xff, 0,
                                                     1, 0, ray, unused);
         if (!found.IsHit()) {
+            if (secondary_distance)
+                lobe.escape_scene();
             if (data.path.depth == 0)
                 guides.environment(data);
             escape(provider, data.path);
@@ -39,8 +41,8 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
                 guides.surface_hit(found, data);
             }
         }
-        if (secondary_distance && data.path.depth == initial_depth)
-            distance = found.GetRayDesc().TMax;
+        if (secondary_distance)
+            lobe.hit(found.GetRayDesc().TMax, data.path.previous_pdf);
         let program : uint = provider.program(found, data.path.medium);
         found.SetShaderTableIndex(program + 1u);
         var call : MaterialCall = MaterialCall::input(data);
@@ -50,6 +52,6 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
         HitObject::Invoke(found, call);
         data.path = call.result();
     }
-    return distance;
+    return secondary_distance ? lobe.distance : distance;
 }
 }

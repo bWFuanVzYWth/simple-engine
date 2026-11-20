@@ -90,11 +90,23 @@ public struct PrimaryMetalLayer<Measure : IMeasure, Base : IBase> : IClosure {
                            .proposal;
             if (Measure.has_delta() && kernel::is_delta(proposal.response.flags)) {
                 proposal.response.value = Closure.delta_response(wi, state);
-                proposal.pdf *= q;
+            } else if (kernel::has_sample(proposal)) {
+                let reflected = Measure.evaluate(wi, proposal.wo, state.conductor.geometry);
+                let dielectric =
+                    Dielectric.from_base(LocalEvaluation(), state.dielectric, reflected);
+                let metal =
+                    Conductor<Measure>.from_reflection(wi, proposal.wo, state.conductor, reflected);
+                proposal.response.value =
+                    lerp(dielectric.response.value, metal.response.value, state.metalness);
             }
-        } else
+            proposal.pdf *= q;
+        } else {
             proposal =
                 Base.sample(wi, float3(random.xy, (random.z - q) / (1 - q)), state.dielectric.base);
+            proposal.response.value *=
+                (1 - state.metalness) * state.dielectric.mixture.transmittance_in;
+            proposal.pdf *= 1 - q;
+        }
         return proposal;
     }
     public static func delta_response(wi: float3, state: State)->float3 {
@@ -140,13 +152,14 @@ public struct PrimaryMetalBase<Measure : IMeasure, Base : IBase> : IClosure {
         if (q > 0 && random.z < q) {
             proposal =
                 Conductor<Measure>.sample(wi, float3(random.xy, random.z / q), state.conductor);
-            if (Measure.has_delta() && kernel::is_delta(proposal.response.flags)) {
-                proposal.response.value *= state.metalness;
-                proposal.pdf *= q;
-            }
-        } else
+            proposal.response.value *= state.metalness;
+            proposal.pdf *= q;
+        } else {
             proposal =
                 Base.sample(wi, float3(random.xy, (random.z - q) / (1 - q)), state.dielectric);
+            proposal.response.value *= 1 - state.metalness;
+            proposal.pdf *= 1 - q;
+        }
         return proposal;
     }
     public static func delta_response(wi: float3, state: State)->float3 {

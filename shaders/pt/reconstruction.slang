@@ -8,6 +8,9 @@ import "openpbr/math/microfacet_energy.slang";
 import camera.pinhole;
 import denoise.guide;
 import pt.surface_guides;
+import pt.optical_motion;
+import openpbr.specialized;
+import transport.medium;
 import transport.surface_material;
 
 namespace pt {
@@ -129,6 +132,11 @@ public struct GuideEndpoint {
     public var flags : uint;
     public var interface_specular : float3;
     public var use_interface_specular : bool;
+    /// 分波瓣导引累乘真实界面响应与段吸收，运动微分只影响折射链的重投影。
+    public var attenuation : float3;
+    /// 单位入射辐亮度下的材质颜色参考，累计已穿过的界面和终点自身发光。
+    public var reference_emission : float3;
+    public var optical_motion : OpticalMotion;
 };
 
 /// 只按几何和实际 IOR 选择规范事件：优先透射，TIR/conductor 反射。
@@ -156,21 +164,12 @@ public func guide_delta_direction(material: transport::SurfaceMaterial, normal: 
     return reflect(direction, normal);
 }
 
-/// 观察固定导引已经选定的界面。可积累沿途的辐射权重，不能改变导引方向、预算或终点。
-public interface IGuidePrefix {
-    [mutating]
-    func boundary(vertex: GuideEndpoint, reflection: bool)->void;
-};
-struct NoGuidePrefix : IGuidePrefix {
-    [mutating]
-    func boundary(vertex: GuideEndpoint, reflection: bool)->void {
-    }
-};
-
-/// 与 trace_guide 共享查询与回退。观察值只有在返回实际终点或天空时才可用于传输。
-public func trace_guide_observed<Scene : IGuideScene, Prefix : IGuidePrefix>(
-    scene: Scene, first: TransportCall, budget: uint, first_reflection: bool, inout prefix: Prefix)
-    ->GuideEndpoint {
+func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: TransportCall, budget: uint,
+                                                  first_reflection: bool,
+                                                  first_material: transport::SurfaceMaterial,
+                                                  previous_origin: float3 = float3(0))
+    ->GuideEndpoint
+    where Scene : IGuideScene {
     var result : GuideEndpoint = {};
     result.hit = first.hit;
     result.incident = first.path.medium;
@@ -179,13 +178,41 @@ public func trace_guide_observed<Scene : IGuideScene, Prefix : IGuidePrefix>(
     result.camera_direction = first.path.direction;
     result.psr = psr_initial();
     result.queries = 1;
-    result.material = scene.guide_material(result.hit, result.incident);
+    result.material = first_material;
     result.pose = scene.guide_pose(result.hit);
+    result.attenuation = 1;
+    if (lobe != 0)
+        result.optical_motion =
+            OpticalMotion.camera(result.direction, previous_origin - first.path.origin);
     var candidate : GuideEndpoint = result;
     while (true) {
         let discrete = openpbr::is_discrete_only(result.material.pbr, result.incident,
                                                  result.material.transmitted);
-        if (!discrete && !(first_reflection && result.queries == 1)) {
+        let front = result.queries == 1;
+        let glass = (result.material.pbr.control.x & 1u) != 0;
+        let normal = shading_normal(result.hit, result.material);
+        if (lobe != 0) {
+            result.attenuation *=
+                transport::segment_transmittance(result.incident.yzw, result.hit.distance);
+            if (!front || lobe == 1)
+                result.reference_emission += result.attenuation * result.material.emission;
+            let delta = result.pose.known
+                            ? result.pose.previous_position - result.hit.surface.position
+                            : float3(0);
+            result.optical_motion.arrive(result.hit.distance, result.direction,
+                                         result.hit.surface.normal, delta);
+            if (front)
+                candidate = result;
+        }
+        // 分波瓣时只延续该波瓣的 delta。光滑涂层可反射，底层漫反射停在涂层处。
+        let continue_guide =
+            lobe == 0   ? discrete || (first_reflection && front)
+            : !front    ? discrete
+            : lobe == 1 ? glass && discrete
+                        : discrete || (!glass && result.material.pbr.base_roughness.w *
+                                                         result.material.pbr.base_roughness.w <
+                                                     1e-4);
+        if (!continue_guide) {
             var position : float3;
             var normal : float3;
             if (psr_surface(result.psr, result.camera_origin, result.camera_direction,
@@ -209,14 +236,45 @@ public func trace_guide_observed<Scene : IGuideScene, Prefix : IGuidePrefix>(
             reflection = true;
             refracted = false;
         }
-        if (result.queries == 1 && !reflection && !first_reflection) {
+        if (lobe == 0 && result.queries == 1 && !reflection && !first_reflection) {
             let interface_guides = denoise_surface(scene.energy(), result.material,
                                                    shading_normal(result.hit, result.material),
                                                    -result.direction, result.incident);
             result.interface_specular = interface_guides.specular_albedo;
             result.use_interface_specular = true;
         }
-        prefix.boundary(result, reflection);
+        if (lobe != 0) {
+            // 内部分量在全反射时没有透射样本。反射导引独立展开到其接收面。
+            if (front && lobe == 1 && reflection)
+                return candidate;
+            var response : float3;
+            if (glass) {
+                let u = reflection ? asfloat(0x3f7fffffu) : 0.0;
+                let event =
+                    (result.material.pbr.control.x & 2u) != 0
+                        ? openpbr::sample_delta_specialized<openpbr::CAP_DELTA_THIN_DIELECTRIC>(
+                              result.material.pbr, normal, -result.direction, u, result.incident,
+                              result.material.transmitted)
+                        : openpbr::sample_delta_specialized<openpbr::CAP_DELTA_SOLID_DIELECTRIC>(
+                              result.material.pbr, normal, -result.direction, u, result.incident,
+                              result.material.transmitted);
+                if (event.events == 0 || ((event.events & openpbr::REFLECTION) != 0) != reflection)
+                    return candidate;
+                response = event.response;
+                if (!reflection && (result.material.pbr.control.x & 2u) == 0)
+                    response *= result.material.boundary_filter;
+            } else {
+                response = denoise_surface(scene.energy(), result.material, normal,
+                                           -result.direction, result.incident)
+                               .specular_albedo;
+            }
+            if (!any(response > 0))
+                return candidate;
+            result.attenuation *= response;
+            result.optical_motion.scatter(result.direction, next, normal,
+                                          result.incident.x / result.material.transmitted.x,
+                                          reflection, refracted);
+        }
         result.psr = psr_append(result.psr, result.hit.surface.position,
                                 shading_normal(result.hit, result.material), reflection, refracted,
                                 result.pose.fixed);
@@ -246,8 +304,18 @@ public func trace_guide_observed<Scene : IGuideScene, Prefix : IGuidePrefix>(
 /// 后缀串行迭代，不分配、不调度；最坏增加 budget-1 次查询，不改写 first 或照明。
 public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)->GuideEndpoint
     where Scene : IGuideScene {
-    var prefix = NoGuidePrefix();
-    return trace_guide_observed(scene, first, budget, false, prefix);
+    return trace_guide_impl(scene, first, budget, false,
+                            scene.guide_material(first.hit, first.path.medium));
+}
+
+/// 固定照明分量的几何导引。首面按所选波瓣的测度前进，后续纯 delta 界面透射优先。
+/// previous_origin 与当前相机同坐标系。attenuation 用于匹配的解调和调制，不产生照明。
+public func trace_lobe_guide<let reflection : bool, Scene : IGuideScene>(
+    scene: Scene, first: TransportCall, budget: uint, first_material: transport::SurfaceMaterial,
+    previous_origin: float3)
+    ->GuideEndpoint {
+    return trace_guide_impl<Scene, reflection ? 2u : 1u>(scene, first, budget, reflection,
+                                                         first_material, previous_origin);
 }
 
 /// 首面强制独立理想反射，之后沿规范 delta 链；用于显式反射运动代理。
@@ -256,8 +324,8 @@ public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
 public func trace_reflection_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
     ->GuideEndpoint
     where Scene : IGuideScene {
-    var prefix = NoGuidePrefix();
-    return trace_guide_observed(scene, first, budget, true, prefix);
+    return trace_guide_impl(scene, first, budget, true,
+                            scene.guide_material(first.hit, first.path.medium));
 }
 
 /// 终点方向能量，不乘路径吞吐/照明/曝光；首透明面保留接口 specular，diffuse 取终点。

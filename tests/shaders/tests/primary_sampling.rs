@@ -4,7 +4,8 @@ use simple_engine::gpu_test::{Capability, Gpu, Shader};
 use simple_engine::openpbr::FlowKey;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
-type Row = [[f32; 4]; 5];
+type Row = [[f32; 4]; 6];
+const ROW_BYTES: usize = size_of::<Row>();
 
 const CASES: &[(u32, &[u8])] = &[
     (
@@ -158,14 +159,14 @@ fn run_primary_fixture(
     let output = gpu.compute(
         shader,
         &bytes,
-        sample_count * 80,
+        sample_count * ROW_BYTES,
         [u32::try_from(sample_count.div_ceil(64))?, 1, 1],
     );
     let cleanup = gpu.finish();
     let output = output?;
     cleanup?;
     Ok(output
-        .as_chunks::<80>()
+        .as_chunks::<ROW_BYTES>()
         .0
         .iter()
         .map(|bytes| {
@@ -272,7 +273,8 @@ fn one_and_two_sample_estimators_preserve_physical_integrals() -> Result {
     for &(key, _) in CASES {
         for mode in 0..3 {
             let rows = sample_primary(key, mode, 262144)?;
-            for strategy in 0..2 {
+            // 同一物理积分分别由单样本、双样本边缘提案和降噪使用的双样本分波瓣提案估计。
+            for strategy in [0, 1, 5] {
                 for channel in 0..3 {
                     let (sum, squared) = rows
                         .iter()

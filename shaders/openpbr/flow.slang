@@ -53,8 +53,8 @@ internal func sample_closure<Closure : closure::IClosure, EnergyLut>(energy: Ene
     return specialized_result<CAP_OPAQUE_DIELECTRIC, opaque_continuous>(
         closure::sample_closure<Closure>(wi, random, state), frame, view, incident, incident);
 }
-internal func
-consume_closure<Closure : closure::IClosure, EnergyLut, Consumer, let directions : uint>(
+internal func consume_closure<Closure : closure::IClosure, EnergyLut, Consumer,
+                              let directions : uint, let separate_lobes : bool = false>(
     energy: EnergyLut, material: Material, normal: float3, view: float3, first: float3,
     second: float3, evaluation_mask: uint, random: float3, continuation: bool, incident: float4,
     inout consumer: Consumer)
@@ -80,9 +80,22 @@ consume_closure<Closure : closure::IClosure, EnergyLut, Consumer, let directions
                             Closure.evaluate(wi, kernel::to_local(frame, second), state);
         consumer.consume(1, specialized_evaluation(evaluated.response, evaluated.pdf));
     }
-    if (continuation)
-        result = specialized_result<CAP_OPAQUE_DIELECTRIC, opaque_continuous>(
-            closure::sample_closure<Closure>(wi, random, state), frame, view, incident, incident);
+    if (continuation) {
+        var proposal : closure::Proposal;
+        if (separate_lobes && Closure.marginal_required(state)) {
+            proposal = Closure.sample(wi, random, state);
+            if (proposal.pdf > 0 && kernel::has_sample(proposal) &&
+                kernel::is_non_delta(proposal.response.flags)) {
+                // 吞吐用所选分量 f_j / (q_j p_j)。光源 MIS 仍消费所有首面提案的边缘密度。
+                let marginal = Closure.evaluate(wi, proposal.wo, state).pdf;
+                proposal.response.value *= marginal / proposal.pdf;
+                proposal.pdf = marginal;
+            }
+        } else
+            proposal = closure::sample_closure<Closure>(wi, random, state);
+        result = specialized_result<CAP_OPAQUE_DIELECTRIC, opaque_continuous>(proposal, frame, view,
+                                                                              incident, incident);
+    }
     return result;
 }
 
@@ -237,7 +250,8 @@ public func shade_flow_consume<let flow : uint, EnergyLut, Consumer, let directi
 /// 共享同一闭包准备与首面提案；回调约束同 IFlowEvaluationConsumer。
 /// 调用方保证 samples 为 1 或 2，且 lane<samples。
 public func shade_primary_flow_consume<let flow : uint, EnergyLut, Consumer,
-                                       let directions : uint = 3>(
+                                       let directions : uint = 3,
+                                       let separate_lobes : bool = false>(
     energy: EnergyLut, material: Material, normal: float3, view: float3, first: float3,
     second: float3, evaluation_mask: uint, random: float3, continuation: bool, incident: float4,
     transmitted: float4, samples: uint, lane: uint, inout consumer: Consumer)
@@ -253,18 +267,20 @@ public func shade_primary_flow_consume<let flow : uint, EnergyLut, Consumer,
             (closure::selected_flow &
              (FLOW_DIFFUSE | FLOW_DIELECTRIC_REFLECTION | FLOW_SUBSURFACE)) != 0) {
             if (material.surface.y == 1)
-                scattered = consume_closure<closure::Metal, EnergyLut, Consumer, directions>(
+                scattered = consume_closure<closure::Metal, EnergyLut, Consumer, directions,
+                                            separate_lobes>(energy, material, normal, view, first,
+                                                            second, evaluation_mask, random,
+                                                            continuation, incident, consumer);
+            else
+                scattered = consume_closure<closure::PrimaryDielectric, EnergyLut, Consumer,
+                                            directions, separate_lobes>(
                     energy, material, normal, view, first, second, evaluation_mask, random,
                     continuation, incident, consumer);
-            else
-                scattered =
-                    consume_closure<closure::PrimaryDielectric, EnergyLut, Consumer, directions>(
-                        energy, material, normal, view, first, second, evaluation_mask, random,
-                        continuation, incident, consumer);
         } else {
-            scattered = consume_closure<closure::PrimaryOpaque, EnergyLut, Consumer, directions>(
-                energy, material, normal, view, first, second, evaluation_mask, random,
-                continuation, incident, consumer);
+            scattered = consume_closure<closure::PrimaryOpaque, EnergyLut, Consumer, directions,
+                                        separate_lobes>(energy, material, normal, view, first,
+                                                        second, evaluation_mask, random,
+                                                        continuation, incident, consumer);
         }
     } else {
         scattered = consume_transmission<EnergyLut, Consumer, directions, true>(

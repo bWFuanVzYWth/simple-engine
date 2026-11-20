@@ -4,14 +4,13 @@ module nrd_signal;
 public struct SignalLane {
     public var diffuse : uint2;
     public var specular : uint2;
+    /// xyz 为方向矩，w 同时保留首表面关于采样太阳方向的几何余弦绝对值。
     public var diffuse_direction : uint2;
+    /// xyz 为方向矩，w 为该路径实际采到的首面散射事件。
     public var specular_direction : uint2;
     public var sun : uint2;
-    /// RGB 是独立合成的发光和互补光路，w 为几何表面与采样太阳方向夹角余弦的绝对值。
-    public var emission : uint2;
-    /// 追踪期间为漫反射比例与事件。交付时 lane 0 为虚拟观察方向，lane 1 为光学前缀 RGB 吞吐；
-    /// 两者的 w 均为单位 view-Z 对应的像素高度。
-    public var fraction : uint2;
+    /// 相机观察方向和单位 view-Z 对应的像素高度。
+    public var view_angle : uint2;
 };
 public func pack_signal(v: float4)->uint2 {
     let h = f32tof16(clamp(v, -65504, 65504));
@@ -22,4 +21,15 @@ public func unpack_signal(h: uint2)->float4 {
 }
 public func brightness(rgb: float3)->float {
     return dot(rgb, float3(0.2126, 0.7152, 0.0722));
+}
+
+/// 有符号八面体法线，供高光导引以两个 FP16 分量往返。
+public func oct_normal(n: float3)->float2 {
+    let p = n.xy / dot(abs(n), float3(1));
+    return n.z >= 0 ? p : (1 - abs(p.yx)) * select(p >= 0, 1.0, -1.0);
+}
+public func from_oct_normal(p: float2)->float3 {
+    var n = float3(p, 1 - abs(p.x) - abs(p.y));
+    n.xy += select(n.xy >= 0, -1.0, 1.0) * saturate(-n.z);
+    return normalize(n);
 }

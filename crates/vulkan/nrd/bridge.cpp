@@ -25,21 +25,31 @@ struct SdkFailure
 namespace
 {
 using R = nrd::ResourceType;
-constexpr R slots[] = {R::IN_MV,
-                       R::IN_NORMAL_ROUGHNESS,
-                       R::IN_VIEWZ,
-                       R::IN_DIFF_SH0,
-                       R::IN_DIFF_SH1,
-                       R::IN_SPEC_SH0,
-                       R::IN_SPEC_SH1,
-                       R::IN_PENUMBRA,
-                       R::IN_DISOCCLUSION_THRESHOLD_MIX,
-                       R::OUT_DIFF_SH0,
-                       R::OUT_DIFF_SH1,
-                       R::OUT_SPEC_SH0,
-                       R::OUT_SPEC_SH1,
-                       R::OUT_SHADOW_TRANSLUCENCY};
-constexpr nrd::Identifier ids[] = {1, 2};
+struct Slot
+{
+    R resource;
+    bool reflection;
+};
+// 同一实例中的两次 Denoise 共享临时池，各自按快照绑定运动、法线和深度。
+constexpr Slot slots[] = {{R::IN_MV, false},
+                          {R::IN_NORMAL_ROUGHNESS, false},
+                          {R::IN_VIEWZ, false},
+                          {R::IN_DIFF_SH0, false},
+                          {R::IN_DIFF_SH1, false},
+                          {R::IN_SPEC_SH0, true},
+                          {R::IN_SPEC_SH1, true},
+                          {R::IN_PENUMBRA, false},
+                          {R::IN_DISOCCLUSION_THRESHOLD_MIX, false},
+                          {R::OUT_DIFF_SH0, false},
+                          {R::OUT_DIFF_SH1, false},
+                          {R::OUT_SPEC_SH0, true},
+                          {R::OUT_SPEC_SH1, true},
+                          {R::OUT_SHADOW_TRANSLUCENCY, false},
+                          {R::IN_MV, true},
+                          {R::IN_NORMAL_ROUGHNESS, true},
+                          {R::IN_VIEWZ, true},
+                          {R::IN_DISOCCLUSION_THRESHOLD_MIX, true}};
+constexpr nrd::Identifier ids[] = {1, 2, 3};
 struct Image
 {
     uint64_t handle;
@@ -109,11 +119,12 @@ extern "C" int engine_nrd_create(const uint64_t *handles, uint32_t family, uint3
             if (s->vk.CreateTextureVK(*s->device, image, s->images[i]) != nri::Result::SUCCESS)
                 return 3;
         }
-        nrd::DenoiserDesc modes[] = {{ids[0], nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH},
-                                     {ids[1], nrd::Denoiser::SIGMA_SHADOW}};
+        nrd::DenoiserDesc modes[] = {{ids[0], nrd::Denoiser::REBLUR_DIFFUSE_SH},
+                                     {ids[1], nrd::Denoiser::SIGMA_SHADOW},
+                                     {ids[2], nrd::Denoiser::REBLUR_SPECULAR_SH}};
         nrd::InstanceCreationDesc instance{};
         instance.denoisers = modes;
-        instance.denoisersNum = 2;
+        instance.denoisersNum = static_cast<uint32_t>(std::size(modes));
         nrd::IntegrationCreationDesc config{};
         config.resourceWidth = width;
         config.resourceHeight = height;
@@ -155,6 +166,8 @@ extern "C" int engine_nrd_record(Session *s, uint64_t command, const Frame *fram
         common.accumulationMode =
             frame->reset ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
         common.isDisocclusionThresholdMixAvailable = true;
+        // 高光专用输入已提供等价表面的运动。标记该类像素，使 SDK 采用输入运动锚点。
+        common.cameraAttachedReflectionMaterialID = 3.0f;
         common.timeDeltaBetweenFrames = frame->milliseconds;
         if (it.SetCommonSettings(common) != nrd::Result::SUCCESS)
             return 6;
@@ -174,21 +187,24 @@ extern "C" int engine_nrd_record(Session *s, uint64_t command, const Frame *fram
         sigma.maxStabilizedFrameNum =
             std::min(nrd::SIGMA_MAX_HISTORY_FRAME_NUM, nrd::GetMaxAccumulatedFrameNum(.25f, fps));
         if (it.SetDenoiserSettings(ids[0], &sh) != nrd::Result::SUCCESS ||
-            it.SetDenoiserSettings(ids[1], &sigma) != nrd::Result::SUCCESS)
+            it.SetDenoiserSettings(ids[1], &sigma) != nrd::Result::SUCCESS ||
+            it.SetDenoiserSettings(ids[2], &sh) != nrd::Result::SUCCESS)
             return 7;
-        nrd::ResourceSnapshot snapshot;
-        snapshot.restoreInitialState = true;
+        nrd::ResourceSnapshot interior, reflection;
+        interior.restoreInitialState = reflection.restoreInitialState = true;
         for (size_t i = 0; i < s->images.size(); ++i)
         {
             nrd::Resource r{};
             r.nri.texture = s->images[i];
             r.state = {nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::GENERAL, nri::StageBits::ALL};
-            snapshot.SetResource(slots[i], r);
+            auto &snapshot = slots[i].reflection ? reflection : interior;
+            snapshot.SetResource(slots[i].resource, r);
         }
         nri::CommandBufferVKDesc desc{reinterpret_cast<void *>(command), nri::QueueType::GRAPHICS};
         if (s->vk.CreateCommandBufferVK(*s->device, desc, wrapper) != nri::Result::SUCCESS)
             return 8;
-        it.Denoise(ids, 2, *wrapper, snapshot);
+        it.Denoise(ids, 2, *wrapper, interior);
+        it.Denoise(ids + 2, 1, *wrapper, reflection);
         s->core.DestroyCommandBuffer(wrapper);
         return 0;
     }

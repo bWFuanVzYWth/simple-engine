@@ -439,19 +439,46 @@ public func trace_prefix<Scene, Guides>(scene: Scene, inout data: TransportCall,
     }
 }
 
+/// NRD 命中距离始于被采样路径的首个非 delta 散射。沿 delta 链只发光的终点距自身为零，
+/// 以最小 FP16 正规数标识该有效样本，与缺采样的零区分。
+public struct LobeHitDistance {
+    public var distance : float;
+    public var settled : bool;
+    [mutating]
+    public func hit(t: float, previous_pdf: float)->void {
+        if (!settled) {
+            settled = previous_pdf > 0;
+            distance = settled ? t : 0.00006103515625;
+        }
+    }
+    [mutating]
+    public func escape_scene()->void {
+        if (!settled)
+            distance = FAR;
+    }
+};
+
 /// K2 的唯一循环；TraceRay 和一次叶子 CallShader 由编译期场景适配器提供。
-public func trace_tail<Scene>(scene: Scene, inout data: TransportCall)->void
+public func trace_tail<Scene, let report_distance : bool = false>(scene: Scene,
+                                                                  inout data: TransportCall)
+    ->float
     where Scene : ITraceScene {
     var scene = scene;
+    var guide : LobeHitDistance = { FAR, false };
     while (true) {
+        if (report_distance)
+            guide.hit(data.hit.distance, data.path.previous_pdf);
         scene.shade(data);
         if (data.path.status != PATH_ACTIVE)
             break;
         if (!scene.intersect(data.path.origin, data.path.direction, data.hit)) {
+            if (report_distance)
+                guide.escape_scene();
             escape(scene, data.path);
             break;
         }
         scene.resolve_hit(data.hit, data.path.medium);
     }
+    return guide.distance;
 }
 }

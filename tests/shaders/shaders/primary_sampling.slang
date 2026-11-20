@@ -13,6 +13,7 @@ import transport.weights;
 var inputs : StructuredBuffer<float4>;
 [[vk::binding(1, 0)]]
 var outputs : RWStructuredBuffer<float4>;
+static const let output_stride = 6u;
 
 public struct Energy : openpbr::IEnergyLut {
     public func lookup(uvw: float3)->float4 {
@@ -53,8 +54,8 @@ func primary_selection_main(uint3 id: SV_DispatchThreadID)->void {
                                : sampler.bsdf(0).z;
     let samples = 1u + (id.x & 1u);
     let lane = samples == 2u ? (id.x >> 1u) & 1u : 0u;
-    outputs[id.x * 5] = float4(openpbr::primary::selection(random, samples, lane), random,
-                               float(samples), float(lane));
+    outputs[id.x * output_stride] = float4(openpbr::primary::selection(random, samples, lane),
+                                           random, float(samples), float(lane));
 }
 
 // 掩码、最后一跳和介质限额均保留原来的评估、MIS和散射契约。
@@ -92,14 +93,16 @@ func primary_consumption_main(uint3 id: SV_DispatchThreadID)->void {
                                               transport::power_heuristic_over_pdf(
                                                   0.37, continuation ? expected.second.pdf : 0));
     let expected_sequence = mask == 3u ? 6u : mask;
-    outputs[id.x * 5] = float4(actual.direction - expected.scattered.direction,
-                               actual.relative_eta - expected.scattered.relative_eta);
-    outputs[id.x * 5 + 1] =
+    outputs[id.x * output_stride] = float4(actual.direction - expected.scattered.direction,
+                                           actual.relative_eta - expected.scattered.relative_eta);
+    outputs[id.x * output_stride + 1] =
         float4(actual.response - expected.scattered.response, actual.pdf - expected.scattered.pdf);
-    outputs[id.x * 5 + 2] = actual.medium - expected.scattered.medium;
-    outputs[id.x * 5 + 3] =
+    outputs[id.x * output_stride + 2] = actual.medium - expected.scattered.medium;
+    outputs[id.x * output_stride + 3] =
         float4(consumer.radiance, float(actual.events != expected.scattered.events));
-    outputs[id.x * 5 + 4] = float4(radiance, float(consumer.sequence != expected_sequence));
+    outputs[id.x * output_stride + 4] =
+        float4(radiance, float(consumer.sequence != expected_sequence));
+    outputs[id.x * output_stride + 5] = 0;
 }
 
 [numthreads(64, 1, 1)]
@@ -144,9 +147,20 @@ func primary_sampling_main(uint3 id: SV_DispatchThreadID)->void {
     let mis : float = proposed.pdf > 0 ? transport::power_heuristic(proposed.pdf, 0.37) +
                                              transport::power_heuristic(0.37, proposed.pdf)
                                        : 1;
-    outputs[id.x * 5] = float4(weight(one), response_error);
-    outputs[id.x * 5 + 1] = float4((weight(a) + weight(b)) * 0.5, pdf_error);
-    outputs[id.x * 5 + 2] = float4(weight(reference), abs(mis - 1));
-    outputs[id.x * 5 + 3] = float4(float(a.events), float(b.events), a.pdf, b.pdf);
-    outputs[id.x * 5 + 4] = float4(a.direction - b.direction, float(one.events));
+    outputs[id.x * output_stride] = float4(weight(one), response_error);
+    outputs[id.x * output_stride + 1] = float4((weight(a) + weight(b)) * 0.5, pdf_error);
+    outputs[id.x * output_stride + 2] = float4(weight(reference), abs(mis - 1));
+    outputs[id.x * output_stride + 3] = float4(float(a.events), float(b.events), a.pdf, b.pdf);
+    outputs[id.x * output_stride + 4] = float4(a.direction - b.direction, float(one.events));
+    var separated = float3(0);
+    var consumer : RadianceConsumer = {};
+    [unroll]
+    for (var lane = 0u; lane < 2u; ++lane) {
+        let sample =
+            openpbr::shade_primary_flow_consume<OPENPBR_FLOW, Energy, RadianceConsumer, 0u, true>(
+                Energy(), m, normal, view, 0, 0, 0, random.bsdf(lane), true, incident, transmitted,
+                2u, lane, consumer);
+        separated += weight(sample);
+    }
+    outputs[id.x * output_stride + 5] = float4(0.5 * separated, 0);
 }

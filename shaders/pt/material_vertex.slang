@@ -208,8 +208,9 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
     var next : openpbr::Sample;
 #if defined(OPENPBR_FLOW) || defined(GAME_FLOW)
     if (primary)
-        next = openpbr::shade_primary_flow_consume<
-            flow, openpbr::Energy, DirectEvaluationConsumer<observe>, continuous ? light_mask : 0u>(
+        next = openpbr::shade_primary_flow_consume<flow, openpbr::Energy,
+                                                   DirectEvaluationConsumer<observe>,
+                                                   continuous ? light_mask : 0u, observe>(
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
