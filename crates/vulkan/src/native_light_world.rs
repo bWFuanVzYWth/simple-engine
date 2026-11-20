@@ -335,14 +335,16 @@ impl Context {
         Ok(&world.data(self)?.regions)
     }
 
-    /// 在原生队列发布世界树，仅重建本批指定的区块。提交保活所有引用的子树。
+    /// 仅重建指定区块。原生队列接受提交后返回世界树，同队列的后续命令可立即使用。
+    /// 在途命令保活世界树及其所有子树，直到构建 fence 完成。
     /// # Errors
     /// 无效输入、容量、设备或提交失败保留已发布资源。
     pub fn enqueue_light_world(&mut self, input: LightWorldInput<'_>) -> Result<LightWorld, Error> {
         let build = WorldBuild::new(self, input)?;
         let raw = terrain_flight::Recording::record(&self.device, |cmd| build.record(self, cmd))?;
-        self.submit_terrain(raw, Default::default(), vec![build.world.key], |op| {
-            build.roots(op)
+        self.submit_terrain(raw, Default::default(), |op| {
+            build.roots(op)?;
+            op.keepalive(build.world.into())
         })?;
         Ok(build.world)
     }

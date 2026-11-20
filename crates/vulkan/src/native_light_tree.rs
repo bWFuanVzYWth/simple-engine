@@ -260,7 +260,7 @@ impl Context {
         let build = Build::new(self, vertices, leaves, anchor, records, source)?;
         let raw =
             super::terrain_flight::Recording::record(&self.device, |cmd| build.record(self, cmd))?;
-        self.submit_terrain(raw, Default::default(), Vec::new(), |op| {
+        self.submit_terrain(raw, Default::default(), |op| {
             for b in build.buffers() {
                 op.access(b.into())?;
             }

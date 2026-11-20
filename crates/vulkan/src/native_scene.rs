@@ -515,7 +515,7 @@ impl Context {
         };
         let result = if let Some(raw) = raw {
             let buffers = [blas_buffers, tlas_buffers];
-            self.submit_terrain(raw, buffers, Vec::new(), |op| {
+            self.submit_terrain(raw, buffers, |op| {
                 if let Some(top) = top {
                     op.keepalive(top.into())?;
                 }
