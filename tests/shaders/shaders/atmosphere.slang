@@ -1,6 +1,7 @@
 // 来源：Sky Tracer 9e9430d；测试生产共享函数的球形边界与常系数传输恒等式。
 import atmosphere.parameters;
 import atmosphere.sampling;
+import atmosphere.terrain_frame;
 using namespace atmosphere;
 #include "atmosphere/shadow_profile.inc.slang"
 
@@ -41,6 +42,27 @@ struct IntervalProfileSource : IShadowProfileSource {
         return 0;
     }
 };
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+func epipolar_plane_main(uint3 id: SV_DispatchThreadID)->void {
+    var rows : uint;
+    var stride : uint;
+    inputs.GetDimensions(rows, stride);
+    if (id.x >= rows / 2)
+        return;
+    let sun = asfloat(inputs[2 * id.x]).xyz;
+    let at = inputs[2 * id.x + 1];
+    var input = TerrainInput();
+    input.forward = float3(0, 0, 1);
+    input.right = float3(1.78, 0, 0);
+    input.up = float3(0, 1, 0);
+    input.sun_direction = sun;
+    let frame = terrain_frame(input);
+    let ray = terrain_ray(frame, at.x, at.y);
+    let edge = terrain_ray(frame, TERRAIN_RADIAL - 1, at.y);
+    outputs[id.x] = asuint(float4(ray, dot(ray, normalize(cross(sun, edge)))));
+}
 [shader("compute")]
 [numthreads(1, 1, 1)]
 func shadow_interval_main(uint3 id: SV_DispatchThreadID)->void {

@@ -1,5 +1,5 @@
 // 极线深度重建参考 Intel Outdoor Light Scattering (Copyright 2017 Intel Corporation, Apache-2.0)。
-// 本实现使用相机到首命中的射线距离，在近场体积的径向采样前剔除跨深度边界的贡献。
+// 使用相机到首命中的射线距离，为相邻极线上的可见空气段分配双边权重。
 module terrain_composite;
 import atmosphere.sampling;
 import atmosphere.terrain_frame;
@@ -12,13 +12,15 @@ struct TerrainFilter {
     var weights : float2;
 };
 func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: float2, metres: float,
-                    far_sample: bool)
+                    sky: bool)
     ->TerrainFilter {
     var filter : TerrainFilter;
     let ndc = float2(2 * uv.x - 1, 1 - 2 * uv.y);
     let range = terrain_range(f);
     var fraction : float;
-    filter.slices = terrain_slices(ndc, f.projection.xy, range, TERRAIN_SLICES, fraction);
+    filter.slices =
+        terrain_slices(ndc, f.projection.xy, range, TERRAIN_SLICES, int(f.source.sample_stride),
+                       int(f.source.sample_offset), fraction);
     filter.weights = float2(1. - fraction, fraction);
     for (var k = 0; k < 2; ++k) {
         let slice : int = filter.slices[k];
@@ -29,11 +31,11 @@ func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: flo
         let base = uint(slice) * TERRAIN_RADIAL;
         let depth : float2 = asfloat(uint2(first_hits[base + lanes.x], first_hits[base + lanes.y]) &
                                      0x7fffffffu);
-        let relative = abs(depth - metres) / max(max(depth, metres), 1.0);
-        // 平面内按双线性权重，深度不连续处用有限支撑，避免洞口像素给前景封闭墙面供光。
-        let support : float2 = far_sample ? float2(depth >= TERRAIN_RANGE_M)
-                                          : 1. - smoothstep(0.03, 0.06, relative);
-        var weights : float2 = float2(1. - frac(x), frac(x)) * support;
+        // 近似同深度的射线优先。即使窄表面落在四条极线之间，邻线到目标距离的空气仍有贡献。
+        // 较短的邻线在自身首命中处已停止积分。天空的遮挡量须来自能达到近场边界的射线。
+        let difference = (depth - metres) / (0.03 * max(min(depth, metres), 1.0));
+        let support = sky ? float2(depth >= TERRAIN_RANGE_M) : rcp(1. + difference * difference);
+        let weights = float2(1. - frac(x), frac(x)) * support;
         let sum = weights.x + weights.y;
         filter.radial[k] =
             (lerp(float(lanes.x), float(lanes.y), weights.y / max(sum, 1e-10)) + 0.5) /
@@ -41,7 +43,7 @@ func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: flo
         filter.weights[k] *= segment.valid ? sum : 0;
     }
     let total = filter.weights.x + filter.weights.y;
-    filter.weights = total >= 0.01 ? filter.weights / total : float2(0);
+    filter.weights = total > 0. ? filter.weights / total : float2(0);
     return filter;
 }
 func terrain_sample(volume: Texture3D<float4>, sampler: SamplerState, filter: TerrainFilter,
@@ -70,7 +72,7 @@ public func composite_clear_aerial_bt709(clear_light: Texture3D<float4>,
     return color::rec2020_to_bt709(composite_aerial(air, color::bt709_to_rec2020(background)));
 }
 /// 已启用地形遮挡的空气段合成；frame与volume须来自本次owner所选的同一已录制/提交状态。
-/// 有限命中直接使用受光积分；无支持的采样仅保留背景透射。
+/// 有限命中按实际像素深度取受光积分，天空使用达到近场边界的遮挡量。
 public func composite_shadowed_terrain_bt709(
     clear_light: Texture3D<float4>, transmittance: Texture3D<float4>, volume: Texture3D<float4>,
     first_hits: StructuredBuffer<uint>, sampler: SamplerState, frame: TerrainFrame, uv: float2,
@@ -79,7 +81,7 @@ public func composite_shadowed_terrain_bt709(
     if (metres <= 0)
         return background;
     let beyond = !surface || metres > TERRAIN_RANGE_M;
-    let filter = terrain_filter(frame, first_hits, uv, min(metres, TERRAIN_RANGE_M), beyond);
+    let filter = terrain_filter(frame, first_hits, uv, min(metres, TERRAIN_RANGE_M), !surface);
     let layer_count = float(TERRAIN_DEPTH + 1u);
     var boundary : float4 = 0;
     if (beyond)

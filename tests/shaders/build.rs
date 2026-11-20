@@ -209,6 +209,12 @@ fn main() -> Result<(), shader_build::Error> {
             "shadow_interval_main.spv",
         ),
         (
+            "shaders/atmosphere.slang",
+            "epipolar_plane_main",
+            "compute",
+            "epipolar_plane_main.spv",
+        ),
+        (
             "shaders/display.slang",
             "display_main",
             "compute",

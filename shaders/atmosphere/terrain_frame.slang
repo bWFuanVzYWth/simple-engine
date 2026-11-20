@@ -11,19 +11,19 @@ public struct TerrainInput {
     public var camera_position : float3;
     public var observer_height_km : float;
     public var forward : float3;
-    public var forward_padding : float;
+    public var update_stride : uint;
     public var right : float3;
-    public var right_padding : float;
+    public var update_offset : uint;
     public var up : float3;
-    public var up_padding : float;
+    public var sample_stride : uint;
     public var sun_direction : float3;
-    public var sun_padding : float;
+    public var sample_offset : uint;
     public var radiance_scale : float3;
     public var scale_padding : float;
     public var refresh_clock : uint;
     public var active : uint;
     public var view_version : uint;
-    public var refresh_bits : uint;
+    public var cold : uint;
     public var basis_u : float3;
     public var sun_depth_offset : float;
     public var basis_v : float3;
@@ -46,15 +46,10 @@ public func terrain_frame(input: TerrainInput)->TerrainFrame {
     let coordinates = float3(dot(sun, cross(up, forward)), dot(sun, cross(forward, right)),
                              dot(sun, cross(right, up))) /
                       dot(forward, cross(right, up));
-    var projected : float2 = abs(coordinates.z) > 1e-6
-                                 ? coordinates.xy / coordinates.z
-                                 : (dot(coordinates.xy, coordinates.xy) > 1e-12
-                                        ? normalize(coordinates.xy) * EPIPOLAR_LIMIT
-                                        : float2(0));
-    projected = clamp(projected, -EPIPOLAR_LIMIT, EPIPOLAR_LIMIT);
-    let range = epipolar_visible_range(projected);
+    var projected : float2;
+    let range = epipolar_visible_range(coordinates, projected);
     f.projection = float4(projected, range.start, range.span);
-    f.angular = float4(range.axis, range.extent, float(range.parallel));
+    f.angular = float4(range.axis, range.inverse_distance, float(range.transverse));
     return f;
 }
 public func terrain_range(f: TerrainFrame)->EpipolarRange {
@@ -72,12 +67,8 @@ public func terrain_ray(f: TerrainFrame, lane: uint, slice: uint)->float3 {
         epipolar_slice_segment(f.projection.xy, terrain_range(f), int(slice), int(TERRAIN_SLICES));
     return terrain_ray(f, lane, segment);
 }
-// 冷启动覆盖全部切片。自然刷新每帧更新八分之一，按实际提交轮转。
-public func terrain_full(f: TerrainFrame)->bool {
-    return (f.source.refresh_bits & 8u) != 0;
-}
 public func terrain_slice_index(f: TerrainFrame, group: uint)->uint {
-    return terrain_full(f) ? group : group * 8u + (f.source.refresh_bits & 7u);
+    return group * f.source.update_stride + f.source.update_offset;
 }
 public func terrain_column(f: TerrainFrame, cascade: int, wrapped: int2)->uint2 {
     let size = shadow_texel_size(cascade);

@@ -13,6 +13,36 @@ fn run(cases: &[[[u32; 4]; 2]]) -> Result<Vec<[u32; 4]>> {
     run_shader(SHADER, cases)
 }
 
+#[test]
+#[ignore = "真实 GPU；太阳穿过相机侧面时，每条极线的采样射线都在同一太阳平面"]
+fn side_on_sun_preserves_epipolar_planes() -> Result {
+    let shader = Shader {
+        spirv: include_bytes!(concat!(env!("OUT_DIR"), "/epipolar_plane_main.spv")),
+        entry: "epipolar_plane_main",
+        workgroup: [64, 1, 1],
+    };
+    let mut cases = Vec::new();
+    for z in [-0.02_f32, -0.0003, -0.00001, 0., 0.00001, 0.0003, 0.02] {
+        let sun = [0.6, 0.8, z, 0.].map(f32::to_bits);
+        for slice in [1, 41, 127, 219, 254] {
+            for lane in [0, 64, 126] {
+                cases.push([sun, [lane, slice, 0, 0]]);
+            }
+        }
+    }
+    for (case, row) in cases.iter().zip(run_shader(shader, &cases)?) {
+        let [x, y, z, error] = row.map(f32::from_bits);
+        assert!(z > 0. && (x * x + y * y + z * z - 1.).abs() < 2e-5);
+        assert!(
+            error.abs() < 2e-5,
+            "太阳 {:?}，极线和径向 {:?}，平面偏差 {error}",
+            case[0].map(f32::from_bits),
+            case[1]
+        );
+    }
+    Ok(())
+}
+
 fn run_shader(shader: Shader<'static>, cases: &[[[u32; 4]; 2]]) -> Result<Vec<[u32; 4]>> {
     let bytes: Vec<_> = cases
         .iter()

@@ -20,7 +20,7 @@ func update_shadow_profile(slice: uint, lane: uint)->bool {
     var start : uint = slice * (SUN_SHADOW_PROFILE_TOTAL_CAPACITY + SUN_SHADOW_CASCADE_COUNT + 1u);
     if (lane == 0) {
         same_view =
-            !terrain_full(frames[0]) && previous_profiles[start] == frames[0].source.view_version;
+            frames[0].source.cold == 0 && previous_profiles[start] == frames[0].source.view_version;
         previous_profiles[start] = frames[0].source.view_version;
         profile_changed = same_view == 0 ? 1u : 0u;
     }
@@ -161,5 +161,6 @@ func terrain_integrate(uint3 group: SV_GroupID, uint lane: SV_GroupIndex)->void 
         terrain_light[uint3(lane, slice, z)] = float4(terrain_rgb(lit, f.source.radiance_scale), 0);
     }
     terrain_light[uint3(lane, slice, TERRAIN_DEPTH)] =
-        float4(terrain_rgb(blocked, f.source.radiance_scale), boundary_visibility);
+        float4(terrain_rgb(blocked, f.source.radiance_scale),
+               first_hit >= TERRAIN_RANGE_M ? boundary_visibility : 0.);
 }

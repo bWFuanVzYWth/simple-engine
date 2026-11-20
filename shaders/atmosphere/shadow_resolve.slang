@@ -29,14 +29,14 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
     var cells = cells;
     var first_hits = first_hits;
     // 与当前刷新批共用 TLAS 和覆盖规则。最高位通知积分阶段本射线的终点是否实际改变。
-    let slices : uint = terrain_full(f) ? TERRAIN_SLICES : TERRAIN_SLICES / 8u;
+    let slices = TERRAIN_SLICES / f.source.update_stride;
     if (id.z == 0 && id.x < TERRAIN_RADIAL && id.y < slices) {
         let slice = terrain_slice_index(f, id.y);
         let sample = slice * TERRAIN_RADIAL + id.x;
         let camera : RayDesc = { f.source.camera_position, 0, terrain_ray(f, id.x, slice),
                                  TERRAIN_RANGE_M };
         let bits : uint = asuint(terrain_hit_distance<C, false>(scene, camera));
-        let changed : bool = terrain_full(f) || (first_hits[sample] & 0x7fffffffu) != bits;
+        let changed = f.source.cold != 0 || (first_hits[sample] & 0x7fffffffu) != bits;
         first_hits[sample] = bits | (uint(changed) << 31u);
     }
     let index = (id.z * 512u + id.y) * 512u + id.x;

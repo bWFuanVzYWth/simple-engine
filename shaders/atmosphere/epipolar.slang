@@ -16,8 +16,8 @@ public struct EpipolarRange {
     public var start : float;
     public var span : float;
     public var axis : float2;
-    public var extent : float;
-    public var parallel : bool;
+    public var inverse_distance : float;
+    public var transverse : bool;
 };
 
 public func sort_epipolar_pair(inout first: float, inout second: float)->void {
@@ -28,25 +28,33 @@ public func sort_epipolar_pair(inout first: float, inout second: float)->void {
     }
 }
 
-public func epipolar_visible_range(epipole_ndc: float2)->EpipolarRange {
+// 侧向太阳用极线在垂直于 axis 的中心轴上的截距编号。齐次深度为零时自然得到平行线。
+func intercept(axis: float2, inverse_distance: float, p: float2)->float {
+    return dot(float2(-axis.y, axis.x), p) / (1. + inverse_distance * dot(axis, p));
+}
+public func epipolar_visible_range(projected_sun: float3, out epipole_ndc: float2)->EpipolarRange {
     var result : EpipolarRange;
     result.axis = float2(0.0);
-    result.extent = 0.0;
-    result.parallel = false;
+    result.inverse_distance = 0.;
+    // 太阳投影超过八个屏幕半径时用截距，四角的分母均远离零。
+    result.transverse = max(abs(projected_sun.x), abs(projected_sun.y)) > 8. * abs(projected_sun.z);
+    if (result.transverse) {
+        epipole_ndc = 0.;
+        let inverse_length = rsqrt(dot(projected_sun.xy, projected_sun.xy));
+        result.axis = -projected_sun.xy * inverse_length;
+        result.inverse_distance = projected_sun.z * inverse_length;
+        let a = result.axis;
+        let q = result.inverse_distance;
+        let bounds = float4(intercept(a, q, float2(-1, -1)), intercept(a, q, float2(1, -1)),
+                            intercept(a, q, float2(-1, 1)), intercept(a, q, float2(1, 1)));
+        result.start = min(min(bounds.x, bounds.y), min(bounds.z, bounds.w));
+        result.span = max(max(bounds.x, bounds.y), max(bounds.z, bounds.w)) - result.start;
+        return result;
+    }
+    epipole_ndc = projected_sun.xy / projected_sun.z;
     if (all(abs(epipole_ndc) <= float2(1.0))) {
         result.start = -math::pi;
         result.span = math::tau;
-        return result;
-    }
-    // Beyond this distance the finite epipole differs from parallel lines by
-    // less than a pixel, while subtracting two f32 angles becomes less stable.
-    if (max(abs(epipole_ndc.x), abs(epipole_ndc.y)) > 2048.0) {
-        result.start = 0.0;
-        result.span = 1.0;
-        result.axis = normalize(-epipole_ndc);
-        let perpendicular = float2(-result.axis.y, result.axis.x);
-        result.extent = abs(perpendicular.x) + abs(perpendicular.y);
-        result.parallel = true;
         return result;
     }
 
@@ -86,14 +94,12 @@ public func epipolar_visible_range(epipole_ndc: float2)->EpipolarRange {
 
 public func epipolar_range_coordinate(range: EpipolarRange, epipole_ndc: float2, screen_ndc: float2)
     ->float {
-    if (range.parallel) {
-        let perpendicular = float2(-range.axis.y, range.axis.x);
-        return clamp(dot(screen_ndc, perpendicular) / max(2.0 * range.extent, EPIPOLAR_EPSILON) +
-                         0.5,
-                     0.0, 1.0);
-    }
+    if (range.transverse)
+        return saturate((intercept(range.axis, range.inverse_distance, screen_ndc) - range.start) /
+                        range.span);
     let direction = screen_ndc - epipole_ndc;
-    let angle = atan2(direction.y, direction.x);
+    // 极点落在像素中心时，任一切片都从该点出发。
+    let angle = atan2(direction.y, all(direction == 0.) ? 1. : direction.x);
     let offset = fmod(angle - range.start + math::tau, math::tau);
     if (offset <= range.span) {
         return offset / range.span;
@@ -138,11 +144,11 @@ public func epipolar_slice_segment(epipole_ndc: float2, range: EpipolarRange, sl
                                    slice_count: int)
     ->EpipolarSegment {
     let slice_coordinate = (float(slice) + 0.5) / float(slice_count);
-    if (range.parallel) {
+    if (range.transverse) {
         let perpendicular = float2(-range.axis.y, range.axis.x);
-        let offset = lerp(-range.extent, range.extent, slice_coordinate);
-        let origin = perpendicular * offset - range.axis * 4.0;
-        return epipolar_ray_segment(origin, range.axis);
+        let offset = range.start + range.span * slice_coordinate;
+        let direction = range.axis + perpendicular * (offset * range.inverse_distance);
+        return epipolar_ray_segment(perpendicular * offset - direction * 4., direction);
     }
     let angle = range.start + range.span * slice_coordinate;
     var sine : float;
@@ -161,15 +167,16 @@ public func epipolar_radial_coordinate(screen_ndc: float2, segment: EpipolarSegm
 
 // 像素位于两条相邻极线之间。太阳在视锥内时跨越方位角接缝。
 public func terrain_slices(ndc: float2, epipole: float2, range: EpipolarRange, count: int,
-                           out fraction: float)
+                           stride: int, offset: int, out fraction: float)
     ->int2 {
-    let t = epipolar_range_coordinate(range, epipole, ndc) * float(count) - 0.5;
+    let t = (epipolar_range_coordinate(range, epipole, ndc) * float(count) - 0.5 - float(offset)) /
+            float(stride);
     let lower = int(floor(t));
+    let last = count / stride - 1;
     fraction = frac(t);
-    if (!range.parallel && range.span >= math::tau - EPIPOLAR_EPSILON) {
-        let i = (lower % count + count) % count;
-        return int2(i, (i + 1) % count);
+    if (!range.transverse && range.span >= math::tau - EPIPOLAR_EPSILON) {
+        return offset + stride * int2(lower < 0 ? last : lower, lower == last ? 0 : lower + 1);
     }
-    return clamp(int2(lower, lower + 1), 0, count - 1);
+    return offset + stride * clamp(int2(lower, lower + 1), 0, last);
 }
 }

@@ -15,7 +15,7 @@
 //! 旧 Prime PT `e0260fc4` 使用五级按需 RT 阻挡列，在极线共享内存中遍历深度剖面，
 //! 对 128 个距离层做四波长受光积分，在 post 对相邻切片插值。
 //! 引擎复用这套剖面，以当前刷新切片的相机首命中裁剪可见空气段，并按相邻射线的首命中距离重建。
-//! 缺少可信近场样本时只合成背景透射，避免跨洞口补入亮侧散射。
+//! 有限表面按首命中深度对相邻极线加权。每条极线只贡献自身可见的空气段。
 use crate::{Error, Parameters, View};
 use vulkan::{
     AccelerationStructure,
@@ -32,6 +32,7 @@ const DEPTH: u32 = 128;
 const CELLS_BYTES: u64 = 5 * 512 * 512 * 16;
 const PROFILE_BYTES: u64 = 256 * (512 + 4 * 256 + 6) * 4;
 const PHASES: u8 = 8;
+const MOVING_STRIDE: u32 = 4;
 
 /// 与已初始化大气所有者共享的物理输入，由同一设备创建，交给体积光管线保活。
 pub struct TerrainModel([Binding; 8]);
@@ -56,26 +57,26 @@ impl TerrainModel {
     }
 }
 
-/// 与Slang TerrainInput同布局的160B上传记录；填充显式为零，不参与缓存键。
+/// 与 Slang TerrainInput 同布局。更新的切片与本帧可以读取的切片分别描述。
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TerrainInput {
     camera_position: [f32; 3],
     observer_height_km: f32,
     forward: [f32; 3],
-    forward_padding: f32,
+    update_stride: u32,
     right: [f32; 3],
-    right_padding: f32,
+    update_offset: u32,
     up: [f32; 3],
-    up_padding: f32,
+    sample_stride: u32,
     sun_direction: [f32; 3],
-    sun_padding: f32,
+    sample_offset: u32,
     radiance_scale: [f32; 3],
     scale_padding: f32,
     refresh_clock: u32,
     active: u32,
     view_version: u32,
-    refresh_bits: u32,
+    cold: u32,
     basis_u: [f32; 3],
     sun_depth_offset: f32,
     basis_v: [f32; 3],
@@ -88,7 +89,7 @@ struct TerrainInput {
 pub struct TerrainUpdate {
     input: TerrainInput,
     key: TerrainKey,
-    full: bool,
+    clear_columns: bool,
     refreshes_remaining: u8,
 }
 impl TerrainUpdate {
@@ -107,6 +108,7 @@ struct TerrainKey {
     active: bool,
     clock: u32,
     view_version: u32,
+    sample_stride: u32,
 }
 
 /// 一台设备上一份视图的极线光照与太阳阻挡缓存。每个输出 texel 对应一条极线、径向样本与累积深度。
@@ -246,8 +248,9 @@ impl TerrainLight {
         self.planned = None;
         valid
     }
-    /// 选择本次更新。初次使用或显式重置构建全部切片，其余每帧轮转八分之一。
-    /// 相机和太阳移动时继续使用旧历史。固定视图下局部编辑至多经过两个轮转便已覆盖全部切片，
+    /// 首帧构建全部切片。视角或物理输入改变时均匀更新当前投影的 64 条极线，合成只读这些切片。
+    /// 视图稳定后的两个提交依次填入中间切片，恢复到 256 条。相机转动可复用世界空间的阻挡列。
+    /// 固定视图下局部编辑至多经过两个轮转便已覆盖全部切片，
     /// 随后停止调度。world 是高精度世界坐标，origin 是同一位置的 TLAS 相对坐标，单位均为米。
     /// # Errors
     /// 视图或位置不合法时返回错误，已提交缓存继续有效。
@@ -278,14 +281,10 @@ impl TerrainLight {
         cmds.barrier();
         cmds.dispatch(self.prepare, [1; 3])?;
         if update.key.active {
-            if update.full {
+            if update.clear_columns {
                 cmds.clear_buffer(self.cells)?;
             }
-            let slices = if update.full {
-                SLICES
-            } else {
-                SLICES / u32::from(PHASES)
-            };
+            let slices = SLICES / update.input.update_stride;
             cmds.barrier();
             cmds.dispatch(self.demand, [1, slices, 1])?;
             cmds.barrier();
@@ -402,26 +401,50 @@ impl TerrainHistory {
         if !active && self.submitted_view.is_some_and(|k| !k.active) {
             return Ok(None);
         }
-        let full = active && self.cold;
         let view_changed = self
             .submitted_view
             .is_none_or(|k| k.view != view || k.world != world || k.active != active);
-        let changed = view_changed
-            || self.refresh_requested
-            || self.submitted_view.is_none_or(|k| k.origin != origin);
-        if active && !full && !changed && self.refreshes_remaining == 0 {
-            return Ok(None);
-        }
-        let refreshes_remaining = if full || !active {
+        let cold = active && (self.cold || self.submitted_view.is_none_or(|k| !k.active));
+        let clear_columns = cold
+            || active
+                && self
+                    .submitted_view
+                    .is_some_and(|k| k.view.sun_direction != view.sun_direction);
+        let scene_changed = self.refresh_requested
+            || self
+                .submitted_view
+                .is_some_and(|k| k.world == world && k.origin != origin);
+        let previous_stride = self.submitted_view.map_or(1, |k| k.sample_stride);
+        let mut refreshes_remaining = if clear_columns || !active {
             0
-        } else if changed {
-            2 * PHASES - 1
+        } else if scene_changed {
+            2 * PHASES
         } else {
-            self.refreshes_remaining - 1
+            self.refreshes_remaining
         };
         let clock = self
             .submitted_view
             .map_or(0, |k| k.clock.wrapping_add(1) & 0x7fffffff);
+        // 粗网格取每组中央的一条极线，细化时只追踪相邻已有极线之间的空位。
+        let phase = |stride| (MOVING_STRIDE / 2) % stride;
+        let (sample_stride, update_stride, update_offset) = if cold || !active {
+            (1, 1, 0)
+        } else if view_changed {
+            (MOVING_STRIDE, MOVING_STRIDE, phase(MOVING_STRIDE))
+        } else if previous_stride > 1 {
+            let finer = previous_stride / 2;
+            (
+                finer,
+                previous_stride,
+                (phase(previous_stride) + finer) % previous_stride,
+            )
+        } else {
+            if refreshes_remaining == 0 {
+                return Ok(None);
+            }
+            refreshes_remaining -= 1;
+            (1, u32::from(PHASES), clock % u32::from(PHASES))
+        };
         let version = self
             .submitted_view
             .map_or(1, |k| k.view_version.wrapping_add(u32::from(view_changed)));
@@ -453,19 +476,19 @@ impl TerrainHistory {
                 camera_position: origin,
                 observer_height_km: view.altitude_km,
                 forward: view.forward,
-                forward_padding: 0.,
+                update_stride,
                 right: view.right,
-                right_padding: 0.,
+                update_offset,
                 up: view.up,
-                up_padding: 0.,
+                sample_stride,
                 sun_direction: sun,
-                sun_padding: 0.,
+                sample_offset: phase(sample_stride),
                 radiance_scale: view.radiance_scale,
                 scale_padding: 0.,
                 refresh_clock: clock,
                 active: u32::from(active),
                 view_version: version,
-                refresh_bits: (clock & 7) | (u32::from(full) << 3),
+                cold: u32::from(cold),
                 basis_u: u.map(|a| a as f32),
                 sun_depth_offset: (plane - depth) as f32,
                 basis_v: v.map(|a| a as f32),
@@ -480,8 +503,9 @@ impl TerrainHistory {
                 active,
                 clock,
                 view_version: version,
+                sample_stride,
             },
-            full,
+            clear_columns,
             refreshes_remaining,
         }))
     }
@@ -533,31 +557,54 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn ordinary_changes_keep_history_and_refresh_every_slice() -> Result<(), Error> {
+    fn scene_edit_refreshes_every_slice_in_place() -> Result<(), Error> {
         let mut history = TerrainHistory::new();
-        let mut view = View::default();
+        let view = View::default();
         let start = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
-        assert!(start.full);
         history.recorded(&start);
         history.submitted();
-        view.sun_direction = [0.6, 0.8, 0.];
         history.refresh_requested = true;
-        let mut visited = [0; 8];
+        let mut visited = [0; SLICES as usize];
         for _ in 0..16 {
-            let u = history
-                .prepare(view, [8.; 3], [30000008.; 3], true)?
-                .unwrap();
-            assert!(!u.full);
-            visited[(u.key.clock & 7) as usize] += 1;
+            let u = history.prepare(view, [0.; 3], [0.; 3], true)?.unwrap();
+            assert!(!u.clear_columns);
+            for i in (u.input.update_offset..SLICES).step_by(u.input.update_stride as usize) {
+                visited[i as usize] += 1;
+            }
             history.recorded(&u);
             history.submitted();
         }
-        assert_eq!(visited, [2; 8]);
-        assert!(
-            history
-                .prepare(view, [8.; 3], [30000008.; 3], true)?
-                .is_none()
-        );
+        assert_eq!(visited, [2; SLICES as usize]);
+        assert!(history.prepare(view, [0.; 3], [0.; 3], true)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn turning_only_publishes_rays_traced_in_the_current_view() -> Result<(), Error> {
+        let mut history = TerrainHistory::new();
+        let mut view = View::default();
+        for angle in [0_f32, 0.2, -0.4] {
+            let (s, c) = angle.sin_cos();
+            view.forward = [s, 0., c];
+            view.right = [c, 0., -s];
+            let mut current = [false; SLICES as usize];
+            for _ in 0..=MOVING_STRIDE.ilog2() {
+                let Some(update) = history.prepare(view, [0.; 3], [0.; 3], true)? else {
+                    break;
+                };
+                let i = update.input;
+                for slice in (i.update_offset..SLICES).step_by(i.update_stride as usize) {
+                    current[slice as usize] = true;
+                }
+                for slice in (i.sample_offset..SLICES).step_by(i.sample_stride as usize) {
+                    assert!(current[slice as usize], "正在采样旧视角切片 {slice}");
+                }
+                history.recorded(&update);
+                history.submitted();
+            }
+            assert!(current.into_iter().all(|v| v));
+            assert!(history.prepare(view, [0.; 3], [0.; 3], true)?.is_none());
+        }
         Ok(())
     }
     #[test]
@@ -589,7 +636,7 @@ mod tests {
             .unwrap();
         assert_eq!(&first.bytes()[7 * 16..], &rebased.bytes()[7 * 16..]);
         assert_eq!(first.key.view_version, rebased.key.view_version);
-        assert!(!rebased.full);
+        assert!(!rebased.clear_columns);
         Ok(())
     }
 }
