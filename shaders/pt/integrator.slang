@@ -30,7 +30,7 @@ public func finish(inout path: PathState, status: uint)->void {
 func accumulate_emission<Scene>(scene: Scene, hit: Hit, emission: float3, inout path: PathState)
     ->void
     where Scene : IScene {
-    if (any(emission > 0)) {
+    if (path.previous_pdf >= 0 && any(emission > 0)) {
         let weight : float = path.previous_pdf > 0
                                  ? transport::power_heuristic(
                                        path.previous_pdf, scene.emission_pdf(hit, path.previous))
@@ -93,7 +93,8 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
     path.eta_scale =
         transport::eta_scale_after_scatter(path.eta_scale, scattered.relative_eta, transmission);
     path.medium = scattered.medium;
-    path.previous_pdf = 0;
+    path.previous_pdf = continuation_pdf(scattered, data.path.previous_pdf, 1u, boundary.normal,
+                                         view, data.path.medium.x / boundary.transmitted.x);
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);
     var status : uint = PATH_ACTIVE;
@@ -362,11 +363,9 @@ public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 
                                                             transmission);
         path.medium = scattered.medium;
     }
-    path.previous_pdf =
-        (flow & (openpbr::FLOW_DELTA_REFLECTION | openpbr::FLOW_DELTA_TRANSMISSION)) == 0u
-            ? scattered.pdf
-        : (scattered.events & openpbr::DISCRETE) != 0u ? 0.0
-                                                       : scattered.pdf;
+    path.previous_pdf = continuation_pdf(scattered, data.path.previous_pdf, material.pbr.control.x,
+                                         shading_normal(hit, material), view,
+                                         data.path.medium.x / material.transmitted.x);
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);
     var status : uint = PATH_ACTIVE;

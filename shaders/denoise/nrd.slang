@@ -2,6 +2,7 @@
 module nrd;
 #include "NRD.hlsli"
 import denoise.nrd_signal;
+import camera.pinhole;
 [[vk::binding(0, 0)]]
 var constants : StructuredBuffer<uint4>;
 [[vk::binding(1, 0)]]
@@ -145,8 +146,10 @@ func resolve(id: uint3: SV_DispatchThreadID)->void {
     let a = signals[index * 2];
     let b = signals[index * 2 + 1];
     let n = normals.Load(pos);
-    let view_angle = unpack_signal(a.view_angle);
-    let v = normalize(view_angle.xyz);
+    let eye : camera::Camera = { asfloat(constants[1]), asfloat(constants[2]),
+                                 asfloat(constants[3]), asfloat(constants[4]) };
+    let jitter = float2(eye.right.w, eye.up.w);
+    let v = -camera::camera_ray(eye, id.xy, c.xy, jitter);
     let reflected = specular_color.Load(pos);
     let spec_n = from_oct_normal(spec_normal.Load(pos));
     let diff = REBLUR_BackEnd_UnpackSh(diffuse0[id.xy], diffuse1[id.xy].xyz);
@@ -166,7 +169,8 @@ func resolve(id: uint3: SV_DispatchThreadID)->void {
     let distance = max(unpack_signal(a.sun).w, unpack_signal(b.sun).w);
     let radius = SIGMA_FrontEnd_PackPenumbra(distance, asfloat(c.z));
     let cos_light = min(unpack_signal(a.diffuse_direction).w, unpack_signal(b.diffuse_direction).w);
-    let footprint = max(abs(depths.Load(pos)) * view_angle.w * cos_light, 1e-9);
+    let footprint =
+        max(abs(depths.Load(pos)) * (2 * eye.position.w / float(c.y)) * cos_light, 1e-9);
     let contact_weight = distance >= NRD_FP16_MAX ? 1 : smoothstep(0.25, 1, radius / footprint);
     let visibility = contact_weight * SIGMA_BackEnd_UnpackShadow(shadow.Load(pos));
     let surface = direct * visibility + d + r;

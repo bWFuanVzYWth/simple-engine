@@ -1,14 +1,16 @@
-/// 与照明独立的规范几何 guide；不计算辐亮度、Fresnel 抽样、Beer 或 roulette。
+/// 固定光路的几何导引。分波瓣时沿相同界面累计确定的衰减与自发光。
 module reconstruction;
 
 import pt.scene;
 import geometry.ray;
 import openpbr.api;
+import openpbr.closure.reflection;
 import "openpbr/math/microfacet_energy.slang";
 import camera.pinhole;
 import denoise.guide;
 import pt.surface_guides;
 import pt.optical_motion;
+import pt.optical_history;
 import openpbr.specialized;
 import transport.medium;
 import transport.surface_material;
@@ -134,9 +136,13 @@ public struct GuideEndpoint {
     public var use_interface_specular : bool;
     /// 分波瓣导引累乘真实界面响应与段吸收，运动微分只影响折射链的重投影。
     public var attenuation : float3;
-    /// 单位入射辐亮度下的材质颜色参考，累计已穿过的界面和终点自身发光。
-    public var reference_emission : float3;
+    /// 固定光路可见的自发光，含沿途界面响应与吸收，在滤波后加回。
+    public var fixed_emission : float3;
+    /// 最后一个计入自发光的顶点序号。只有沿同一离散前缀的照明样本省略这些项。
+    public var emission_vertices : uint;
     public var optical_motion : OpticalMotion;
+    /// 固定光路的有序界面签名，由消费端的稳定身份生成。
+    public var optical_key : uint;
 };
 
 /// 只按几何和实际 IOR 选择规范事件：优先透射，TIR/conductor 反射。
@@ -164,10 +170,10 @@ public func guide_delta_direction(material: transport::SurfaceMaterial, normal: 
     return reflect(direction, normal);
 }
 
-func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: TransportCall, budget: uint,
-                                                  first_reflection: bool,
-                                                  first_material: transport::SurfaceMaterial,
-                                                  previous_origin: float3 = float3(0))
+func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpticalPathKey>(
+    scene: Scene, first: TransportCall, budget: uint, first_reflection: bool,
+    first_material: transport::SurfaceMaterial, previous_origin: float3 = float3(0),
+    dielectric_limit: uint = 64u)
     ->GuideEndpoint
     where Scene : IGuideScene {
     var result : GuideEndpoint = {};
@@ -185,6 +191,7 @@ func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: Transport
         result.optical_motion =
             OpticalMotion.camera(result.direction, previous_origin - first.path.origin);
     var candidate : GuideEndpoint = result;
+    var solid_events = 0u;
     while (true) {
         let discrete = openpbr::is_discrete_only(result.material.pbr, result.incident,
                                                  result.material.transmitted);
@@ -194,8 +201,11 @@ func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: Transport
         if (lobe != 0) {
             result.attenuation *=
                 transport::segment_transmittance(result.incident.yzw, result.hit.distance);
-            if (!front || lobe == 1)
-                result.reference_emission += result.attenuation * result.material.emission;
+            if ((!front || lobe == 1) && solid_events <= dielectric_limit &&
+                any(result.attenuation * result.material.emission > 0)) {
+                result.fixed_emission += result.attenuation * result.material.emission;
+                result.emission_vertices = result.queries;
+            }
             let delta = result.pose.known
                             ? result.pose.previous_position - result.hit.surface.position
                             : float3(0);
@@ -247,6 +257,10 @@ func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: Transport
             // 内部分量在全反射时没有透射样本。反射导引独立展开到其接收面。
             if (front && lobe == 1 && reflection)
                 return candidate;
+            let side = dot(-result.direction, result.hit.surface.normal) *
+                       dot(next, result.hit.surface.normal);
+            if (any(result.material.normal) && !(reflection ? side > 0 : side < 0))
+                return candidate;
             var response : float3;
             if (glass) {
                 let u = reflection ? asfloat(0x3f7fffffu) : 0.0;
@@ -264,13 +278,17 @@ func trace_guide_impl<Scene, let lobe : uint = 0>(scene: Scene, first: Transport
                 if (!reflection && (result.material.pbr.control.x & 2u) == 0)
                     response *= result.material.boundary_filter;
             } else {
-                response = denoise_surface(scene.energy(), result.material, normal,
-                                           -result.direction, result.incident)
-                               .specular_albedo;
+                response = openpbr::closure::opaque_delta_reflectance(
+                    result.material.pbr, abs(dot(normal, result.direction)), result.incident.x);
             }
             if (!any(response > 0))
                 return candidate;
             result.attenuation *= response;
+            if (glass && (result.material.pbr.control.x & 2u) == 0)
+                ++solid_events;
+            result.optical_key =
+                Key.boundary(result.optical_key, result.hit.identity, result.hit.front, reflection,
+                             result.incident.x / result.material.transmitted.x);
             result.optical_motion.scatter(result.direction, next, normal,
                                           result.incident.x / result.material.transmitted.x,
                                           reflection, refracted);
@@ -309,13 +327,14 @@ public func trace_guide<Scene>(scene: Scene, first: TransportCall, budget: uint)
 }
 
 /// 固定照明分量的几何导引。首面按所选波瓣的测度前进，后续纯 delta 界面透射优先。
-/// previous_origin 与当前相机同坐标系。attenuation 用于匹配的解调和调制，不产生照明。
-public func trace_lobe_guide<let reflection : bool, Scene : IGuideScene>(
+/// previous_origin 与当前相机同坐标系。固定自发光受实际介质事件预算约束，
+/// attenuation 用于解调和调制首个非 delta 表面的散射光。
+public func trace_lobe_guide<let reflection : bool, Key : IOpticalPathKey, Scene : IGuideScene>(
     scene: Scene, first: TransportCall, budget: uint, first_material: transport::SurfaceMaterial,
-    previous_origin: float3)
+    previous_origin: float3, dielectric_limit: uint)
     ->GuideEndpoint {
-    return trace_guide_impl<Scene, reflection ? 2u : 1u>(scene, first, budget, reflection,
-                                                         first_material, previous_origin);
+    return trace_guide_impl<Scene, reflection ? 2u : 1u, Key>(
+        scene, first, budget, reflection, first_material, previous_origin, dielectric_limit);
 }
 
 /// 首面强制独立理想反射，之后沿规范 delta 链；用于显式反射运动代理。

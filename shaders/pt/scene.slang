@@ -25,7 +25,8 @@ public struct Hit {
     public var texel : float4;
 };
 
-/// 路径唯一可变状态；depth 为已消费顶点数，previous_pdf=0 表示离散前驱。
+/// 路径唯一可变状态。previous_pdf 正值为连续密度，零为离散前驱；
+/// 负整数为离散前驱且有相应数目的固定光路顶点已单独计入自发光。
 /// 非 ACTIVE 输出的 origin、previous、previous_pdf 规范为零，不再携带下一段或 MIS 身份。
 public struct PathState {
     public var origin : float3;
@@ -44,6 +45,21 @@ public struct PathState {
 /// 只选择BSDF/guide的着色法线；几何SurfacePoint保持原始绕序与误差界。
 public func shading_normal(hit: Hit, material: transport::SurfaceMaterial)->float3 {
     return any(material.normal != 0) ? material.normal : hit.surface.normal;
+}
+
+/// 延续与固定导引相同的离散前缀。遇到连续事件或在可透射界面选了反射即恢复普通 MIS。
+public func continuation_pdf(scattered: openpbr::Sample, previous_pdf: float, control: uint,
+                             normal: float3, view: float3, eta: float)
+    ->float {
+    if ((scattered.events & openpbr::DISCRETE) == 0)
+        return scattered.pdf;
+    if (previous_pdf >= -1)
+        return 0;
+    if ((scattered.events & openpbr::TRANSMISSION) != 0 || (control & 1u) == 0)
+        return previous_pdf + 1;
+    let cos_i = dot(normal, view);
+    let tir = (control & 2u) == 0 && eta * eta * max(0, 1 - cos_i * cos_i) > 1;
+    return tir ? previous_pdf + 1 : 0;
 }
 
 /// 贴图法线可偏转波瓣，反射与透射仍须满足几何面的同侧或异侧约束。

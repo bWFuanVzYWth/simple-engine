@@ -1,8 +1,8 @@
 //! NVIDIA NRD 4.18 的 Vulkan/SPIR-V 集成。会话拥有算法历史和描述符，宿主拥有输入、输出及提交。
 use std::{ffi::c_void, ptr::NonNull};
 
-/// 每个 NRD 像素的双样本暂存字节数。与 Slang 的两个六组 RGBA16F SignalLane 匹配。
-pub const SIGNAL_BYTES_PER_PIXEL: u64 = 2 * 6 * 8;
+/// 每个 NRD 像素的双样本暂存字节数。与 Slang 的两个五组 RGBA16F SignalLane 匹配。
+pub const SIGNAL_BYTES_PER_PIXEL: u64 = 2 * 5 * 8;
 
 /// 官方编码输入与解码输出的 Slang compute 入口 `pack`、`resolve`。
 pub const ADAPTERS: [&[u8]; 2] = [

@@ -119,7 +119,6 @@ public struct PrimaryLighting {
     public var sun_ray : geometry::Ray;
     public var local : float3;
     public var local_light : float4;
-    public var emitted : float3;
     public var events : uint;
 };
 
@@ -162,14 +161,13 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
     var events : uint = (call.state >> 7u) & 127u;
     let sample = asuint(call.origin_pixel.x);
     call.throughput *= transport::segment_transmittance(call.medium.yzw, hit.distance);
-    if ((flow & openpbr::FLOW_EMISSION) != 0 && any(material.emission > 0)) {
+    if (!(observe && primary) && (flow & openpbr::FLOW_EMISSION) != 0 && call.previous_pdf >= 0 &&
+        any(material.emission > 0)) {
         let w : float = call.previous_pdf > 0
                             ? transport::power_heuristic(call.previous_pdf,
                                                          scene.emission_pdf(hit, call.previous))
                             : 1;
         call.radiance += call.throughput * material.emission * w;
-        if (observe)
-            signals.emitted = call.throughput * material.emission * w;
     }
     let continuation = depth < settings.budget;
     let solid : bool = (flow & openpbr::FLOW_SOLID_TRANSMISSION) != 0;
@@ -242,13 +240,15 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
         dot(view, hit.surface.normal) * dot(next.direction, hit.surface.normal) < 0)
         next.response *= material.boundary_filter;
     call.throughput = transport::product_over(call.throughput, next.response, next.pdf);
+    call.previous_pdf = continuation_pdf(next, call.previous_pdf, material.pbr.control.x,
+                                         shading_normal(hit, material), view,
+                                         call.medium.x / material.transmitted.x);
     if (solid) {
         call.eta_scale = transport::eta_scale_after_scatter(
             call.eta_scale, next.relative_eta, (next.events & openpbr::TRANSMISSION) != 0);
         call.medium = next.medium;
     }
     call.direction = next.direction;
-    call.previous_pdf = (next.events & openpbr::DISCRETE) != 0 ? 0 : next.pdf;
     call.previous = hit.surface.position;
     call.origin_pixel = geometry::offset_origin(hit.surface, next.direction);
     var status : uint = PATH_ACTIVE;

@@ -87,6 +87,16 @@ func dielectric_reflectance(energy_ior: float, cosine: float)->float3 {
     return float3(kernel::dielectric_reflectance(energy_ior, cosine));
 }
 
+/// 不透明光滑界面在镜向上的离散响应。cosine 为视线与着色法线夹角的绝对余弦。
+public func opaque_delta_reflectance(material: openpbr::Material, cosine: float,
+                                     incident_ior: float)
+    ->float3 {
+    let dielectric =
+        kernel::specular_reflectance(dielectric_fresnel(material.surface.x / incident_ior), cosine);
+    let metal = conductor_response(saturate(material.base_roughness.xyz), cosine);
+    return lerp(dielectric, metal, material.surface.y);
+}
+
 public struct DeltaDielectric : IClosure {
     public static func has_delta()->bool {
         return true;

@@ -9,8 +9,6 @@ public struct SignalLane {
     /// xyz 为方向矩，w 为该路径实际采到的首面散射事件。
     public var specular_direction : uint2;
     public var sun : uint2;
-    /// 相机观察方向和单位 view-Z 对应的像素高度。
-    public var view_angle : uint2;
 };
 public func pack_signal(v: float4)->uint2 {
     let h = f32tof16(clamp(v, -65504, 65504));
