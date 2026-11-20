@@ -166,8 +166,7 @@ public func process_reference_material<let Capability : uint, let Emissive : boo
     if (max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (path.depth + 1 >= 2) {
-        let survival : float = transport::roulette_probability(path.throughput, path.eta_scale,
-                                                               settings.square_root_roulette);
+        let survival : float = transport::roulette_probability(path.throughput, path.eta_scale);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0) {

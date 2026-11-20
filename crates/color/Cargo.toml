@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+thiserror = { workspace = true, optional = true }
+
+[features]
+spectrum = ["dep:thiserror"]
 
 [dev-dependencies]
 criterion.workspace = true

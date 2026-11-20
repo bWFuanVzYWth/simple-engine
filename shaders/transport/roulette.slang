@@ -19,16 +19,18 @@ public func roulette_applies(completed_scatters: uint, minimum_completed_scatter
     return completed_scatters >= minimum_completed_scatters;
 }
 
-/// 线性策略p=clamp(maxRGB(throughput)*eta_scale,0,1)，平方根策略返回sqrt(p)。
+/// 从有限非负的重要性计算平方根存活率；零权重直接终止，单位以上必定存活。
+public func survival_probability(metric: float)->float {
+    return sqrt(saturate(metric));
+}
+
+/// 普通 PT 以折射率补偿后的最大颜色通道作为重要性。
 /// 平方根启发式来自Cycles path_state_continuation_probability；这里保留eta补偿。
 /// https://github.com/blender/blender/blob/0dc747e6a9277155ad85fc0644c4e0e17a4c0d20/intern/cycles/kernel/integrator/path_state.h#L273
 /// p=0 结束，p=1 原样继续；两者均不取随机数。
 /// 仅 0<p<1 时取独立均匀 u，以 u<p 决定存活，再调用 roulette_reweight。
-public func roulette_probability(throughput: float3, eta_scale: float, square_root: bool = false)
-    ->float {
-    let probability =
-        clamp(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale, 0.0, 1.0);
-    return square_root ? sqrt(probability) : probability;
+public func roulette_probability(throughput: float3, eta_scale: float)->float {
+    return survival_probability(max(throughput.x, max(throughput.y, throughput.z)) * eta_scale);
 }
 
 /// 仅用于 0<p<1 的存活事件；条件贡献除以 p，保持期望。p=1 路径不需要调用。

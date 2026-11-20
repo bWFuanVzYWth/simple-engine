@@ -29,6 +29,7 @@
 /// Falcor 759aad03 默认 point Hybrid 的前缀重放；场景和材质操作由 IRestirScene 注入。
 /// 初采和重放共同使用本模块的随机消费契约；重放不执行 Russian roulette。
 module replay;
+import transport.roulette;
 import math.constants;
 
 import restir_pt.types;
@@ -96,7 +97,7 @@ public func light_mis_weight(n0: float, p0: float, n1: float, p1: float)->float 
 /// 初采外部 RR 的存活率；存活时 throughput 除此值，source_pdf 乘此值。
 /// mixed-PSS 的重放去掉 roulette 维，仅跳过相同随机数，不再次补偿吞吐。
 public func initial_roulette_probability(throughput: float3)->float {
-    return min(1.0, max(0.0, PathRISState::to_scalar(throughput)));
+    return transport::survival_probability(PathRISState::to_scalar(throughput));
 }
 
 /// 连续 BSDF 用立体角密度，delta 仅在 footprint 中用 NV 的有限大替代值。

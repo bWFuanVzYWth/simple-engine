@@ -45,7 +45,10 @@ powershell -NoProfile -File scripts/check.ps1 -Suite features
 - [体素表面提取](../target/doc/voxel_mesh/index.html)
 - [DAG 局部构建](../target/doc/hash_dag/struct.LocalBuilder.html)与[批量导入](../target/doc/hash_dag/struct.HashDag.html#method.set_built_regions)：内核不创建线程，由应用持有结果槽并调度
 - [GPU 区块光源树更新](../target/doc/vulkan/interop/struct.WgpuContext.html#method.record_light_world)与[共享 Slang 采样、RR、MIS](../target/doc/simple_engine/shader_library/index.html)
-- [primeDRT 参数准备](../target/doc/simple_engine/display/index.html)与共享 `display.prime_drt` Slang 模块
+- [primeDRT 参数准备](../target/doc/display/index.html)与共享 `display.prime_drt` Slang 模块
+- [快速圆形泛光](../target/doc/circular_bloom/index.html)
+- [FFT 泛光与光阑衍射点光斑](../target/doc/fft_bloom/index.html)
+- [光谱积分与 D65 色彩转换](../target/doc/color/spectrum/index.html)和[衍射核工作台](../examples/diffraction_lab/README.md)
 - [OpenPBR 能力子集](../target/doc/openpbr/index.html)与[运行时大气](../target/doc/atmosphere/index.html)；GPU owner 由调用方显式共享、排序和提交
 - [Vulkan 光追与二值 OMM](../target/doc/vulkan/index.html)
 - [SipHash](../target/doc/sip_hash/index.html)与[批量梯度噪声](../target/doc/perlin_noise/index.html)
@@ -53,4 +56,4 @@ powershell -NoProfile -File scripts/check.ps1 -Suite features
 
 运行入口见[Cornell box](../examples/cornell_box/README.md)与[hello_triangle](../examples/hello_triangle/README.md)。
 
-显示参数可独立检查：`cargo test --locked -p simple_engine --no-default-features --features display`。GPU 显示算法验证见[生产 shader 测试](gpu-test.md)。更换显示变换时按目标选择线性或编码输出，颜色空间与 transfer 契约见对应 API。
+显示参数可独立检查：`cargo test --locked -p display -p fft_bloom --lib`。GPU 显示算法验证见[生产 shader 测试](gpu-test.md)。更换显示变换时按目标选择线性或编码输出，颜色空间与 transfer 契约见对应 API。

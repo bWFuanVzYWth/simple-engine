@@ -58,9 +58,9 @@ use pipelines::{ComputePipelineData, RayPipelineData};
 
 #[path = "native_commands.rs"]
 mod commands;
-#[doc(inline)]
-pub use commands::Commands;
 use commands::memory_barrier;
+#[doc(inline)]
+pub use commands::{Commands, ImagePasses};
 
 #[path = "native_light_tree.rs"]
 mod light_tree;
@@ -200,6 +200,21 @@ type ComputeVersion = meta::Version;
 type Record = lifecycle::Record<BuildBuffers>;
 
 impl Context {
+    /// 一维 compute 工作组的最大线程数，同时受 X 轴长度和组内总调用数约束。
+    pub fn max_compute_group_width(&self) -> u32 {
+        let limits = self.device.physical.properties().limits;
+        limits.max_compute_work_group_size[0].min(limits.max_compute_work_group_invocations)
+    }
+
+    /// 单张二维图像的宽、高上限，单位为像素。
+    pub fn max_image_dimension_2d(&self) -> u32 {
+        self.device
+            .physical
+            .properties()
+            .limits
+            .max_image_dimension2_d
+    }
+
     /// 返回单个 storage buffer 的物理设备字节上限，查询不会分配资源。
     pub fn max_storage_buffer_range(&self) -> u32 {
         self.device

@@ -100,8 +100,7 @@ public func process_delta_prefix<Scene>(scene: Scene, inout data: TransportCall,
     if (max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (path.depth + 1 >= 2) {
-        let survival = transport::roulette_probability(path.throughput, path.eta_scale,
-                                                       settings.square_root_roulette);
+        let survival = transport::roulette_probability(path.throughput, path.eta_scale);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0) {
@@ -366,8 +365,7 @@ public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 
         max(path.throughput.x, max(path.throughput.y, path.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (complete_transport && path.depth + 1 >= 2) {
-        let survival = transport::roulette_probability(path.throughput, path.eta_scale,
-                                                       settings.square_root_roulette);
+        let survival = transport::roulette_probability(path.throughput, path.eta_scale);
         if (survival == 0)
             status = PATH_DONE;
         else if (survival < 1.0) {

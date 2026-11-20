@@ -67,6 +67,17 @@ cargo bench --locked -p shader_tests --bench exposure
 
 输出 JSON 分别记录 buffer 和 texture 的均匀、空间混合及宽亮度场景。GPU 时间覆盖生产录制器的直方图清零、计量和曝光更新，另记输入准备与命令录制，测量结束后回读曝光状态。
 
+在仓库根目录的 PowerShell 中运行 FFT 与快速圆形泛光的真机对照和原生 4K 测量。FFT 是快速傅里叶变换，这里用于将每个高光按给定的二维光斑扩散到周围。
+
+```powershell
+cargo test --release --locked -p shader_tests --test bloom -- --ignored --test-threads=1
+cargo bench --locked -p shader_tests --bench bloom
+```
+
+成功时测试显示全部通过，bench 输出 JSON。33×33 高斯核和 129×129 星芒核使用同一张 HDR 图像。相机光圈、瞳孔和快速圆形模式使用同一个半径 9 像素的太阳盘。前两项与 1825×1825 标定核的直接卷积对照，快速圆形与理想圆孔的远翼衰减对照。报告给出原生 3840×2160 下的每帧 GPU 时间、常驻分配、准备与回读时间和 RGB 总光量误差。两种标定镜头另记录实际 FFT 矩形。接入参数和核尺寸范围见[泛光 API](../target/doc/fft_bloom/index.html)。
+
+要单独测量快速圆形，在同一 PowerShell 运行 `cargo bench --locked -p shader_tests --bench bloom -- --circular-only`。它在 3840×2160 和 2560×1440 上分别处理单个太阳盘和带大量纹理的 HDR 画面，报告 GPU 时间、视图工作集与逐通道通量误差。滤波器入口见[圆形泛光 API](../target/doc/circular_bloom/index.html)。
+
 原生 4K 输入与输出的 5×5 空间重建可在同一终端测量：
 
 ```powershell

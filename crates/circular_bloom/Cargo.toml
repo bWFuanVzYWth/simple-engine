@@ -1,0 +1,17 @@
+[package]
+name = "circular_bloom"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vulkan = { path = "../vulkan" }
+
+[build-dependencies]
+color = { path = "../color", features = ["spectrum"] }
+libm = "0.2"
+shader_build = { path = "../shader_build" }
+
+[lints]
+workspace = true

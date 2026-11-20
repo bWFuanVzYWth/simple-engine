@@ -8,6 +8,8 @@ pub enum ImageFormat {
     R32Float,
     /// 双通道半精度向量。
     Rg16Float,
+    /// 双通道全精度，例如离线衍射频谱的实部与虚部。
+    Rg32Float,
     /// 线性 HDR。
     Rgba32Float,
     /// 线性 LUT。
@@ -22,6 +24,7 @@ impl ImageFormat {
         match self {
             Self::R32Float => vk::Format::R32_SFLOAT,
             Self::Rg16Float => vk::Format::R16G16_SFLOAT,
+            Self::Rg32Float => vk::Format::R32G32_SFLOAT,
             Self::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
             Self::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
             Self::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
@@ -31,7 +34,7 @@ impl ImageFormat {
     pub(super) const fn bytes(self) -> usize {
         match self {
             Self::Rgba32Float => 16,
-            Self::Rgba16Float => 8,
+            Self::Rgba16Float | Self::Rg32Float => 8,
             _ => 4,
         }
     }

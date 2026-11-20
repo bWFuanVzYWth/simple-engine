@@ -53,10 +53,8 @@ pub struct Programs<'a> {
 pub struct RealtimePrograms<'a> {
     /// 有限相机采样策略；索引由宿主帧计划维持。
     pub primary: &'a [RayShader<'a>],
-    /// 固定1 spp输运。
-    pub transport: RayShader<'a>,
     /// 固定2 spp双pass；第二项读取第一项的未归一化辐射。
-    pub transport_pair: Option<[RayShader<'a>; 2]>,
+    pub transport_pair: [RayShader<'a>; 2],
     /// 固定2 spp合并参考；生产可不准备。
     pub merged: Option<RayShader<'a>>,
     /// 与材质Hit Group同序的首面callable，仅链接到实时输运。
@@ -66,8 +64,6 @@ pub struct RealtimePrograms<'a> {
 /// 已准备的实时样本调度；不得与绑定中的样本数不一致。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RealtimeSchedule {
-    /// 单条实时路径。
-    One,
     /// 两条顺序执行的实时路径。
     SplitTwo,
     /// 显式合并参考；须准备对应入口。
@@ -90,8 +86,7 @@ pub struct RealtimeFrame {
 
 struct RealtimeStages {
     primary: Vec<RayTracingPipeline>,
-    transport: RayTracingPipeline,
-    transport_pair: Option<[RayTracingPipeline; 2]>,
+    transport_pair: [RayTracingPipeline; 2],
     merged: Option<RayTracingPipeline>,
 }
 
@@ -198,11 +193,10 @@ impl Renderer {
                 };
                 Ok::<_, vulkan::Error>(RealtimeStages {
                     primary,
-                    transport: create(realtime.transport)?,
-                    transport_pair: realtime
-                        .transport_pair
-                        .map(|pair| Ok::<_, vulkan::Error>([create(pair[0])?, create(pair[1])?]))
-                        .transpose()?,
+                    transport_pair: [
+                        create(realtime.transport_pair[0])?,
+                        create(realtime.transport_pair[1])?,
+                    ],
                     merged: realtime.merged.map(create).transpose()?,
                 })
             })
@@ -254,16 +248,10 @@ impl Renderer {
                             .iter()
                             .map(|p| p.rebind(context, trace))
                             .collect::<Result<_, _>>()?,
-                        transport: stages.transport.rebind(context, trace)?,
-                        transport_pair: stages
-                            .transport_pair
-                            .map(|pair| {
-                                Ok::<_, vulkan::Error>([
-                                    pair[0].rebind(context, trace)?,
-                                    pair[1].rebind(context, trace)?,
-                                ])
-                            })
-                            .transpose()?,
+                        transport_pair: [
+                            stages.transport_pair[0].rebind(context, trace)?,
+                            stages.transport_pair[1].rebind(context, trace)?,
+                        ],
                         merged: stages
                             .merged
                             .map(|p| p.rebind(context, trace))
@@ -302,8 +290,7 @@ impl Renderer {
                     .primary
                     .iter()
                     .copied()
-                    .chain([stages.transport])
-                    .chain(stages.transport_pair.into_iter().flatten())
+                    .chain(stages.transport_pair)
                     .chain(stages.merged)
                     .map(Resource::from)
             }))
@@ -332,11 +319,8 @@ impl Renderer {
             for (index, &primary) in stages.primary.iter().enumerate() {
                 capture(format!("primary-{index}"), primary)?;
             }
-            capture("realtime-one".into(), stages.transport)?;
-            if let Some(pair) = stages.transport_pair {
-                for (lane, pipeline) in pair.into_iter().enumerate() {
-                    capture(format!("realtime-two-{lane}"), pipeline)?;
-                }
+            for (lane, pipeline) in stages.transport_pair.into_iter().enumerate() {
+                capture(format!("realtime-two-{lane}"), pipeline)?;
             }
             if let Some(merged) = stages.merged {
                 capture("realtime-two-reference".into(), merged)?;
@@ -345,7 +329,7 @@ impl Renderer {
         Ok(results)
     }
 
-    /// 两个实时输运入口各自的驱动可执行统计；未准备双pass时返回None。
+    /// 两个实时输运入口各自的驱动可执行统计；未准备实时程序时返回None。
     /// 须显式启用native统计能力，不执行GPU；查询失败保留底层错误。
     pub fn transport_pair_statistics(
         &self,
@@ -353,7 +337,7 @@ impl Renderer {
     ) -> Result<Option<[Vec<vulkan::native::ExecutableStatistics>; 2]>, Error> {
         self.realtime
             .as_ref()
-            .and_then(|stages| stages.transport_pair)
+            .map(|stages| stages.transport_pair)
             .map(|pair| {
                 Ok([
                     pair[0].executable_statistics(context)?,
@@ -414,12 +398,7 @@ impl Renderer {
             .get(frame.primary)
             .ok_or(vulkan::Error::InvalidArgument("实时相机策略越界"))?;
         let transport = match frame.schedule {
-            RealtimeSchedule::SplitTwo => stages
-                .transport_pair
-                .as_ref()
-                .ok_or(vulkan::Error::InvalidArgument("未配置实时双pass输运"))?
-                .as_slice(),
-            RealtimeSchedule::One => std::slice::from_ref(&stages.transport),
+            RealtimeSchedule::SplitTwo => stages.transport_pair.as_slice(),
             RealtimeSchedule::MergedTwo => std::slice::from_ref(
                 stages
                     .merged

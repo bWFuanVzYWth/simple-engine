@@ -1,6 +1,54 @@
 //! 顺序命令构建、资源访问和录制；提交与完成归Context所有。
 use super::*;
 
+/// 已绑定的计算阶段与输出图像。各阶段顺序执行，阶段之间及首尾都有内存屏障。
+/// 首尾同步覆盖外部生产和消费，内部屏障覆盖 compute 阶段对存储资源的读写。
+/// 本值持有描述句柄，调用方须在 Context 回收时保留其发布根。
+/// 参见 [Vulkan Guide 的计算阶段间同步](https://docs.vulkan.org/guide/latest/synchronization_examples.html)。
+pub struct ImagePasses {
+    output: Image,
+    dispatches: Vec<(ComputePipeline, [u32; 3])>,
+}
+
+impl ImagePasses {
+    /// 接管调度列表。各管线须属于同一设备，构建方负责绑定输入、工作区与最终输出。
+    pub const fn new(output: Image, dispatches: Vec<(ComputePipeline, [u32; 3])>) -> Self {
+        Self { output, dispatches }
+    }
+
+    /// 序列写入的设备图像，内容在执行完成后可用。
+    pub const fn output(&self) -> Image {
+        self.output
+    }
+
+    /// 每次录制发射的工作组调度次数。
+    pub const fn dispatch_count(&self) -> usize {
+        self.dispatches.len()
+    }
+
+    /// 保活输出、管线及其绑定资源，直至视图撤下。
+    pub fn roots(&self) -> impl Iterator<Item = Resource> + '_ {
+        std::iter::once(self.output.into())
+            .chain(self.dispatches.iter().map(|&(p, _)| Resource::from(p)))
+    }
+
+    /// 追加各阶段的调度与屏障，提交和完成由调用方管理。
+    /// # Errors
+    /// 管线归属或工作组数无效时返回底层错误，须丢弃已追加部分操作的命令。
+    pub fn record_into(&self, commands: &mut Commands) -> Result<(), Error> {
+        commands.barrier();
+        if let Some((&(last, size), previous)) = self.dispatches.split_last() {
+            for &(pipeline, groups) in previous {
+                commands.dispatch(pipeline, groups)?;
+                commands.operations.push(Op::ComputeBarrier);
+            }
+            commands.dispatch(last, size)?;
+            commands.barrier();
+        }
+        Ok(())
+    }
+}
+
 /// 顺序命令构建器；未 finish 的命令不访问队列或保留资源。
 pub struct Commands {
     pub(super) owner: u64,
@@ -163,7 +211,7 @@ impl Commands {
                     context.active(access.key())?;
                     None
                 }
-                Op::Barrier => None,
+                Op::Barrier | Op::ComputeBarrier => None,
                 Op::ResetTimestamps(q) => {
                     context.active(q.key)?;
                     context.resource_idle(q.key)?;
@@ -312,6 +360,20 @@ impl Record {
                     }
                     Op::Keepalive(_) | Op::Access(_) => {}
                     Op::Barrier => memory_barrier(device, command),
+                    // 图像计算序列内部只有 compute 读写，外部生产与消费已由首尾屏障覆盖。
+                    Op::ComputeBarrier => device.raw.cmd_pipeline_barrier(
+                        command,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[vk::MemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )],
+                        &[],
+                        &[],
+                    ),
                     Op::Clear(b) => {
                         device
                             .raw

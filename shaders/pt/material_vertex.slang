@@ -130,11 +130,13 @@ struct DirectEvaluationConsumer : openpbr::IFlowEvaluationConsumer {
 };
 
 /// 已解码的本次命中由一个材质入口消费；路径结果直接原位发布。
-/// primary 为 true 时，调用方保证 primary_samples 为 1 或 2，且 primary_lane<primary_samples。
+/// primary 为 true 时，调用方保证 primary_lane 是固定双样本中的第 0 或 1 条路径。
 public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask : uint = 3,
-                           let primary : bool = false>(
-    scene: Scene, inout call: MaterialCall, hit: Hit, material: transport::SurfaceMaterial,
-    incoming: float3, settings: Settings, primary_samples: uint = 1, primary_lane: uint = 0)
+                           let primary : bool = false>(scene: Scene, inout call: MaterialCall,
+                                                       hit: Hit,
+                                                       material: transport::SurfaceMaterial,
+                                                       incoming: float3, settings: Settings,
+                                                       primary_lane: uint = 0)
     ->void {
     let depth = call.state & 127u;
     var events : uint = (call.state >> 7u) & 127u;
@@ -181,7 +183,7 @@ public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask :
             scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
-            primary_samples, primary_lane, consumer);
+            2u, primary_lane, consumer);
     else
 #endif
         next = openpbr::shade_flow_consume<flow, openpbr::Energy, DirectEvaluationConsumer,
@@ -214,8 +216,7 @@ public func shade_material<let flow : uint, Scene : IFlowScene, let light_mask :
     if (max(call.throughput.x, max(call.throughput.y, call.throughput.z)) <= 0)
         status = PATH_DONE;
     else if (depth + 1u >= 2u) {
-        let survival = transport::roulette_probability(call.throughput, call.eta_scale,
-                                                       settings.square_root_roulette);
+        let survival = transport::roulette_probability(call.throughput, call.eta_scale);
         if (survival == 0 || (survival < 1 && sampler.roulette(depth) >= survival))
             status = PATH_DONE;
         else if (survival < 1)

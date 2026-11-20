@@ -18,6 +18,11 @@
 
 pub mod exposure;
 
+/// 随本 crate 分发的 Slang 搜索根，包含 `display.prime_drt` 与曝光模块。
+pub const fn shader_root() -> &'static str {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/shaders")
+}
+
 /// primeDRT 参数的输入边界错误；不创建部分有效的参数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

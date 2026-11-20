@@ -23,6 +23,14 @@ import geometry.ray;
 
 模块按职责放在 `shaders/` 下，例如 `openpbr/closure/base.slang`。输出 PT 图像时，用 `pt::resolve_linear_hdr` 取得线性结果并检查 `.w`，需要显示色时再把有效的 `.xyz` 交给 `display::prime_drt_linear_bt709`。
 
+需要导入 `display.prime_drt` 或 `display.exposure` 时，启用 `display` 并将 `simple_engine::display::shader_root()` 加入 Slang 的搜索目录。
+
+想自己调整星芒、圆形光环和光源色散，可以从[衍射核工作台](../examples/diffraction_lab/README.md)开始。示例能预览点光源与太阳盘，并导出渲染器可读取的核文件。
+
+快速圆形泛光可单独启用 `simple_engine` 的 `circular_bloom` 功能。用 `circular_bloom::Filter::new` 在设备上准备圆孔滤波器，用 `bind` 绑定原分辨率的线性 HDR 输入。每帧在输入就绪后调用返回视图的 `record_into`，把 `output()` 交给显示变换。分辨率改变时重新绑定视图。光圈、波段和像素积分的约定见[圆形泛光 API](../target/doc/circular_bloom/index.html)。
+
+使用导出的镜头时，启用 `fft_bloom,vulkan`，用 `fft_bloom::gpu::PROGRAMS` 创建 `fft_bloom::gpu::Lens`。默认镜头为相机光圈，调用 `select(Aperture::Pupil)` 并重新绑定视图可切换到瞳孔。自定义光斑由 `fft_bloom::gpu::Filter` 加载。真机对照和计时命令见[GPU 手册](gpu-test.md)。
+
 四边形灯面的正向采样和反向 PDF 接收同一世界树版本提供的选灯概率。按区块重建子树，再用各区块摘要生成世界树。命中反查与正向选灯共用区块内灯号和同一组随机格点。构建与提交见 [`WgpuContext::record_light_world`](../target/doc/vulkan/interop/struct.WgpuContext.html#method.record_light_world)。
 
 [模块 API 索引](../target/doc/simple_engine/shader_library/index.html)链接来源与硬件边界；参数、数值前提及返回语义保留在对应 [Slang 声明](../shaders)。不要从手册复制误差系数、矩阵或内存布局。修改后运行[生产 shader 测试](gpu-test.md)，按实际涉及的 compute/RT 路径选择设备；移植几何算法时同时核对 [NVIDIA 许可证](../LICENSES/NVIDIA-self-intersection-avoidance.txt)。

@@ -30,6 +30,7 @@ pub(crate) enum Op {
     Trace(RayTracingPipeline, [u32; 3]),
     Dispatch(ComputePipeline, [u32; 3]),
     Barrier,
+    ComputeBarrier,
     Clear(Buffer),
     Keepalive(Resource),
     Access(ResourceAccess),
@@ -48,7 +49,7 @@ impl Op {
             Self::Keepalive(resource) => Some(resource.0),
             Self::Access(access) => Some(access.key()),
             Self::ResetTimestamps(queries) | Self::Timestamp(queries, _) => Some(queries.key),
-            Self::Barrier => None,
+            Self::Barrier | Self::ComputeBarrier => None,
         }
     }
 

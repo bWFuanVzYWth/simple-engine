@@ -17,6 +17,9 @@
 //! [bt2020]: https://www.itu.int/rec/R-REC-BT.2020-2-201510-I/en
 //! [code]: https://www.w3.org/TR/2024/CRD-css-color-4-20240213/#color-conversion-code
 
+#[cfg(feature = "spectrum")]
+pub mod spectrum;
+
 /// 8-bit sRGB 编码 RGB 与线性 alpha，均未预乘。
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

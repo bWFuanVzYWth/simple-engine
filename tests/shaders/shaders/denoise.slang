@@ -222,7 +222,7 @@ func denoise_prefix_main(uint3 id: SV_DispatchThreadID)->void {
     with_guides.path.throughput = 1;
     with_guides.path.eta_scale = 1;
     var without_guides : TransportCall = with_guides;
-    let settings : Settings = { 0, 3, 8, 8, false };
+    let settings : Settings = { 0, 3, 8, 8 };
     var first : float;
     var other_first : float;
     trace_prefix(PrefixScene(), with_guides, settings, first, PrefixGuides());

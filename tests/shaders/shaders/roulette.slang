@@ -8,7 +8,7 @@ var inputs : StructuredBuffer<uint4>;
 var outputs : RWStructuredBuffer<uint4>;
 
 // 每 case 两行：float bits beta.xyz/eta_scale；relative_eta/标记/completed/minimum。
-// 标记bit0为透射，bit1为平方根轮盘。
+// 标记非零表示透射。
 [numthreads(64, 1, 1)]
 func roulette_probability_main(uint3 id: SV_DispatchThreadID)->void {
     var rows : uint;
@@ -18,8 +18,8 @@ func roulette_probability_main(uint3 id: SV_DispatchThreadID)->void {
         return;
     let a : float4 = asfloat(inputs[2 * id.x]);
     let b : uint4 = inputs[2 * id.x + 1];
-    let probability : float = transport::roulette_probability(a.xyz, a.w, (b.y & 2u) != 0);
-    let scale : float = transport::eta_scale_after_scatter(a.w, asfloat(b.x), (b.y & 1u) != 0);
+    let probability : float = transport::roulette_probability(a.xyz, a.w);
+    let scale : float = transport::eta_scale_after_scatter(a.w, asfloat(b.x), b.y != 0);
     outputs[id.x] = uint4(asuint(probability), id.x + 1, asuint(scale),
                           uint(transport::roulette_applies(b.z, b.w)));
 }
@@ -34,8 +34,7 @@ func roulette_mean_main(uint3 id: SV_DispatchThreadID)->void {
         return;
     let a : float4 = asfloat(inputs[2 * id.x]);
     let count : uint = inputs[2 * id.x + 1].x;
-    let probability : float =
-                          transport::roulette_probability(a.xyz, a.w, inputs[2 * id.x + 1].y != 0);
+    let probability = transport::roulette_probability(a.xyz, a.w);
     var mean : float3 = 0;
     if (probability == 1)
         mean = a.xyz;
@@ -50,7 +49,7 @@ func roulette_mean_main(uint3 id: SV_DispatchThreadID)->void {
     outputs[id.x] = uint4(asuint(mean.x), id.x + 1, asuint(mean.y), asuint(mean.z));
 }
 
-// 第一行是空气中的 beta.xyz 与 eta_t/eta_i；第二行x选择平方根轮盘。
+// 第一行是空气中的 beta.xyz 与 eta_t/eta_i。
 // 理想透射的 radiance 因子 1/eta² 应被 RR eta_scale 抵消，出介质后恢复原 metric。
 [numthreads(64, 1, 1)]
 func roulette_eta_main(uint3 id: SV_DispatchThreadID)->void {
@@ -64,11 +63,9 @@ func roulette_eta_main(uint3 id: SV_DispatchThreadID)->void {
     let square : float = eta * eta;
     let scale : float = transport::eta_scale_after_scatter(1, eta, true);
     let inside : float3 = a.xyz / square;
-    let square_root : bool = inputs[2 * id.x + 1].x != 0;
-    let inside_probability : float = transport::roulette_probability(inside, scale, square_root);
+    let inside_probability : float = transport::roulette_probability(inside, scale);
     let restored : float = transport::eta_scale_after_scatter(scale, 1.0 / eta, true);
-    let restored_probability
-        : float = transport::roulette_probability(inside * square, restored, square_root);
+    let restored_probability : float = transport::roulette_probability(inside * square, restored);
     let reflected : float = transport::eta_scale_after_scatter(1, eta, false);
     outputs[id.x] = uint4(asuint(inside_probability), id.x + 1, asuint(restored_probability),
                           asuint(reflected));

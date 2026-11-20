@@ -12,7 +12,9 @@
 | NVIDIA Falcor ReSTIR PT 代码与 paired LUT | [来源](shaders/restir_pt/NOTICE.md)、[BSD-3-Clause 与版权](shaders/restir_pt/LICENSE.txt)；源码保留各自声明 |
 | NVIDIA Streamline 2.14.1 headers 与 DLSS 310.9.1 runtime | [Streamline 许可](LICENSES/NVIDIA-Streamline.txt)、[DLSS 许可](LICENSES/NVIDIA-DLSS.txt)、[第三方声明](LICENSES/NVIDIA-Streamline-Third-Party.md)；来源与 SHA256 见 [SDK 锁](crates/vulkan/streamline/sdk-lock.json)，SDK 缓存在 `target/streamline-sdk`，不纳入 Git |
 | Khronos Vulkan-Headers，供可选 Streamline bridge 构建 | [Apache-2.0](LICENSES/Khronos-Vulkan-Headers-Apache-2.0.txt)、[MIT](LICENSES/Khronos-Vulkan-Headers-MIT.txt)；精确版本与来源见 SDK 锁 |
+| 镜头随机种子的 SeedSequence，Melissa E. O'Neill 与 NumPy Developers，已移植为 Rust | [MIT 许可](LICENSES/SeedSequence-MIT.txt)、[固定版本实现](https://github.com/numpy/numpy/blob/v2.3.2/numpy/random/bit_generator.pyx) |
 | Noto Sans SC 字体 | [来源](assets/fonts/README.md)、[SIL Open Font License 1.1](assets/fonts/OFL.txt) |
+| CIE 1931 2° 标准观察者与 CIE D65 光谱数据，International Commission on Illumination | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)、[数据来源与格式转换](crates/color/data/README.md) |
 
 外部 Rust 依赖保留各自的许可证和版权；实际版本见 `Cargo.lock`，许可信息见对应上游 crate。
 

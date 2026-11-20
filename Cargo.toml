@@ -12,8 +12,13 @@ workspace = true
 [features]
 default = []
 color = ["dep:color"]
+spectrum = ["color", "color/spectrum"]
 camera = ["dep:camera"]
-display = ["dep:thiserror"]
+display = ["dep:display"]
+fft_bloom = ["dep:fft_bloom"]
+circular_bloom = ["dep:circular_bloom", "vulkan"]
+fft_bloom_calibration = ["fft_bloom", "fft_bloom/calibration", "spectrum"]
+fft_bloom_calibration_gpu = ["fft_bloom_calibration", "fft_bloom/calibration_gpu", "vulkan"]
 openpbr = ["dep:openpbr"]
 openpbr_program = ["openpbr", "openpbr/program"]
 openpbr_gpu = ["openpbr", "openpbr/gpu", "wgpu"]
@@ -43,7 +48,7 @@ render2d_gpu = ["render2d", "render2d/gpu", "wgpu"]
 ui = ["dep:ui", "input", "render2d", "render2d/text"]
 gpu_log = ["dep:gpu_log"]
 wgpu = ["dep:wgpu"]
-vulkan = ["dep:vulkan", "wgpu"]
+vulkan = ["dep:vulkan", "wgpu", "display?/vulkan", "fft_bloom?/vulkan"]
 dlss_rr = ["vulkan", "vulkan/dlss_rr"]
 webgpu = ["wgpu", "wgpu/webgpu", "wgpu/wgsl"]
 shader_build = ["dep:shader_build"]
@@ -51,7 +56,8 @@ shader_library = []
 gpu_test = ["dep:gpu_test", "vulkan", "gpu_log"]
 
 [dependencies]
-thiserror = { workspace = true, optional = true }
+display = { path = "crates/display", optional = true }
+fft_bloom = { path = "crates/fft_bloom", optional = true }
 openpbr = { path = "crates/openpbr", optional = true }
 pt = { path = "crates/pt", optional = true }
 restir_pt = { path = "crates/restir_pt", optional = true }
@@ -77,12 +83,16 @@ wgpu = { workspace = true, optional = true }
 shader_build = { path = "crates/shader_build", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+circular_bloom = { path = "crates/circular_bloom", optional = true }
 vulkan = { path = "crates/vulkan", optional = true }
 gpu_test = { path = "crates/gpu_test", optional = true }
 
 [workspace]
 resolver = "3"
 members = [
+    "crates/display",
+    "crates/fft_bloom",
+    "crates/circular_bloom",
     "crates/openpbr",
     "crates/pt",
     "crates/restir_pt",
@@ -109,6 +119,7 @@ members = [
     "crates/shader_build",
     "examples/cornell_box",
     "examples/hello_triangle",
+    "examples/diffraction_lab",
     "tests/wgpu_vulkan",
     "tests/render2d",
     "tests/shaders",

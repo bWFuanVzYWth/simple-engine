@@ -150,7 +150,7 @@ func pt_scene_main(uint3 id: SV_DispatchThreadID)->void {
     attributes.hit.identity.x = 0xffffffffu;
     attributes.hit.identity.y = base + 1;
     attributes.hit.texel = inputs[base];
-    var settings : Settings = { 17, 1, 8, 8, false };
+    var settings : Settings = { 17, 1, 8, 8 };
     let mode : uint = asuint(inputs[base + 3].w);
     if (mode == 0) {
         palette.path.depth = 1;

@@ -59,7 +59,8 @@ try {
             Invoke-Cargo 'chunk-manager-lifecycle' @('test', '--locked', '-p', 'chunk_manager', '--tests')
             Invoke-Cargo 'restir-pt-cpu' @('test', '--locked', '-p', 'restir_pt', '--tests')
             Invoke-Cargo 'input-recording' @('test', '--locked', '-p', 'input', '--features', 'serde')
-            Invoke-Cargo 'display-cpu' @('test', '--locked', '-p', 'simple_engine', '--no-default-features', '--features', 'display', '--lib')
+            Invoke-Cargo 'display-cpu' @('test', '--locked', '-p', 'display', '-p', 'fft_bloom', '--lib')
+            Invoke-Cargo 'spectral-calibration' @('test', '--locked', '-p', 'color', '-p', 'fft_bloom', '--features', 'fft_bloom/calibration,color/spectrum', '--lib')
             Invoke-Cargo 'render-algorithms-cpu' @('test', '--locked', '-p', 'openpbr', '-p', 'atmosphere', '-p', 'pt', '--no-default-features', '--lib')
             Invoke-Step 'process-tests' (Get-Process -Id $PID).Path @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'tests/process.ps1'))
         }
@@ -68,6 +69,11 @@ try {
                 @{ Name = 'minimal' },
                 @{ Name = 'camera'; Features = 'camera' },
                 @{ Name = 'display'; Features = 'display' },
+                @{ Name = 'fft-bloom'; Features = 'fft_bloom' },
+                @{ Name = 'fft-bloom-calibration'; Features = 'fft_bloom_calibration' },
+                @{ Name = 'fft-bloom-calibration-gpu'; Features = 'fft_bloom_calibration_gpu' },
+                @{ Name = 'fft-bloom-native'; Features = 'fft_bloom,vulkan' },
+                @{ Name = 'circular-bloom'; Features = 'circular_bloom' },
                 @{ Name = 'openpbr'; Features = 'openpbr' },
                 @{ Name = 'openpbr-program'; Features = 'openpbr_program' },
                 @{ Name = 'openpbr-gpu'; Features = 'openpbr_gpu' },
@@ -101,7 +107,7 @@ try {
                 @{ Name = 'gpu-test'; Features = 'gpu_test' },
                 @{ Name = 'all'; All = $true },
                 @{ Name = 'web'; Features = 'webgpu,render2d_gpu'; Target = 'wasm32-unknown-unknown' },
-                @{ Name = 'web-cpu'; Features = 'color,display,openpbr,pt,restir_pt,atmosphere,voxel_mesh,chunk_manager,light_bvh,perlin_noise,input_recording,ui'; Target = 'wasm32-unknown-unknown' }
+                @{ Name = 'web-cpu'; Features = 'color,display,fft_bloom,openpbr,pt,restir_pt,atmosphere,voxel_mesh,chunk_manager,light_bvh,perlin_noise,input_recording,ui'; Target = 'wasm32-unknown-unknown' }
             )
             foreach ($case in $cases) {
                 $arguments = @('check', '--locked', '-p', 'simple_engine', '--no-default-features')
@@ -110,9 +116,10 @@ try {
                 if ($case.Target) { $arguments += @('--target', $case.Target) }
                 Invoke-Cargo $case.Name $arguments
             }
-            foreach ($package in @('hello_triangle', 'cornell_box')) {
+            foreach ($package in @('hello_triangle', 'cornell_box', 'diffraction_lab')) {
                 Invoke-Cargo "$package-system" @('check', '--locked', '-p', $package, '--no-default-features', '--all-targets')
             }
+            Invoke-Cargo 'diffraction-lab' @('test', '--locked', '-p', 'diffraction_lab', '--bin', 'diffraction_lab')
         }
         'docs' {
             $previousDocFlags = $env:RUSTDOCFLAGS
@@ -122,8 +129,8 @@ try {
                 $metadata = (& cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json)
                 if ($LASTEXITCODE -ne 0) { throw '无法读取工作区文档目标' }
                 $targets = @($metadata.packages | ForEach-Object { $_.targets } | Where-Object { $_.kind -contains 'lib' -or $_.kind -contains 'rlib' })
-                $webPackages = @('simple_engine', 'camera', 'color', 'gpu_log', 'hash_dag', 'sip_hash', 'perlin_noise', 'input', 'rectangle_decomposition', 'voxel_mesh', 'chunk_manager', 'light_bvh', 'light_sampling', 'opacity', 'render2d', 'ui')
-                $webArgs = @('doc', '--locked', '--target', 'wasm32-unknown-unknown', '--no-deps', '--features', 'simple_engine/camera,simple_engine/color,simple_engine/display,simple_engine/gpu_log,simple_engine/hash_dag,simple_engine/perlin_noise,simple_engine/input_recording,simple_engine/voxel_mesh,simple_engine/chunk_manager,simple_engine/light_bvh,simple_engine/light_sampling,simple_engine/opacity,simple_engine/shader_library')
+                $webPackages = @('simple_engine', 'camera', 'color', 'display', 'fft_bloom', 'gpu_log', 'hash_dag', 'sip_hash', 'perlin_noise', 'input', 'rectangle_decomposition', 'voxel_mesh', 'chunk_manager', 'light_bvh', 'light_sampling', 'opacity', 'render2d', 'ui')
+                $webArgs = @('doc', '--locked', '--target', 'wasm32-unknown-unknown', '--no-deps', '--features', 'simple_engine/camera,simple_engine/color,simple_engine/display,simple_engine/fft_bloom,simple_engine/gpu_log,simple_engine/hash_dag,simple_engine/perlin_noise,simple_engine/input_recording,simple_engine/voxel_mesh,simple_engine/chunk_manager,simple_engine/light_bvh,simple_engine/light_sampling,simple_engine/opacity,simple_engine/shader_library')
                 foreach ($package in $webPackages) { $webArgs += @('-p', $package) }
                 $env:RUSTDOCFLAGS += ' -Z unstable-options --show-coverage --output-format json'
                 Invoke-Cargo 'coverage' @('doc', '--locked', '--workspace', '--lib', '--all-features', '--no-deps')
@@ -158,6 +165,8 @@ try {
                 Invoke-Cargo 'restir-pt' @('test', '--locked', '-p', 'shader_tests', '--test', 'restir_pt', '--', '--ignored', '--test-threads=1')
                 Invoke-Cargo 'display' @('test', '--locked', '-p', 'shader_tests', '--test', 'display', '--', '--ignored', '--test-threads=1')
                 Invoke-Cargo 'exposure' @('test', '--locked', '-p', 'shader_tests', '--test', 'exposure', '--', '--ignored', '--test-threads=1')
+                Invoke-Cargo 'bloom' @('test', '--locked', '-p', 'shader_tests', '--test', 'bloom', '--', '--ignored', '--test-threads=1')
+                Invoke-Cargo 'diffraction' @('test', '--locked', '-p', 'fft_bloom', '--features', 'calibration_gpu', '--test', 'diffraction', '--', '--ignored', '--test-threads=1')
                 Invoke-Cargo 'openpbr' @('test', '--locked', '-p', 'openpbr_tests', '--', '--ignored', '--test-threads=1')
                 Invoke-Cargo 'openpbr-artifacts' @('test', '--locked', '-p', 'openpbr_tests', '--test', 'specialization')
                 Invoke-Cargo 'atmosphere' @('test', '--locked', '-p', 'atmosphere', '--lib', '--', '--ignored', '--test-threads=1')

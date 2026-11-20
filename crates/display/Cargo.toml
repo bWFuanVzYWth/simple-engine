@@ -1,0 +1,19 @@
+[package]
+name = "display"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+vulkan = ["dep:vulkan"]
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vulkan = { path = "../vulkan", optional = true }
+
+[lints]
+workspace = true

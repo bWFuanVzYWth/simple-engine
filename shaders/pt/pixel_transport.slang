@@ -1,4 +1,4 @@
-/// 实时一／二样本、分离 lane 与离线绝对样本的共同外层循环。
+/// 实时双样本、分离 lane 与离线绝对样本的共同外层循环。
 module pixel_transport;
 import pt.scene;
 import pt.hit_transport;
@@ -42,16 +42,15 @@ public func pixel_sample_index(base: uint, lane: uint, realtime: bool, accumulat
     ->uint {
     return base + (realtime ? lane : (accumulated >= batch_begin ? accumulated - batch_begin : 0u));
 }
-/// 实时1／2样本与离线由受控入口固定；Lane为-1时合并，0／1选择分离lane。
-/// 实时Samples须为1或2，分离Lane须小于Samples；离线固定Samples=1、lane=-1。
+/// 实时固定两条路径，lane=-1 时合并，0／1 分别选择其中一条。
+/// 离线每次录制一条路径，lane 固定为 -1。
 /// previous 仅在分离 lane1 时消费；失败 lane0 不启动下一条路径。
 /// 同一加法顺序和除数用于合并与分离调度，不创建嵌套调度。
-public func integrate_pixel<A : IPixelTransport, let realtime : bool, let samples : uint,
-                            let selected_lane : int>(adapter: A, coordinate: uint2,
-                                                     previous: float4)
+public func integrate_pixel<A : IPixelTransport, let realtime : bool, let selected_lane : int>(
+    adapter: A, coordinate: uint2, previous: float4)
     ->PixelTransportResult {
     var adapter = adapter;
-    let paths = selected_lane >= 0 ? (selected_lane == 0 ? 1u : 2u) : (realtime ? samples : 1u);
+    let paths = realtime && selected_lane != 0 ? 2u : 1u;
     let first = selected_lane >= 0 ? uint(selected_lane) : 0u;
     let end = selected_lane >= 0 ? uint(selected_lane) + 1u : paths;
     var data : TransportCall = {};
