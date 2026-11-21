@@ -95,6 +95,7 @@ pub use terrain_upload::{ColumnUpload, TerrainUploads};
 pub use acceleration::{
     AccelerationStructure, BatchBlas, BuildTiming, QuadBlasInput, QuadOutput, TriangleBlas,
     TriangleBlasBatch, TriangleBlasInput, TriangleInstance, TriangleSceneBatch,
+    instance_transform_supported,
 };
 pub(crate) use ash::{khr, vk};
 pub use buffer_pool::{AsBuildMemory, AsPoolStats};

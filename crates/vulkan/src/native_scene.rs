@@ -320,8 +320,13 @@ impl Context {
             Progress::Staged { start, buffers } => {
                 if !buffers.is_empty() {
                     let window = &inputs[start..start + buffers.len()];
-                    let (batch, _, _) =
-                        self.scene_parts(Sources::Uploaded(window, &buffers), None, true, None)?;
+                    let (batch, _, _) = self.scene_parts(
+                        Sources::Uploaded(window, &buffers),
+                        None,
+                        true,
+                        None,
+                        None,
+                    )?;
                     uploads.remember(window, &batch)?;
                 }
                 let Some(built) = uploads.ready(inputs.len(), tail)? else {
@@ -377,12 +382,34 @@ impl Context {
         instance_buffer: Option<Buffer>,
     ) -> Result<crate::TriangleSceneBatch, Error> {
         let (blas, top, tlas_prepare_ns) =
-            self.scene_parts(inputs, Some(instances), queued, instance_buffer)?;
+            self.scene_parts(inputs, Some(instances), queued, instance_buffer, None)?;
         Ok(crate::TriangleSceneBatch {
             blas,
             top: top.expect("请求了 TLAS"),
             tlas_prepare_ns,
         })
+    }
+
+    /// 在原生队列上异步构建实例 TLAS。调用期间借用两个等长数组，每个实例的八位掩码
+    /// 与追踪光线的掩码按位相交。全部 BLAS 须已发布，后续同队列命令可直接消费结果。
+    /// # Errors
+    /// 长度不一致、无效实例、设备或提交失败保留来源。
+    pub fn enqueue_masked_instances(
+        &mut self,
+        instances: &[crate::TriangleInstance<crate::BatchBlas>],
+        masks: &[u8],
+    ) -> Result<crate::AccelerationStructure, Error> {
+        if masks.len() != instances.len() {
+            return Err(Error::InvalidArgument("实例与可见性掩码数量不同"));
+        }
+        let (_, top, _) = self.scene_parts(
+            crate::acceleration::Sources::Triangles(&[]),
+            Some(instances),
+            true,
+            None,
+            Some(masks),
+        )?;
+        Ok(top.expect("本次请求了 TLAS"))
     }
 
     pub(super) fn scene_parts(
@@ -391,6 +418,7 @@ impl Context {
         top_input: Option<&[crate::TriangleInstance<crate::BatchBlas>]>,
         queued: bool,
         instance_buffer: Option<Buffer>,
+        masks: Option<&[u8]>,
     ) -> Result<
         (
             crate::TriangleBlasBatch,
@@ -470,7 +498,7 @@ impl Context {
             let tlas_started = std::time::Instant::now();
             let mut resolved = Vec::new();
             resolved.try_reserve_exact(instances.len())?;
-            for instance in instances {
+            for (index, instance) in instances.iter().enumerate() {
                 let id = match instance.geometry {
                     crate::BatchBlas::Existing(blas) => blas,
                     crate::BatchBlas::New(index) => blases[index],
@@ -484,6 +512,7 @@ impl Context {
                         geometry,
                         transform: instance.transform,
                         custom_index: instance.custom_index,
+                        mask: masks.map_or(0xff, |m| m[index]),
                     },
                 ));
             }
@@ -591,6 +620,7 @@ impl Context {
                 geometry,
                 transform: i.transform,
                 custom_index: i.custom_index,
+                mask: 0xff,
             })?);
         }
         Ok(bytes)
@@ -618,6 +648,7 @@ impl Context {
                     geometry,
                     transform: instance.transform,
                     custom_index: instance.custom_index,
+                    mask: 0xff,
                 },
             ));
         }

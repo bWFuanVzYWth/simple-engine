@@ -27,6 +27,7 @@ pub(crate) struct ResolvedInstance<'a> {
     pub(crate) geometry: &'a BlasData,
     pub(crate) transform: [[f32; 4]; 3],
     pub(crate) custom_index: u32,
+    pub(crate) mask: u8,
 }
 impl Destroy for BlasData {
     fn destroy(&mut self, device: &Device) {
@@ -65,7 +66,7 @@ pub enum BatchBlas {
     New(usize),
 }
 
-/// 三角形实例 TLAS 及共享 BLAS/OMM；mask 为 0xff，禁用面剔除。
+/// 三角形实例 TLAS 及共享 BLAS/OMM；可见性掩码按实例提交，禁用面剔除。
 /// <https://docs.vulkan.org/spec/latest/chapters/accelstructures.html>
 pub(crate) type AccelerationData = crate::lifecycle::resource::Acceleration<Structure>;
 
@@ -205,7 +206,8 @@ impl BlasData {
     }
 }
 
-fn validate_instance(m: &[[f32; 4]; 3], custom_index: u32) -> Result<(), Error> {
+/// 检查行主序仿射矩阵可用于 TLAS。零缩放和浮点误差范围内的奇异矩阵应在发布前剔除。
+pub fn instance_transform_supported(m: &[[f32; 4]; 3]) -> bool {
     let m = m.map(|row| row.map(f64::from));
     let terms = [
         m[0][0] * m[1][1] * m[2][2],
@@ -218,11 +220,13 @@ fn validate_instance(m: &[[f32; 4]; 3], custom_index: u32) -> Result<(), Error> 
     let determinant = terms[0] - terms[1] - terms[2] + terms[3] + terms[4] - terms[5];
     // f32 输入乘三次再消去可能在 f64 中留下假非零；保守覆盖乘加舍入误差。
     let error = 16.0 * f64::EPSILON * terms.into_iter().map(f64::abs).sum::<f64>();
-    if custom_index > 0x00ff_ffff
-        || m.iter().flatten().any(|v| !v.is_finite())
-        || !determinant.is_finite()
-        || determinant.abs() <= error
-    {
+    m.iter().flatten().all(|v| v.is_finite())
+        && determinant.is_finite()
+        && determinant.abs() > error
+}
+
+fn validate_instance(m: &[[f32; 4]; 3], custom_index: u32) -> Result<(), Error> {
+    if custom_index > 0x00ff_ffff || !instance_transform_supported(m) {
         return Err(Error::InvalidArgument("TLAS 实例编号或 affine 变换无效"));
     }
     Ok(())
@@ -240,7 +244,8 @@ pub(crate) fn instance_bytes(instance: &ResolvedInstance<'_>) -> Result<[u8; 64]
     {
         word.copy_from_slice(&value.to_ne_bytes());
     }
-    bytes[48..52].copy_from_slice(&(instance.custom_index | 0xff00_0000).to_ne_bytes());
+    bytes[48..52]
+        .copy_from_slice(&(instance.custom_index | (u32::from(instance.mask) << 24)).to_ne_bytes());
     bytes[52..56].copy_from_slice(
         &(vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() << 24).to_ne_bytes(),
     );
@@ -288,6 +293,7 @@ impl AccelerationData {
                 geometry: resolve(instance.geometry)?,
                 transform: instance.transform,
                 custom_index: instance.custom_index,
+                mask: 0xff,
             })?);
             bottoms.push(instance.geometry);
         }

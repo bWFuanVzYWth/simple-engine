@@ -7,11 +7,11 @@ public interface IBlockerCoverage {
     static func accepts(instance: uint, primitive: uint, bary: float2, front: bool)->bool;
 }
 // 相机射线遵循主查询的覆盖朝向。阻挡列从太阳侧向内查询，覆盖须取接收点向太阳看的那一面。
-func terrain_hit_distance<C : IBlockerCoverage, let reverse : bool>(
+func terrain_hit_distance<C : IBlockerCoverage, let reverse : bool, let mask : uint>(
     scene: RaytracingAccelerationStructure, ray: RayDesc)
     ->float {
     var q : RayQuery<RAY_FLAG_NONE>;
-    q.TraceRayInline(scene, RAY_FLAG_NONE, 0xff, ray);
+    q.TraceRayInline(scene, RAY_FLAG_NONE, mask, ray);
     while (q.Proceed()) {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
             C.accepts(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(),
@@ -21,10 +21,10 @@ func terrain_hit_distance<C : IBlockerCoverage, let reverse : bool>(
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? q.CommittedRayT() : ray.TMax;
 }
 
-public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFrame,
-                                                        cells: RWStructuredBuffer<uint4>,
-                                                        scene: RaytracingAccelerationStructure,
-                                                        first_hits: RWStructuredBuffer<uint>)
+public func resolve_shadow_column<C : IBlockerCoverage, let camera_mask : uint = 255,
+                                  let shadow_mask : uint = 255>(
+    id: uint3, f: TerrainFrame, cells: RWStructuredBuffer<uint4>,
+    scene: RaytracingAccelerationStructure, first_hits: RWStructuredBuffer<uint>)
     ->void {
     var cells = cells;
     var first_hits = first_hits;
@@ -35,7 +35,7 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
         let sample = slice * TERRAIN_RADIAL + id.x;
         let camera : RayDesc = { f.source.camera_position, 0, terrain_ray(f, id.x, slice),
                                  TERRAIN_RANGE_M };
-        let bits : uint = asuint(terrain_hit_distance<C, false>(scene, camera));
+        let bits : uint = asuint(terrain_hit_distance<C, false, camera_mask>(scene, camera));
         let changed = f.source.cold != 0 || (first_hits[sample] & 0x7fffffffu) != bits;
         first_hits[sample] = bits | (uint(changed) << 31u);
     }
@@ -59,7 +59,7 @@ public func resolve_shadow_column<C : IBlockerCoverage>(id: uint3, f: TerrainFra
                  f.source.sun_direction * (f.source.sun_depth_offset + 4096.0) +
                  f.source.basis_u * delta.x + f.source.basis_v * delta.y;
     let ray : RayDesc = { origin, 0, -f.source.sun_direction, 8192.0 };
-    let distance = terrain_hit_distance<C, true>(scene, ray);
+    let distance = terrain_hit_distance<C, true, shadow_mask>(scene, ray);
     var blocker : float = -1e20;
     if (distance < ray.TMax) {
         blocker = f.source.wrapped_shadow_plane_depth + 4096.0 - distance;
