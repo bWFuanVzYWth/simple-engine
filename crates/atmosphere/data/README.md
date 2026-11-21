@@ -1,5 +1,7 @@
 # 固定 Earth 物理输入
 
+随包的 `earth.zip` 含两个独立使用 Zstandard 22 压缩的二进制条目。它们的成员名称和原始 SHA-256 与 Sky Tracer 导出一致。
+
 `medium.bin` 是 12,474 个小端 float4（199,584 B），
 包括高度、剖面消光/五类散射系数、四种气溶胶相函数、相函数质量、积分与坐标节点。
 `params.bin` 是与 Slang `atmosphere::Params` 同顺序的 400 B POD；`params.json` 供人工核对。

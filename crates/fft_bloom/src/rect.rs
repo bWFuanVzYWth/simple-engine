@@ -3,8 +3,8 @@
 //! GPU 上控制全局访存次数的思路见 [VkFFT](https://github.com/DTolm/VkFFT)。
 
 use crate::{
-    Aperture, Kernel,
-    gpu::{CORE_RADIUS, Dispatch, RectPrograms},
+    CORE_RADIUS, Kernel,
+    gpu::{Dispatch, RectPrograms},
 };
 use vulkan::{
     Error,
@@ -64,29 +64,18 @@ struct Workspace {
 pub(crate) struct RectFilter {
     rows: Vec<Axis<3>>,
     columns: Vec<Axis<2>>,
-    weights: RectWeights,
     radius: [u32; 2],
     cached: Option<Workspace>,
 }
 
-pub(crate) enum RectWeights {
-    Device(Buffer),
-    Calibrated(Aperture),
-}
-
-impl RectWeights {
-    pub(crate) fn upload(context: &mut Context, kernel: &Kernel) -> Result<Self, Error> {
-        let channels = kernel.channels();
-        let mut spatial = Vec::new();
-        spatial.try_reserve_exact(channels[0].len())?;
-        for i in 0..channels[0].len() {
-            spatial.push(channels.map(|channel| channel[i].to_le_bytes()));
-        }
-        Ok(Self::Device(Buffer::upload(
-            context,
-            spatial.as_flattened().as_flattened(),
-        )?))
+pub(crate) fn upload_kernel(context: &mut Context, kernel: &Kernel) -> Result<Buffer, Error> {
+    let channels = kernel.channels();
+    let mut spatial = Vec::new();
+    spatial.try_reserve_exact(channels[0].len())?;
+    for i in 0..channels[0].len() {
+        spatial.push(channels.map(|channel| channel[i].to_le_bytes()));
     }
+    Buffer::upload(context, spatial.as_flattened().as_flattened())
 }
 
 fn parameters(
@@ -143,16 +132,10 @@ impl RectFilter {
         self.cached = None;
     }
 
-    pub(crate) fn select_aperture(&mut self, aperture: Aperture) {
-        self.weights = RectWeights::Calibrated(aperture);
-        self.release_workspace();
-    }
-
     pub(crate) fn new(
         context: &mut Context,
         programs: RectPrograms<'_>,
         radius: [u32; 2],
-        weights: RectWeights,
         placeholder: Image,
     ) -> Result<Self, Error> {
         let [rx, ry] = radius;
@@ -189,7 +172,6 @@ impl RectFilter {
         Ok(Self {
             rows,
             columns,
-            weights,
             radius,
             cached: None,
         })
@@ -200,10 +182,6 @@ impl RectFilter {
             .iter()
             .flat_map(|(_, p)| p.map(Resource::from))
             .chain(self.columns.iter().flat_map(|(_, p)| p.map(Resource::from)))
-            .chain(match self.weights {
-                RectWeights::Device(weights) => Some(weights.into()),
-                RectWeights::Calibrated(_) => None,
-            })
             .chain(
                 self.cached
                     .into_iter()
@@ -211,13 +189,14 @@ impl RectFilter {
             )
     }
 
-    pub(crate) fn bind(
+    pub(crate) fn bind<E: From<Error>>(
         &mut self,
         context: &mut Context,
         input: Image,
         output: Image,
         passes: &mut Vec<Dispatch>,
-    ) -> Result<(Image, [u32; 2]), Error> {
+        load_weights: impl FnOnce(&mut Context) -> Result<Buffer, E>,
+    ) -> Result<(Image, [u32; 2]), E> {
         let [width, height, _] = input.extent();
         let (x, [kernel_row, forward, inverse]) =
             AxisPlan::select(&self.rows, width, self.radius[0]);
@@ -246,11 +225,7 @@ impl RectFilter {
             // 每列打包两路复数，保留完整纵向频率；实值输入只需横向非负频率。
             let transfer = Image::new(context, [y.length, packed, 1], ImageFormat::Rgba32Float)?;
             let params = parameters(context, extent, self.radius, [0; 2], [0; 2], [0; 2], [0; 2])?;
-            // 校准核直接从随包字节上传，完成频谱准备后这份空间副本就能回收。
-            let weights = match self.weights {
-                RectWeights::Device(weights) => weights,
-                RectWeights::Calibrated(aperture) => Buffer::upload(context, aperture.rgb32le())?,
-            };
+            let weights = load_weights(context)?;
             let layout = bindings(context, params, work, transfer, input, output, weights)?;
             let rows = kernel_row.rebind(context, layout)?;
             let columns = kernel_column.rebind(context, layout)?;
@@ -264,9 +239,11 @@ impl RectFilter {
             transfer
         };
 
-        passes.try_reserve_exact(
-            3 * width.div_ceil(x.step) as usize * height.div_ceil(y.step) as usize,
-        )?;
+        passes
+            .try_reserve_exact(
+                3 * width.div_ceil(x.step) as usize * height.div_ceil(y.step) as usize,
+            )
+            .map_err(Error::from)?;
         for top in (0..height).step_by(y.step as usize) {
             let read_rows = [
                 y.halo.saturating_sub(top),

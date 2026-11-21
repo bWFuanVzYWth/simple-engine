@@ -476,7 +476,7 @@ fn controls(
                     }),
                 )?;
                 y += 50.;
-                u.label(x, y, "RGB32LE  ·  每通道单位通量", 12., MUTE)?;
+                u.label(x, y, "KTX2 / RGB32LE  ·  每通道单位通量", 12., MUTE)?;
                 y += 30.;
             }
         }

@@ -80,7 +80,8 @@ fn main() -> Result<()> {
 '''
     lib.write_text(text, encoding="utf-8")
     shutil.copyfile(Path(__file__).with_name("reference.rs"),target / "src/reference.rs")
-    output = Path(__file__).resolve().parent
+    assets = Path(__file__).resolve().parent
+    output = target / "physical-export"
     subprocess.run(
         ["cargo", "run", "--release", "--manifest-path", str(target / "Cargo.toml"),
          "--target-dir", str(root / "target/atmosphere-export"), "--", str(output)]
@@ -91,7 +92,15 @@ fn main() -> Result<()> {
     shutil.copyfile(upstream / "configs/wavelengths.json", output / "wavelengths.json")
     sums = {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
             for name in ["medium.bin", "params.bin", "params.json", "mapping_fit.json", "wavelengths.json"]}
-    (output / "sha256.json").write_text(json.dumps(sums, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(
+        ["cargo", "run", "--locked", "--release", "-p", "resource_pack", "--features", "cli",
+         "--", "pack", str(assets / "earth.zip"),
+         f"params.bin={output / 'params.bin'}", f"medium.bin={output / 'medium.bin'}"],
+        cwd=root, check=True,
+    )
+    for name in ["params.json", "mapping_fit.json", "wavelengths.json"]:
+        shutil.copyfile(output / name, assets / name)
+    (assets / "sha256.json").write_text(json.dumps(sums, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(sums, indent=2))
 
 

@@ -2,12 +2,14 @@
   "side": 1825,
   "camera": {
     "detector": null,
-    "asset": "camara.rgb32le",
-    "sha256": "f67d431514dde9fdff043e5bb5a10b849a9908acaafbdc023ff68fdb9112e28e"
+    "sha256": "f67d431514dde9fdff043e5bb5a10b849a9908acaafbdc023ff68fdb9112e28e",
+    "source": "camara.rgb32le",
+    "texture": "camera.ktx2"
   },
   "pupil": {
     "detector": null,
-    "asset": "pupil.rgb32le",
-    "sha256": "4ad9167258cece336ffc2f53f07153cbff3c42efe6908b328b47815f0559d6cd"
+    "sha256": "4ad9167258cece336ffc2f53f07153cbff3c42efe6908b328b47815f0559d6cd",
+    "source": "pupil.rgb32le",
+    "texture": "pupil.ktx2"
   }
 }

@@ -18,14 +18,24 @@ cargo run --locked --release -p diffraction_lab
 2. 在“灰尘”和“纤维”页独立开关和调参。灰尘是随机分布的小圆，可调数量、半径均值和标准差、透射率。纤维是随机位置和取向的矩形，全层共用一个宽度，可调长度均值和标准差、透射率及额外光程。尺寸均以名义直径 D 为单位。半径从高斯分布中取正值，纤维长度至少为一个宽度，标准差为零时尺寸固定。透射率指定振幅，光程以 nm 计。颗粒中心均匀分布在边长为 D 的固定平面上，改变叶片、瞳孔或 PNG 只改变透光区域。三处种子独立，关闭某层会保留该层的参数。拖动滑杆即可重算，也可点击数值，输入后按 Enter。
 3. 在“采集”页选择光源、探测器响应、光圈数和像素间距。右上角可切换点源与太阳盘。使用底部曝光条和缩放按钮检查暗翼，鼠标悬停时状态栏显示像素位移和三个线性分量。
 4. 在“输出”页选择预览视场、导出尺寸和精度。193 或 513 像素适合调参，1825 像素适合检查远处星芒。每个采样像素对应原图的一个像素。点击“导出 RGB 核”选择目标路径。工作台在后台计算所选参数，完成后一次性替换目标文件。计算期间可取消。打开、保存、导出的快捷键分别是 Ctrl+O、Ctrl+S、Ctrl+E。参数 JSON 同时保存种子、导入的 PNG、曝光和缩放，可拖回窗口继续编辑。
-5. 文件按行从左上开始，每个像素交错存三个小端 f32，中心格为零位移。1825×1825 文件为 39,967,500 字节。用 `Kernel::from_rgb32le([side, side], &bytes)` 读取。Prime PT 中的「相机光圈（camara）」和「瞳孔（pupil）」分别读取 `crates/fft_bloom/data/camara.rgb32le` 和 `pupil.rgb32le`。更新其中一项时，备份对应文件，换入导出的 1825 像素核并同步 `data/presets.json` 中的 SHA256，再重建 Prime PT 的 native 库。[引擎泛光 API](../../target/doc/fft_bloom/index.html)
+5. 默认导出标准 KTX2，格式为线性 `R32G32B32_SFLOAT`，使用 Zstd 22 无损压缩。左上为首像素，中心格为零位移，每个输出通道保留完整 f32 位模式。需要旧式无头数据时，使用 `.rgb32le` 扩展名。
+
+Prime PT 随引擎读取两张独立的 1825×1825 标定，分别是 `crates/fft_bloom/data/camera.ktx2` 和 `pupil.ktx2`。工作台可直接导出要替换的一张。已有原始标定时，在仓库根目录的 PowerShell 运行以下命令，可转换并检查还原结果：
+
+```powershell
+cargo run --locked --release -p resource_pack --features cli -- encode-rgb32f 1825 1825 .\camara.rgb32le crates/fft_bloom/data/camera.ktx2
+cargo run --locked --release -p resource_pack --features cli -- decode-rgb32f 1825 1825 crates/fft_bloom/data/camera.ktx2 target/camera-check.rgb32le
+Get-FileHash .\camara.rgb32le, target/camera-check.rgb32le
+```
+
+两份散列应相同。更新对应的 `data/presets.json` 原始像素 SHA-256，再重建 Prime PT。构建过程会从完整纹理裁出 65×65 中心，用于设备启动时准备小核频谱。格式检查可用 Khronos 的 `ktx validate`。[引擎泛光 API](../../target/doc/fft_bloom/index.html)
 
 实际制核基准可运行 `cargo bench --locked -p fft_bloom --features calibration_gpu --bench diffraction`，它测量带灰尘和纤维的七叶光圈及噪声瞳孔，包含光瞳生成、GPU 积分与读回。
 
 也可以在同一终端用保存的参数直接导出。以下命令执行三次完整求解，设备启动单独计时，只将最后一次结果写入目标文件。界面和命令行共用同一求解器。第 1 版 JSON 可以打开，叶片数、可对应的污染参数、内嵌 PNG 和探测器设置会迁入新模型。旧镜头的倒角、中心遮挡和谐波轮廓无法精确还原。
 
 ```powershell
-cargo run --locked --release -p diffraction_lab -- --recipe .\光瞳参数.json bake .\diffraction.rgb32le --repeat 3
+cargo run --locked --release -p diffraction_lab -- --recipe .\光瞳参数.json bake .\diffraction.ktx2 --repeat 3
 ```
 
 ## 读懂像面

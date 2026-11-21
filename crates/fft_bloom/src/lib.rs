@@ -27,7 +27,11 @@ mod rect;
 /// 光斑核每轴最大半径，单位为原图像素。
 pub const MAX_RADIUS: u32 = 1024;
 
-const APERTURE_SIDE: usize = 1825;
+mod aperture;
+mod aperture_layout;
+use aperture_layout::APERTURE_SIDE;
+#[cfg(all(feature = "vulkan", not(target_arch = "wasm32")))]
+use aperture_layout::CORE_RADIUS;
 
 /// 随包镜头的完整 RGB 点扩散函数。每张核覆盖 1825×1825 个原图像素。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,23 +44,15 @@ pub enum Aperture {
 }
 
 impl Aperture {
-    /// 内置的完整、逐行交错 RGB 小端 f32 标定。其边长为 1825，中心格为零位移。
-    pub const fn rgb32le(self) -> &'static [u8; APERTURE_SIDE * APERTURE_SIDE * 12] {
-        match self {
-            Self::Camera => include_bytes!("../data/camara.rgb32le"),
-            Self::Pupil => include_bytes!("../data/pupil.rgb32le"),
-        }
-    }
-
     /// 解码随包标定的完整像面。文件已按完整支持域逐通道归一化，CPU 和 GPU 消费同一组系数。
     /// # Errors
-    /// 无法为通道保留空间时返回 [`Error::Allocation`]。
+    /// 资源包损坏、长度不符或内存分配失败时返回对应错误。
     pub fn kernel(self) -> Result<Kernel, Error> {
         Ok(Kernel {
             extent: [APERTURE_SIDE as u32; 2],
             weights: Weights::Rgb(Kernel::decode(
                 APERTURE_SIDE * APERTURE_SIDE,
-                self.rgb32le().as_chunks::<12>().0.iter(),
+                self.rgb32le()?.as_chunks::<12>().0.iter(),
             )?),
         })
     }
@@ -65,6 +61,13 @@ impl Aperture {
 /// 构造光斑或高光提取参数失败。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// 随包 KTX2 纹理损坏或不可读。
+    #[error(transparent)]
+    Texture(#[from] resource_pack::texture::Error),
+    /// 镜头管线或核上传失败。
+    #[cfg(all(feature = "vulkan", not(target_arch = "wasm32")))]
+    #[error(transparent)]
+    Device(#[from] vulkan::Error),
     /// 宽高须为非零奇数，每轴半径不超过 [`MAX_RADIUS`]，权重数须等于面积。
     #[error("泛光核宽高须为 1 到 2049 的奇数，权重数须等于宽乘高")]
     KernelShape,

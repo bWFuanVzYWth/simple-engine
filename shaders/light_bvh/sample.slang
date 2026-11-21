@@ -327,4 +327,44 @@ public func light_world_find_region(world: LightWorld, grid: int3)->uint {
     }
     return lo;
 }
+/// 在混合灯树上划分 24 位选灯区间。正向按选择器下降，逆向按已排序叶号重建完全相同的区间宽度。
+/// 根与分支按 light_bvh/radix.slang 的布局读取；调用者须传入至少含一叶的已发布树头。
+public func mixed_interval<let reverse : bool>(mixed_tree: StructuredBuffer<uint4>,
+                                               receiver: float3, selector: uint, rank: uint,
+                                               header: uint4)
+    ->SelectedInterval {
+    var remaining = selector;
+    var count = LIGHT_BVH_SELECTORS;
+    var node = header.z;
+    while ((node & LIGHT_BVH_LEAF) == 0) {
+        let at = 4u * header.y + 3u * node;
+        let a = asfloat(mixed_tree[at]);
+        let b = asfloat(mixed_tree[at + 1u]);
+        let children = mixed_tree[at + 2u];
+        var left = count;
+        if (a.w <= 0)
+            left = 0u;
+        else if (b.w > 0) {
+            let da = a.xyz - receiver;
+            let db = b.xyz - receiver;
+            left = split_selectors(float2(max(dot(da, da), 1.0e-6), a.w),
+                                   float2(max(dot(db, db), 1.0e-6), b.w), children.z, children.w,
+                                   count);
+        }
+        let right = reverse ? rank >= node : remaining >= left;
+        if (right) {
+            if (!reverse)
+                remaining -= left;
+            count -= left;
+            node = children.y;
+        } else {
+            count = left;
+            node = children.x;
+        }
+        if (count == 0)
+            break;
+    }
+    return { node & ~LIGHT_BVH_LEAF, remaining, count };
+}
+
 }

@@ -378,13 +378,23 @@ fn stage_file(
 }
 pub(crate) fn stage_kernel(path: &Path, f: &Frame) -> Result<tempfile::NamedTempFile> {
     stage_file(path, |w| {
+        let ktx = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ktx2"));
         #[cfg(target_endian = "little")]
-        w.write_all(bytemuck::cast_slice(&f.pixels))?;
+        let bytes = bytemuck::cast_slice(&f.pixels);
         #[cfg(target_endian = "big")]
-        for pixel in &f.pixels {
-            for v in pixel {
-                w.write_all(&v.to_le_bytes())?;
-            }
+        let words = f
+            .pixels
+            .iter()
+            .map(|p| p.map(f32::to_le_bytes))
+            .collect::<Vec<_>>();
+        #[cfg(target_endian = "big")]
+        let bytes = words.as_flattened().as_flattened();
+        if ktx {
+            simple_engine::resource_pack::texture::write_rgb32f(w, [f.side; 2], bytes)?;
+        } else {
+            w.write_all(bytes)?;
         }
         Ok(())
     })

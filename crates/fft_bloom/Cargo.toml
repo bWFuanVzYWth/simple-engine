@@ -9,9 +9,10 @@ license.workspace = true
 default = []
 calibration = ["dep:color", "dep:perlin_noise", "dep:serde"]
 calibration_gpu = ["calibration", "vulkan", "dep:bytemuck"]
-vulkan = ["dep:vulkan", "dep:shader_build"]
+vulkan = ["dep:vulkan", "dep:shader_build", "dep:resource_pack"]
 
 [dependencies]
+resource_pack = { path = "../resource_pack", features = ["texture"] }
 perlin_noise = { path = "../perlin_noise", optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 bytemuck = { workspace = true, features = ["derive"], optional = true }
@@ -20,6 +21,10 @@ thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 vulkan = { path = "../vulkan", optional = true }
+
+[dev-dependencies]
+sha2 = "0.11.1"
+serde_json.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 pollster.workspace = true
@@ -31,6 +36,7 @@ harness = false
 required-features = ["calibration_gpu"]
 
 [build-dependencies]
+resource_pack = { path = "../resource_pack", features = ["texture"], optional = true }
 shader_build = { path = "../shader_build", optional = true }
 
 [lints]

@@ -221,8 +221,9 @@ impl App<'_> {
                 if !self.model.exporting
                     && let Some(path) = rfd::FileDialog::new()
                         .set_parent(window)
-                        .set_file_name("diffraction.rgb32le")
-                        .add_filter("RGB 浮点卷积核", &["rgb32le"])
+                        .set_file_name("diffraction.ktx2")
+                        .add_filter("KTX2 无损浮点核", &["ktx2"])
+                        .add_filter("原始小端 RGB 浮点核", &["rgb32le"])
                         .save_file()
                 {
                     self.advance(true);

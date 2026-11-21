@@ -39,6 +39,10 @@ pub const MAPPING_ROWS: usize = 12 + SKY_SIZE as usize;
 /// 构造、输入或设备边界错误；GPU 验证由调用者的 error scope 管理。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// 固定物理输入的条目长度、数据或 CRC 校验失败。
+    #[cfg(any(feature = "gpu", feature = "native", test))]
+    #[error(transparent)]
+    Resources(#[from] resource_pack::Error),
     /// 原生 Vulkan 资源、上传或录制失败，保留来源。
     #[cfg(feature = "native")]
     #[error("大气 Vulkan 失败: {0}")]
@@ -313,17 +317,21 @@ struct Model {
 #[cfg(any(feature = "gpu", feature = "native", test))]
 impl Model {
     fn new() -> Result<Self, Error> {
-        let bytes = include_bytes!("../data/params.bin");
-        let parameters = bytemuck::try_pod_read_unaligned::<Parameters>(bytes)
-            .map_err(|_| Error::Data("Params 必须为 400 B"))?;
-        let bytes = include_bytes!("../data/medium.bin");
-        if !bytes.len().is_multiple_of(16)
-            || [
-                parameters.source_height_count,
-                parameters.sun_state_count,
-                parameters.optical_height_count,
-                parameters.optical_angle_count,
-            ] != [40, 160, 128, 512]
+        let mut archive = resource_pack::Pack::open(std::io::Cursor::new(
+            &include_bytes!("../data/earth.zip")[..],
+        ))?;
+        let mut parameters = Parameters::zeroed();
+        archive.read_into("params.bin", bytemuck::bytes_of_mut(&mut parameters))?;
+        #[cfg(target_endian = "big")]
+        for word in bytemuck::cast_mut::<Parameters, [u32; 100]>(&mut parameters) {
+            *word = u32::from_le(*word);
+        }
+        if [
+            parameters.source_height_count,
+            parameters.sun_state_count,
+            parameters.optical_height_count,
+            parameters.optical_angle_count,
+        ] != [40, 160, 128, 512]
             || [
                 parameters.incident_direction_count,
                 parameters.phase_node_count,
@@ -340,14 +348,15 @@ impl Model {
             return Err(Error::Data("balanced 网格或物理数据长度不匹配"));
         }
         let mut data = Vec::new();
-        data.try_reserve_exact(bytes.len() / 16)?;
-        data.extend(
-            bytes
-                .as_chunks::<16>()
-                .0
-                .iter()
-                .map(|row| bytemuck::pod_read_unaligned::<[f32; 4]>(row)),
-        );
+        // 固定地球模型的介质表按 little-endian float4 存储，直接展开到最终上传缓冲。
+        const ROWS: usize = 12_474;
+        data.try_reserve_exact(ROWS)?;
+        data.resize(ROWS, [0f32; 4]);
+        archive.read_into("medium.bin", bytemuck::cast_slice_mut(&mut data))?;
+        #[cfg(target_endian = "big")]
+        for value in data.as_flattened_mut() {
+            *value = f32::from_bits(u32::from_le(value.to_bits()));
+        }
         Ok(Self {
             parameters,
             data,

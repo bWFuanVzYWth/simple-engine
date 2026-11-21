@@ -2,6 +2,28 @@
 
 Nsight 已有 GPU Trace 的 CPU 离线读取使用 [nsight-trace.py](../scripts/nsight/nsight-trace.py)，依赖隔离安装到 `target/nsight-python`；命令、来源许可和指标边界见 [Nsight 手册](nsight.md)。它不启动捕获、回放或 GPU。
 
+## 资源打包
+
+在已安装项目 Rust 工具链的 Windows PowerShell 中，从仓库根目录执行下面的命令。示例将项目说明和许可各自使用 Zstandard 22 压缩成一个可按名称读取的 ZIP 条目，最后导回说明文件。
+
+```powershell
+cargo run --locked --release -p resource_pack --features cli -- pack target/example-resources.zip readme=README.md license=LICENSE
+cargo run --locked --release -p resource_pack --features cli -- list target/example-resources.zip
+cargo run --locked --release -p resource_pack --features cli -- get target/example-resources.zip readme target/readme-copy.md
+Get-FileHash README.md, target/readme-copy.md
+```
+
+列表应有 `readme` 和 `license`，两份说明的散列值应相同。条目名使用正斜线相对路径，源文件和输出目录须存在。Rust 应用可通过引擎的 `resource_pack` 功能读写文件或内存包，并限制单个条目的展开大小。自制资源按使用方式存储：
+
+| 资源 | 保存格式与用途 |
+| --- | --- |
+| 相机和瞳孔的二维衍射核 | 每张独立使用 KTX2、线性 RGB32F、Zstd 22，可直接由标准纹理工具打开。[衍射核工作台](../examples/diffraction_lab/README.md) |
+| 大气的固定地球参数和四通道介质表 | `crates/atmosphere/data/earth.zip` 含两个定长缓冲条目，初始化时校验并解压到目标存储。它们由参数偏移寻址。[大气物理输入](../crates/atmosphere/data/README.md) |
+| 光瞳参数、大气拟合与测试参考、宿主翻译和清单 | 保留 JSON，供编辑器、测试工具或宿主按字段读取。 |
+| 快速圆形滤波权重、大气辐射场、示例场景和体素预览 | 按构建配方或在运行时生成，无需分发预生成纹理。 |
+
+Prime PT 从引擎读取镜头标定和大气输入。衍射工作台可从 PNG 导入用户光瞳，配方保存为 JSON，计算后的核可直接导出为 KTX2。体素编辑器在运行时生成预览。游戏原型的九张方块贴图来自 Squareful-BE，来源和开发用途见[占位纹理清单](../app/game/assets/textures/README.md)。
+
 ## 检查入口
 
 Windows PowerShell 5.1 或 PowerShell 7：

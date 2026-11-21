@@ -35,7 +35,7 @@ fn run() -> recipe::Result<()> {
     }
     #[derive(Subcommand)]
     enum Action {
-        /// 从实际光瞳重算并原子写入 RGB 小端浮点核。
+        /// 从实际光瞳重算并原子写入核。使用 .ktx2 导出 Zstd 无损纹理，.rgb32le 导出原始浮点。
         Bake {
             output: PathBuf,
             /// 用同一设备独立重算多次，逐次报告包含读回的耗时。

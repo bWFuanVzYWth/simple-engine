@@ -15,6 +15,7 @@ color = ["dep:color"]
 spectrum = ["color", "color/spectrum"]
 camera = ["dep:camera"]
 display = ["dep:display"]
+resource_pack = ["dep:resource_pack", "resource_pack/texture"]
 fft_bloom = ["dep:fft_bloom"]
 circular_bloom = ["dep:circular_bloom", "vulkan"]
 fft_bloom_calibration = ["fft_bloom", "fft_bloom/calibration", "spectrum"]
@@ -58,6 +59,7 @@ gpu_test = ["dep:gpu_test", "vulkan", "gpu_log"]
 
 [dependencies]
 display = { path = "crates/display", optional = true }
+resource_pack = { path = "crates/resource_pack", optional = true }
 fft_bloom = { path = "crates/fft_bloom", optional = true }
 openpbr = { path = "crates/openpbr", optional = true }
 pt = { path = "crates/pt", optional = true }
@@ -93,6 +95,7 @@ resolver = "3"
 members = [
     "crates/display",
     "crates/fft_bloom",
+    "crates/resource_pack",
     "crates/circular_bloom",
     "crates/openpbr",
     "crates/pt",

@@ -1,5 +1,9 @@
 //! 原生泛光的固定程序，CPU 核生成与读取可独立使用。
 
+#[cfg(feature = "vulkan")]
+#[path = "src/aperture_layout.rs"]
+mod aperture_layout;
+
 #[cfg(not(feature = "vulkan"))]
 fn main() {}
 
@@ -176,13 +180,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args,
             }),
     );
-    shader_build::build(
-        &recipes,
-        &["shaders", "../../shaders"],
-        &["src", "data/camara.rgb32le", "data/pupil.rgb32le"],
-    )?;
+    shader_build::build(&recipes, &["shaders", "../../shaders"], &["src"])?;
     let out =
         PathBuf::from(std::env::var_os("OUT_DIR").ok_or(shader_build::Error::OutputDirectory)?);
+    use aperture_layout::{APERTURE_SIDE, CORE_SIDE};
+    for name in ["camera", "pupil"] {
+        let path = format!("data/{name}.ktx2");
+        println!("cargo::rerun-if-changed={path}");
+        let pixels =
+            resource_pack::texture::read_rgb32f(&std::fs::read(path)?, [APERTURE_SIDE as u32; 2])?;
+        let border = (APERTURE_SIDE - CORE_SIDE) / 2;
+        let mut core = Vec::new();
+        core.try_reserve_exact(CORE_SIDE * CORE_SIDE * 12)?;
+        for y in border..border + CORE_SIDE {
+            let start = (y * APERTURE_SIDE + border) * 12;
+            core.extend_from_slice(&pixels[start..start + CORE_SIDE * 12]);
+        }
+        std::fs::write(out.join(format!("{name}-core.rgb32le")), core)?;
+    }
     std::fs::write(out.join("rect_programs.rs"), table)?;
     std::fs::write(out.join("pupil_programs.rs"), pupil_table)?;
     Ok(())

@@ -18,6 +18,7 @@
 //! | `spectrum` | CIE 1931 观察者、D65、黑体光谱、波段积分与 XYZ 到线性 sRGB |
 //! | `camera` | 正交 pinhole 相机、锚点相对坐标、无 jitter 矩阵与 Halton 偏移 |
 //! | `display` | Prime DRT、自动曝光与 GPU 测光，原生执行另启用 `vulkan` |
+//! | `resource_pack` | 按名称读取 ZIP 资源包，读写无损线性浮点 KTX2 数据纹理 |
 //! | `fft_bloom` | 二维光斑与标定镜头的 FFT 卷积，原生录制另启用 `vulkan` |
 //! | `circular_bloom` | 原生 Vulkan 的快速圆孔泛光，按空间尺度滤波 |
 //! | `fft_bloom_calibration` | 光源与探测器的求积计划，供镜头标定与衍射核编辑器使用 |
@@ -94,6 +95,8 @@ pub use light_bvh;
 pub use openpbr;
 #[cfg(feature = "pt")]
 pub use pt;
+#[cfg(feature = "resource_pack")]
+pub use resource_pack;
 #[cfg(feature = "restir_pt")]
 pub use restir_pt;
 

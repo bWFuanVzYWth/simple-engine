@@ -28,9 +28,9 @@ func direct_sample<let Capability : uint, let continuous : bool, Scene>(
     where Scene : IScene {
     if (light.pdf <= 0)
         return;
-    if (!openpbr::may_evaluate_specialized<Capability>(material.pbr, shading_normal(hit, material),
-                                                       view, light.direction, path.medium,
-                                                       material.transmitted))
+    if (!openpbr::may_evaluate_specialized<Capability>(
+            material.pbr, shading_normal(hit, material, view), view, light.direction, path.medium,
+            material.transmitted))
         return;
     if (scene.occluded(light.visibility))
         return;
@@ -41,16 +41,16 @@ func direct_sample<let Capability : uint, let continuous : bool, Scene>(
     var evaluated : openpbr::Evaluation;
     if (!continuous)
         evaluated = openpbr::evaluate_specialized<Capability>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view, light.direction,
-            path.medium, material.transmitted);
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
+            light.direction, path.medium, material.transmitted);
     else if (Capability == openpbr::CAP_SOLID_DIELECTRIC)
         evaluated = openpbr::evaluate_solid_continuous(
-            scene.energy(), material.pbr, shading_normal(hit, material), view, light.direction,
-            path.medium, material.transmitted);
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
+            light.direction, path.medium, material.transmitted);
     else
         evaluated = openpbr::evaluate_opaque_continuous<Capability>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view, light.direction,
-            path.medium, material.transmitted);
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
+            light.direction, path.medium, material.transmitted);
     if (any(evaluated.response > 0)) {
         let weight : float = transport::power_heuristic_over_pdf(light.pdf,
                                                                  continuation ? evaluated.pdf : 0);
@@ -127,19 +127,19 @@ public func process_reference_material<let Capability : uint, let Emissive : boo
     var scattered : openpbr::Sample;
     if (Capability >= openpbr::CAP_DELTA_CONDUCTOR)
         scattered = openpbr::sample_delta_specialized<Capability>(
-            material.pbr, shading_normal(hit, material), view, sampler.bsdf(path.depth).z,
+            material.pbr, shading_normal(hit, material, view), view, sampler.bsdf(path.depth).z,
             path.medium, material.transmitted);
     else if (!continuous)
         scattered = openpbr::sample_specialized<Capability>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view,
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
             sampler.bsdf(path.depth), path.medium, material.transmitted);
     else if (Capability == openpbr::CAP_SOLID_DIELECTRIC)
         scattered = openpbr::sample_solid_continuous(
-            scene.energy(), material.pbr, shading_normal(hit, material), view,
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
             sampler.bsdf(path.depth), path.medium, material.transmitted);
     else
         scattered = openpbr::sample_opaque_continuous<Capability>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view,
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view,
             sampler.bsdf(path.depth), path.medium, material.transmitted);
     if (scattered.events == 0) {
         finish(path, PATH_DONE);

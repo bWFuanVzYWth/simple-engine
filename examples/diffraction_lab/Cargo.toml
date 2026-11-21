@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-simple_engine = { workspace = true, features = ["fft_bloom_calibration_gpu", "render2d_gpu", "render2d_text", "gpu_log"] }
+simple_engine = { workspace = true, features = ["resource_pack", "fft_bloom_calibration_gpu", "render2d_gpu", "render2d_text", "gpu_log"] }
 bytemuck.workspace = true
 pollster.workspace = true
 winit.workspace = true

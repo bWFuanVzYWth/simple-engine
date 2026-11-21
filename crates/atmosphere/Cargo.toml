@@ -7,10 +7,11 @@ license.workspace = true
 
 [features]
 default = ["gpu"]
-gpu = ["dep:wgpu", "dep:shader_build"]
-native = ["dep:vulkan", "dep:shader_build"]
+gpu = ["dep:resource_pack", "dep:wgpu", "dep:shader_build"]
+native = ["dep:resource_pack", "dep:vulkan", "dep:shader_build"]
 
 [dependencies]
+resource_pack = { path = "../resource_pack", optional = true }
 thiserror.workspace = true
 bytemuck = { workspace = true, features = ["derive", "min_const_generics"] }
 serde = { workspace = true, features = ["derive"] }
@@ -22,6 +23,7 @@ vulkan = { path = "../vulkan", optional = true }
 shader_build = { path = "../shader_build", optional = true }
 
 [dev-dependencies]
+resource_pack = { path = "../resource_pack" }
 criterion.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

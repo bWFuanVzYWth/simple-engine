@@ -1,7 +1,7 @@
 //! 原生 Slang SPIR-V 泛光录制器。管线在设备准备时建立，视图按 FFT 尺寸复用频谱与工作区。
 
-use super::{APERTURE_SIDE, Aperture, Kernel, Settings};
-use crate::rect::{RectFilter, RectWeights};
+use super::{APERTURE_SIDE, Aperture, CORE_RADIUS, Kernel, Settings};
+use crate::rect::{RectFilter, upload_kernel};
 use vulkan::{
     interop::RayShader,
     native::{
@@ -141,8 +141,6 @@ impl Parameters {
     }
 }
 
-pub(crate) const CORE_RADIUS: u32 = 32;
-
 #[derive(Clone, Copy, PartialEq)]
 enum Support {
     Full,
@@ -168,14 +166,17 @@ enum MainPass {
         pass: Pass,
         wide_work: Option<Image>,
     },
-    Rectangular(RectFilter),
+    Rectangular {
+        filter: RectFilter,
+        weights: Buffer,
+    },
 }
 
 impl Filter {
     /// 放弃上次绑定的矩形频谱和工作图。已发布视图和在途命令按各自生命周期保活它们。
     /// 设备管线与标定权重可在重新启用时复用，下一次绑定按当时的视图尺寸准备。
     pub fn release_rectangle(&mut self) {
-        if let MainPass::Rectangular(rect) = &mut self.main {
+        if let MainPass::Rectangular { filter: rect, .. } = &mut self.main {
             rect.release_workspace();
         }
     }
@@ -196,14 +197,16 @@ impl Filter {
         let placeholder = Image::new(context, [1; 3], ImageFormat::Rgba32Float)?;
         let rectangular = programs.rectangular.filter(|_| split);
         let main = if let Some(rectangular) = rectangular {
-            let weights = RectWeights::upload(context, kernel)?;
-            MainPass::Rectangular(RectFilter::new(
-                context,
-                rectangular,
-                [width / 2, height / 2],
+            let weights = upload_kernel(context, kernel)?;
+            MainPass::Rectangular {
                 weights,
-                placeholder,
-            )?)
+                filter: RectFilter::new(
+                    context,
+                    rectangular,
+                    [width / 2, height / 2],
+                    placeholder,
+                )?,
+            }
         } else {
             let wide_work = if wide {
                 if context.max_compute_group_width() < 256 {
@@ -260,8 +263,10 @@ impl Filter {
                     pass.bind(context, input, output, *wide_work, false, passes)?;
                     Ok((*wide_work, None))
                 }
-                MainPass::Rectangular(rect) => {
-                    let (work, extent) = rect.bind(context, input, output, passes)?;
+                MainPass::Rectangular { filter, weights } => {
+                    let (work, extent) = filter.bind(context, input, output, passes, |_| {
+                        Ok::<_, vulkan::Error>(*weights)
+                    })?;
                     Ok((Some(work), Some(extent)))
                 }
             },
@@ -270,15 +275,16 @@ impl Filter {
 
     /// 设备回收时保留的频谱管线模板与所有视图共用的工作图。
     pub fn roots(&self) -> impl Iterator<Item = Resource> + '_ {
-        let (pass, work, rect) = match &self.main {
-            MainPass::Complex { pass, wide_work } => (Some(pass), *wide_work, None),
-            MainPass::Rectangular(rect) => (None, None, Some(rect)),
+        let (pass, work, rect, weights) = match &self.main {
+            MainPass::Complex { pass, wide_work } => (Some(pass), *wide_work, None, None),
+            MainPass::Rectangular { filter, weights } => (None, None, Some(filter), Some(*weights)),
         };
         pass.into_iter()
             .chain(self.core.iter())
             .flat_map(|pass| pass.pipelines.map(Resource::from))
             .chain(work.map(Resource::from))
             .chain(rect.into_iter().flat_map(RectFilter::roots))
+            .chain(weights.map(Resource::from))
     }
 }
 
@@ -293,26 +299,20 @@ impl Lens {
     /// 预备各光瞳的中心频谱与管线，默认使用相机光圈。绑定视图时上传所选镜头的完整核。
     /// # Errors
     /// 缺少矩形程序、设备不支持所需 FFT 尺寸或资源准备失败时返回底层错误。
-    pub fn new(context: &mut Context, programs: Programs<'_>) -> Result<Self, vulkan::Error> {
+    pub fn new(context: &mut Context, programs: Programs<'_>) -> Result<Self, crate::Error> {
         let rectangular = programs
             .rectangular
             .ok_or(vulkan::Error::Unsupported("标定镜头需要矩形 FFT 程序"))?;
         let placeholder = Image::new(context, [1; 3], ImageFormat::Rgba32Float)?;
         let extent = [APERTURE_SIDE as u32; 2];
         let aperture = Aperture::default();
-        let rect = RectFilter::new(
-            context,
-            rectangular,
-            extent.map(|n| n / 2),
-            RectWeights::Calibrated(aperture),
-            placeholder,
-        )?;
+        let rect = RectFilter::new(context, rectangular, extent.map(|n| n / 2), placeholder)?;
         let mut core = |shape: Aperture| {
-            let pixels = shape.rgb32le().as_chunks::<12>().0;
+            let pixels = shape.core_rgb32le().as_chunks::<12>().0;
             Pass::from_weights(
                 context,
                 programs,
-                extent,
+                [crate::aperture_layout::CORE_SIDE as u32; 2],
                 |at| std::array::from_fn(|c| f32::from_le_bytes(pixels[at].as_chunks::<4>().0[c])),
                 Settings::OPTICAL,
                 Support::Core,
@@ -331,7 +331,7 @@ impl Lens {
         if self.aperture == aperture {
             return false;
         }
-        self.rect.select_aperture(aperture);
+        self.rect.release_workspace();
         self.aperture = aperture;
         true
     }
@@ -344,13 +344,21 @@ impl Lens {
     /// 绑定场景线性 HDR 输入，完整分辨率、黑色画外与输出所有权同 [`Filter::bind`]。
     /// # Errors
     /// 设备、图像、临时上传、矩形频谱准备或描述符绑定错误逐层返回。
-    pub fn bind(&mut self, context: &mut Context, input: Image) -> Result<Bloom, vulkan::Error> {
+    pub fn bind(&mut self, context: &mut Context, input: Image) -> Result<Bloom, crate::Error> {
         let core = match self.aperture {
             Aperture::Camera => &self.cores[0],
             Aperture::Pupil => &self.cores[1],
         };
         bind_passes(context, input, Some(core), |ctx, output, passes| {
-            let (work, extent) = self.rect.bind(ctx, input, output, passes)?;
+            let (work, extent) = self.rect.bind(
+                ctx,
+                input,
+                output,
+                passes,
+                |ctx| -> Result<_, crate::Error> {
+                    Ok(Buffer::upload(ctx, &self.aperture.rgb32le()?)?)
+                },
+            )?;
             Ok((Some(work), Some(extent)))
         })
     }
@@ -365,7 +373,7 @@ impl Lens {
     }
 }
 
-fn bind_passes(
+fn bind_passes<E: From<vulkan::Error>>(
     context: &mut Context,
     input: Image,
     core: Option<&Pass>,
@@ -373,11 +381,11 @@ fn bind_passes(
         &mut Context,
         Image,
         &mut Vec<Dispatch>,
-    ) -> Result<(Option<Image>, Option<[u32; 2]>), vulkan::Error>,
-) -> Result<Bloom, vulkan::Error> {
+    ) -> Result<(Option<Image>, Option<[u32; 2]>), E>,
+) -> Result<Bloom, E> {
     let [width, height, depth] = input.raw(context)?.extent;
     if depth != 1 {
-        return Err(vulkan::Error::InvalidArgument("泛光输入须为二维图像"));
+        return Err(vulkan::Error::InvalidArgument("泛光输入须为二维图像").into());
     }
     let output = Image::new(context, input.extent(), ImageFormat::Rgba32Float)?;
     let mut passes = Vec::new();
