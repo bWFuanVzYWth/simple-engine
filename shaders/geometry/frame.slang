@@ -19,7 +19,9 @@ public func mapped_normal_for_view(geometric: float3, mapped: float3, view: floa
     let cosine = dot(n, view);
     let minimum = min(0.9 * cosine, 0.01);
     let sn = dot(s, n);
-    if (2.0 * dot(s, view) * sn - cosine >= minimum && dot(s, view) > 0)
+    let sv = dot(s, view);
+    // sn 和 cosine 均非负；严格超过阈值时 sv 必为正。等于阈值的极限由半角式处理。
+    if (2.0 * sv * sn - cosine > minimum)
         return s * facing;
     let slope = s - sn * n;
     let squared = dot(slope, slope);
@@ -30,7 +32,7 @@ public func mapped_normal_for_view(geometric: float3, mapped: float3, view: floa
     // 把视线投影到斜率平面。反射方向的法向分量固定为 minimum，
     // 切向分量取正根，再用半角向量恢复法线。负 x 时有理化以保留掠角精度。
     let reflected_x = sqrt(x * x + (cosine - minimum) * (cosine + minimum));
-    if (x == 0 && cosine == 0)
+    if (all(float2(x, cosine) == 0))
         return geometric;
     let half_vector = x < 0 ? (cosine - minimum) * tangent + (reflected_x - x) * n
                             : (reflected_x + x) * tangent + (cosine + minimum) * n;

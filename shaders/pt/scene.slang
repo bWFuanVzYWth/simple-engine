@@ -45,9 +45,9 @@ public struct PathState {
 
 /// 只选择BSDF/guide的着色法线；几何SurfacePoint保持原始绕序与误差界。
 public func shading_normal(hit: Hit, material: transport::SurfaceMaterial, view: float3)->float3 {
-    if (any(material.normal != 0))
-        return geometry::mapped_normal_for_view(hit.surface.normal, material.normal, view);
-    return hit.surface.normal;
+    return select(any(material.normal != 0),
+                  geometry::mapped_normal_for_view(hit.surface.normal, material.normal, view),
+                  hit.surface.normal);
 }
 
 /// 延续与固定导引相同的离散前缀。遇到连续事件或在可透射界面选了反射即恢复普通 MIS。
