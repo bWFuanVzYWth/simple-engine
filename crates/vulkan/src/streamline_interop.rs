@@ -352,7 +352,20 @@ impl WgpuContext {
     pub fn record_streamline(
         &mut self,
         images: [Image; 9],
+        frame: Frame,
+    ) -> Result<Recording, RecordError> {
+        self.record_streamline_with_mask(images, frame, None)
+    }
+
+    /// 录制 RR，并可额外登记输入分辨率的 R8_UNORM 显露掩码，1 表示拒绝旧帧。
+    /// 所有图像与命令的归属、提交和取消遵循 [Self::record_streamline]。
+    /// # Errors
+    /// 无效图像、布局、SDK 或录制错误与 [Self::record_streamline] 相同。
+    pub fn record_streamline_with_mask(
+        &mut self,
+        images: [Image; 9],
         mut frame: Frame,
+        disocclusion: Option<Image>,
     ) -> Result<Recording, RecordError> {
         self.drain_completed();
         self.native.device.ensure_active()?;
@@ -381,11 +394,9 @@ impl WgpuContext {
         if self.streamline.recovery.reset_required() {
             frame.reset = 1;
         }
-        let resources = images.map(|image| image.raw(&self.native));
-        let mut described = [Resource::default(); 9];
-        for (slot, raw) in described.iter_mut().zip(resources) {
-            let raw = raw?;
-            *slot = Resource {
+        let describe = |image: Image| -> Result<Resource, crate::Error> {
+            let raw = image.raw(&self.native)?;
+            Ok(Resource {
                 image: raw.image,
                 view: raw.view,
                 memory: raw.memory,
@@ -395,11 +406,14 @@ impl WgpuContext {
                 layout: raw.layout,
                 usage: raw.usage,
                 reserved: 0,
-            };
+            })
+        };
+        for (slot, image) in frame.images.iter_mut().zip(images) {
+            *slot = describe(image)?;
         }
-        frame.images = described;
+        let mask = disocclusion.map(describe).transpose()?;
         let mut commands = Commands::new(&self.native)?;
-        for image in images {
+        for image in images.into_iter().chain(disocclusion) {
             commands.access(image.into())?;
         }
         commands.barrier();
@@ -415,7 +429,12 @@ impl WgpuContext {
             self.native.encode(key, command)?;
             frame.command = command.as_raw();
             // HAL 正在独占同队列 command；所有图像已登记，提交层保活至实际完成。
-            evaluation = unsafe { runtime.evaluate(&frame) };
+            evaluation = unsafe {
+                match &mask {
+                    Some(mask) => runtime.evaluate_with_disocclusion(&frame, mask),
+                    None => runtime.evaluate(&frame),
+                }
+            };
             if evaluation
                 .as_ref()
                 .is_err_and(|error| error.unsafe_recording())

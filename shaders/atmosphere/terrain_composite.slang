@@ -34,7 +34,7 @@ func terrain_filter(f: TerrainFrame, first_hits: StructuredBuffer<uint>, uv: flo
         // 近似同深度的射线优先。即使窄表面落在四条极线之间，邻线到目标距离的空气仍有贡献。
         // 较短的邻线在自身首命中处已停止积分。天空的遮挡量须来自能达到近场边界的射线。
         let difference = (depth - metres) / (0.03 * max(min(depth, metres), 1.0));
-        let support = sky ? float2(depth >= TERRAIN_RANGE_M) : rcp(1. + difference * difference);
+        let support = sky ? float2(depth >= TERRAIN_RANGE_M) : 1. / (1. + difference * difference);
         let weights = float2(1. - frac(x), frac(x)) * support;
         let sum = weights.x + weights.y;
         filter.radial[k] =

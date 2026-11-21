@@ -23,6 +23,12 @@ public func optical_sample(key: uint, uv: float2)->uint2 {
     let tag = max(key & 0xffffffu, 1u);
     return uint2((tag << 8) | (xy.x >> 12), (xy.x << 20) | xy.y);
 }
+/// 将同一四边形的 ABC、ACD 两组三角形重心坐标映到连续的单位方形。
+public func optical_quad(key: uint, primitive: uint, bary: float2)->uint2 {
+    let uv =
+        (primitive & 1u) == 0 ? float2(bary.x + bary.y, bary.y) : float2(bary.x, bary.x + bary.y);
+    return optical_sample(key, uv);
+}
 /// 天空终点用立方体面的透视坐标。面号参与签名，插值不会跨越背向半球的参数接缝。
 public func optical_sky(key: uint, direction: float3)->uint2 {
     let a = abs(direction);
@@ -34,9 +40,18 @@ public func optical_sky(key: uint, direction: float3)->uint2 {
 func coordinates(v: uint2)->float2 {
     return float2(((v.x & 255u) << 12) | (v.y >> 20), v.y & 0xfffffu);
 }
+/// 首列存两路的签名及高位坐标。零为普通投影，一为失效。只有有效光路需要写第二列。
+public func store_optical_pair(RWStructuredBuffer<uint2> grid, uint index, uint count, uint4 pair)
+    ->void {
+    let keys =
+        uint2(pair.x == 0 ? uint(pair.y != 0) : pair.x, pair.z == 0 ? uint(pair.w != 0) : pair.z);
+    grid[index] = keys;
+    if (any(keys >= 256u))
+        grid[count + index] = pair.yw;
+}
 /// 在旧帧同一路径的局部坐标中解逆映射。seed/result 以零为首像素中心。
 /// 只接受有同路邻居覆盖的解；断面、不可逆映射、越界或迭代未收敛均拒绝历史。
-public func previous_optical_pixel<let reflected : bool>(RWStructuredBuffer<uint4> records,
+public func previous_optical_pixel<let reflected : bool>(RWStructuredBuffer<uint2> records,
                                                          uint2 extent, uint2 current, float2 seed,
                                                          out float2 result)
     ->bool {
@@ -56,45 +71,72 @@ public func previous_optical_pixel<let reflected : bool>(RWStructuredBuffer<uint
         var mask = 0u;
         [unroll]
         for (var i = 0u; i < 4u; ++i) {
-            let pair = records[base + (i & 1u) + (i >> 1u) * extent.x];
-            let record = reflected ? pair.zw : pair.xy;
-            mask |= uint((record.x >> 8) == key) << i;
-            xy[i] = coordinates(record);
+            let index = base + (i & 1u) + (i >> 1u) * extent.x;
+            let tag = records[index][uint(reflected)];
+            let same = (tag >> 8) == key;
+            mask |= uint(same) << i;
+            xy[i] = 0;
+            if (same) {
+                let low = records[index + extent.x * extent.y][uint(reflected)];
+                xy[i] = coordinates(uint2(tag, low)) - target;
+            }
         }
         if (countbits(mask) < 3)
             return false;
-        let origin = mask == 15u ? 0u : (uint(firstbitlow((~mask) & 15u)) ^ 3u);
-        let corner = float2(origin & 1u, origin >> 1u);
-        let sign = 1 - 2 * corner;
-        let anchor = mask == 15u ? result - float2(cell) : corner;
-        var dx = (xy[origin ^ 1u] - xy[origin]) * sign.x;
-        var dy = (xy[origin ^ 2u] - xy[origin]) * sign.y;
-        var mapped = xy[origin];
+        var anchor = result - float2(cell);
+        var dx = xy[1] - xy[0];
+        var dy = xy[2] - xy[0];
+        var mapped = xy[0];
+        var mixed = float2(0);
         if (mask == 15u) {
-            let mixed = (xy[3] - xy[2]) - dx;
+            mixed = (xy[3] - xy[2]) - dx;
             mapped += dx * anchor.x + dy * anchor.y + mixed * (anchor.x * anchor.y);
             dx += mixed * anchor.y;
             dy += mixed * anchor.x;
+        } else {
+            // 三个有效角总有一行一列完整。固定下标避免把四个寄存器变成动态寻址数组。
+            let right = (mask & 5u) != 5u;
+            let bottom = (mask & 3u) != 3u;
+            anchor = float2(right, bottom);
+            dx = bottom ? xy[3] - xy[2] : dx;
+            dy = right ? xy[3] - xy[1] : dy;
+            mapped = bottom ? (right ? xy[3] : xy[2]) : (right ? xy[1] : xy[0]);
         }
         let det = dx.x * dy.y - dx.y * dy.x;
-        if (abs(det) < max(1.0, 1e-4 * length(dx) * length(dy)))
+        if (det * det < max(1., 1e-8 * dot(dx, dx) * dot(dy, dy)))
             return false;
         // 当前和旧帧插值各有半个坐标量化单位的不确定度。通过逆雅可比换回输入像素，
         // 在终点局部坐标过于粗糙或掠射退化处放弃复用，给迭代残差保留亚像素余量。
         let uncertainty = float2(abs(dy.x) + abs(dy.y), abs(dx.x) + abs(dx.y));
         if (dot(uncertainty, uncertainty) > (0.75 * det) * (0.75 * det))
             return false;
-        let uv = target - mapped;
+        let uv = -mapped;
         let offset = float2(uv.x * dy.y - uv.y * dy.x, dx.x * uv.y - dx.y * uv.x) / det;
         let local = anchor + offset;
         let next = float2(cell) + local;
         // 四点时反求双线性映射；三点时只在已知三角形内插值。
         // 静止镜头的解常在单元角上。允许浮点舍入越边千分之一像素，避免把同一采样判为显露。
         let edge_epsilon = 0.001;
-        if (all(local >= -edge_epsilon) && all(local <= 1 + edge_epsilon) &&
-            (mask == 15u ? all(abs(offset) < 0.02) : dot(offset, sign) <= 1 + edge_epsilon)) {
-            result = float2(cell) + saturate(local);
-            return true;
+        // 双线性插值在 Newton 步后的精确剩余项为 mixed * offset.x * offset.y。
+        // 仿射单元一次便收敛；用解处的逆雅可比检查像素误差，无须重复读取同一四点。
+        if (all(local >= -edge_epsilon) && all(local <= 1 + edge_epsilon)) {
+            var covered = mask == 15u || dot(offset, 1 - 2 * anchor) <= 1 + edge_epsilon;
+            if (mask == 15u && any(mixed != 0)) {
+                let jx = dx + mixed * offset.y;
+                let jy = dy + mixed * offset.x;
+                let jacobian = abs(jx.x * jy.y - jx.y * jy.x);
+                let bound = float2(abs(jy.x) + abs(jy.y), abs(jx.x) + abs(jx.y));
+                let residual = mixed * (offset.x * offset.y);
+                let correction = float2(residual.x * jy.y - residual.y * jy.x,
+                                        jx.x * residual.y - jx.y * residual.x);
+                covered = jacobian * jacobian >= max(1., 1e-8 * dot(jx, jx) * dot(jy, jy)) &&
+                          dot(bound, bound) <= (0.75 * jacobian) * (0.75 * jacobian) &&
+                          all(abs(correction) < 0.01 * jacobian);
+            }
+            if (covered) {
+                result = float2(cell) + saturate(local);
+                return true;
+            }
         }
         if (all(abs(next - result) < 0.01))
             return false;

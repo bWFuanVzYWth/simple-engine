@@ -75,10 +75,13 @@ public func write_sky_guide(images: GuideImages, p: GuideFrame, pixel: uint2, fi
 func write_projected_pair<History : IGuideHistory>(images: GuideImages, p: GuideFrame, pixel: uint2,
                                                    film: float2, primary: GuideEndpoint,
                                                    albedos: denoise::DenoiseGuides,
-                                                   reflection: GuideEndpoint)
+                                                   reflection: GuideEndpoint,
+                                                   shared_path: bool = false)
     ->void {
     let surface = project_guide(primary, p.current, p.previous, film, p.extent, p.history);
-    let reflected = project_guide(reflection, p.current, p.previous, film, p.extent, p.history);
+    let reflected =
+        shared_path ? surface
+                    : project_guide(reflection, p.current, p.previous, film, p.extent, p.history);
     let sky = (primary.flags & GUIDE_SKY) != 0;
     let specular = sky ? (primary.use_interface_specular ? primary.interface_specular : float3(0.5))
                        : albedos.specular_albedo;
@@ -123,6 +126,13 @@ public func write_tracked_key_guides<Scene : IIdentifiedGuideTrace, History : IG
     let primary =
         trace_key_path<Scene, History>(scene, first, identity, camera_origin, camera_direction,
                                        initial_medium, p.max_depth, false, delta_only);
+    // 非 delta 首面两路在原地停止。理想反射或全反射时两路走同一方向和介质。
+    let discrete = (first.flags & KEY_GUIDE_DISCRETE) != 0;
+    if (discrete ? (first.flags & KEY_GUIDE_REFLECTION) != 0 : delta_only) {
+        write_projected_pair<History>(images, p, pixel, film, primary.endpoint, primary.albedos,
+                                      primary.endpoint, true);
+        return;
+    }
     let reflection =
         trace_key_path<Scene, History>(scene, first, identity, camera_origin, camera_direction,
                                        initial_medium, p.max_depth, true, delta_only);
