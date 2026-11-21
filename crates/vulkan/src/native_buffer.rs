@@ -52,6 +52,7 @@ impl Buffer {
             return Err(Error::InvalidArgument("native storage buffer 大小无效"));
         }
         let usage = vk::BufferUsageFlags::STORAGE_BUFFER
+            | vk::BufferUsageFlags::INDIRECT_BUFFER
             | vk::BufferUsageFlags::UNIFORM_BUFFER
             | vk::BufferUsageFlags::TRANSFER_SRC
             | vk::BufferUsageFlags::TRANSFER_DST

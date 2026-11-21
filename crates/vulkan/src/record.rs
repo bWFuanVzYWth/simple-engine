@@ -29,6 +29,7 @@ pub(super) mod batch;
 pub(crate) enum Op {
     Trace(RayTracingPipeline, [u32; 3]),
     Dispatch(ComputePipeline, [u32; 3]),
+    DispatchIndirect(ComputePipeline, Buffer, u64),
     Barrier,
     ComputeBarrier,
     Clear(Buffer),
@@ -44,7 +45,7 @@ impl Op {
     pub(crate) const fn root(&self) -> Option<Key> {
         match self {
             Self::Trace(p, _) => Some(p.key),
-            Self::Dispatch(p, _) => Some(p.key),
+            Self::Dispatch(p, _) | Self::DispatchIndirect(p, _, _) => Some(p.key),
             Self::Clear(buffer) => Some(buffer.key),
             Self::Keepalive(resource) => Some(resource.0),
             Self::Access(access) => Some(access.key()),

@@ -40,7 +40,7 @@ impl ImagePasses {
         if let Some((&(last, size), previous)) = self.dispatches.split_last() {
             for &(pipeline, groups) in previous {
                 commands.dispatch(pipeline, groups)?;
-                commands.operations.push(Op::ComputeBarrier);
+                commands.compute_barrier();
             }
             commands.dispatch(last, size)?;
             commands.barrier();
@@ -97,6 +97,33 @@ impl Commands {
         self.operations.push(Op::Dispatch(pipeline, groups));
         Ok(())
     }
+    /// 读取设备缓冲中三个连续 u32 作为工作组数；零维度可跳过该阶段。
+    ///
+    /// # Safety
+    /// 生产者须在发射前完成写入并正确同步，每一维不得超过设备 maxComputeWorkGroupCount。
+    /// # Errors
+    /// 设备不匹配、偏移未对齐或剩余空间不足 12 字节时返回错误。
+    pub unsafe fn dispatch_indirect(
+        &mut self,
+        pipeline: ComputePipeline,
+        arguments: Buffer,
+        offset: u64,
+    ) -> Result<(), Error> {
+        if pipeline.key.owner != self.owner
+            || arguments.key.owner != self.owner
+            || !offset.is_multiple_of(4)
+            || offset
+                .checked_add(12)
+                .is_none_or(|end| end > arguments.len())
+        {
+            return Err(Error::InvalidArgument("间接 compute 设备或参数范围无效"));
+        }
+        self.operations
+            .push(Op::Access(ResourceAccess::Buffer(arguments)));
+        self.operations
+            .push(Op::DispatchIndirect(pipeline, arguments, offset));
+        Ok(())
+    }
     /// 保活资源及其传递依赖，不登记 host 访问冲突或发出设备操作。
     ///
     /// finish 校验活动状态；提交仍须满足 AS producer 顺序。外部工作实际访问
@@ -126,6 +153,10 @@ impl Commands {
     /// 同步前后设备访问。
     pub fn barrier(&mut self) {
         self.operations.push(Op::Barrier);
+    }
+    /// 前序计算着色器的写入对后序计算着色器读写可见。间接参数和其他管线阶段另需完整屏障。
+    pub fn compute_barrier(&mut self) {
+        self.operations.push(Op::ComputeBarrier);
     }
     /// 清空完整 buffer；后续 shader 访问前需 barrier。
     pub fn clear_buffer(&mut self, buffer: Buffer) -> Result<(), Error> {
@@ -194,7 +225,7 @@ impl Commands {
                     }
                     Some(version.bindings())
                 }
-                Op::Dispatch(p, _) => {
+                Op::Dispatch(p, _) | Op::DispatchIndirect(p, _, _) => {
                     context.active(p.key)?;
                     Some(p.data(context)?.bindings())
                 }
@@ -263,7 +294,9 @@ impl Record {
         for op in self.operations() {
             match op {
                 Op::Trace(p, _) => p.data(context)?.bindings().data(context)?.track(encoder),
-                Op::Dispatch(p, _) => p.data(context)?.bindings().data(context)?.track(encoder),
+                Op::Dispatch(p, _) | Op::DispatchIndirect(p, _, _) => {
+                    p.data(context)?.bindings().data(context)?.track(encoder)
+                }
                 _ => {}
             }
         }
@@ -326,14 +359,18 @@ impl Record {
                             *size,
                         )?;
                     }
-                    Op::Dispatch(p, groups) => {
+                    Op::Dispatch(p, _) | Op::DispatchIndirect(p, _, _) => {
+                        let groups = match op {
+                            Op::Dispatch(_, size) => *size,
+                            _ => [0; 3],
+                        };
                         let version = p.data(context)?;
                         let program = context.compute_program(version.program())?;
                         context.checkpoint(
                             command,
                             "dispatch/begin",
                             program.raw().pipeline.as_raw(),
-                            *groups,
+                            groups,
                         )?;
                         device.raw.cmd_bind_pipeline(
                             command,
@@ -348,19 +385,27 @@ impl Record {
                             &[version.bindings().data(context)?.raw().set],
                             &[],
                         );
-                        device
-                            .raw
-                            .cmd_dispatch(command, groups[0], groups[1], groups[2]);
+                        if let Op::DispatchIndirect(_, args, offset) = op {
+                            device.raw.cmd_dispatch_indirect(
+                                command,
+                                args.data(context)?.raw,
+                                *offset,
+                            );
+                        } else {
+                            device
+                                .raw
+                                .cmd_dispatch(command, groups[0], groups[1], groups[2]);
+                        }
                         context.checkpoint(
                             command,
                             "dispatch/end",
                             program.raw().pipeline.as_raw(),
-                            *groups,
+                            groups,
                         )?;
                     }
                     Op::Keepalive(_) | Op::Access(_) => {}
                     Op::Barrier => memory_barrier(device, command),
-                    // 图像计算序列内部只有 compute 读写，外部生产与消费已由首尾屏障覆盖。
+                    // 计算阶段之间仅同步存储读写。
                     Op::ComputeBarrier => device.raw.cmd_pipeline_barrier(
                         command,
                         vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -505,6 +550,7 @@ impl Recorded {
                 let (kind, extent) = match operation {
                     Op::Trace(_, extent) => ("trace", *extent),
                     Op::Dispatch(_, extent) => ("dispatch", *extent),
+                    Op::DispatchIndirect(_, _, _) => ("dispatch/indirect", [0; 3]),
                     _ if index + 1 == operations.len() => ("tail", [0; 3]),
                     _ => continue,
                 };

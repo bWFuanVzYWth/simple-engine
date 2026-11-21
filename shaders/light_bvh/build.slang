@@ -1,6 +1,7 @@
 // 在 GPU 上按空间 Morton 序二分，叶记录保持原始 rank，与正反向 PDF 共用布局。
 import light_sampling.area;
 import light_bvh.world;
+import light_bvh.order;
 
 struct Build {
     var vertices : uint *;
@@ -43,21 +44,6 @@ func region_delta(a: int, b: int)->float {
 func point_at(row: uint *, i: uint)->float3 {
     return asfloat(uint3(row[i * 4u], row[i * 4u + 1u], row[i * 4u + 2u]));
 }
-func spread10(v: uint)->uint {
-    var v = v;
-    v &= 1023u;
-    v = (v | (v << 16u)) & 0x30000ffu;
-    v = (v | (v << 8u)) & 0x300f00fu;
-    v = (v | (v << 4u)) & 0x30c30c3u;
-    return (v | (v << 2u)) & 0x9249249u;
-}
-func digit(v: uint3)->uint {
-    return spread10(v.x) | (spread10(v.y) << 1u) | (spread10(v.z) << 2u);
-}
-func less_key(a: uint4, b: uint4)->bool {
-    return a.x < b.x ||
-           (a.x == b.x && (a.y < b.y || (a.y == b.y && (a.z < b.z || (a.z == b.z && a.w < b.w)))));
-}
 groupshared var tile : uint4[64];
 func spatial_key(p: Build, rank: uint)->uint4 {
     let q = p.leaves[4u * rank];
@@ -72,7 +58,8 @@ func spatial_key(p: Build, rank: uint)->uint4 {
         64.0;
     var bits : uint3 = asuint(center);
     bits ^= asuint(asint(bits) >> 31) | 0x80000000u;
-    return uint4(digit(bits >> 22u), digit(bits >> 12u), digit(bits >> 2u), rank);
+    return uint4(light_bvh::morton10(bits >> 22u), light_bvh::morton10(bits >> 12u),
+                 light_bvh::morton10(bits >> 2u), rank);
 }
 // 两级的拓扑都按各自的序列长度中分，局部响应保留原叶目录序号。
 func locate(count: uint, level: uint, node: uint, out begin: uint, out packet: uint,
@@ -118,7 +105,8 @@ func build_local(p: Build, node: uint, lane: uint)->void {
                 if (lane < peer) {
                     let a : uint4 = tile[lane];
                     let b : uint4 = tile[peer];
-                    if ((lane & width) == 0u ? less_key(b, a) : less_key(a, b)) {
+                    if ((lane & width) == 0u ? light_bvh::less_key(b, a)
+                                             : light_bvh::less_key(a, b)) {
                         tile[lane] = b;
                         tile[peer] = a;
                     }
@@ -141,7 +129,7 @@ func build_local(p: Build, node: uint, lane: uint)->void {
         let key = p.sorted[node];
         while (lo < hi) {
             let mid : uint = lo + (hi - lo) / 2u;
-            if (less_key(p.sorted[mid], key))
+            if (light_bvh::less_key(p.sorted[mid], key))
                 lo = mid + 1u;
             else
                 hi = mid;

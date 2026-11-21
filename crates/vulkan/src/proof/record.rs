@@ -9,12 +9,12 @@ verus! {
 impl Op {
     pub(crate) open(super) spec fn root_view(&self) -> Option<Key> {
         match self {
-            Self::Trace(p, _) => Some(p.key), Self::Dispatch(p, _) => Some(p.key),
+            Self::Trace(p, _) => Some(p.key), Self::Dispatch(p, _) | Self::DispatchIndirect(p, _, _) => Some(p.key),
             Self::Clear(buffer) => Some(buffer.key), Self::Keepalive(resource) => Some(resource.0),
             Self::Access(access) => Some(match access {
                 ResourceAccess::Buffer(buffer) => buffer.key, ResourceAccess::Image(image) => image.key,
             }),
-            Self::ResetTimestamps(q) | Self::Timestamp(q, _) => Some(q.key), Self::Barrier => None,
+            Self::ResetTimestamps(q) | Self::Timestamp(q, _) => Some(q.key), Self::Barrier | Self::ComputeBarrier => None,
         }
     }
     pub(crate) open(super) spec fn access_view(&self) -> Option<Key> {

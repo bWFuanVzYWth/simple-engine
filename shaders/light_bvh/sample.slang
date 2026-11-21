@@ -84,12 +84,11 @@ func light_bvh_metrics<Words : ILightWords, let smooth_leaf : bool, let compact 
     return float2(distance_squared, node.power);
 }
 
-func light_bvh_left_count<Words : ILightWords, let smooth_leaf : bool, let compact : bool>(
-    words: Words, leaf_base: uint, first: LightBvhNode, second: LightBvhNode, point_value: float3,
-    count: uint)
+/// 两个非空子树的距离平方和正功率转换为左侧的 24-bit 选择区间。
+/// count 至少为两侧有效叶数之和。正向选择和逆向 PDF 必须使用同一接收点。
+public func split_selectors(a: float2, b: float2, left_leaves: uint, right_leaves: uint,
+                            count: uint)
     ->uint {
-    let a = light_bvh_metrics<Words, smooth_leaf, compact>(words, leaf_base, first, point_value);
-    let b = light_bvh_metrics<Words, smooth_leaf, compact>(words, leaf_base, second, point_value);
     let power = float2(a.y, b.y) / max(a.y, b.y);
     let scale = max(a.x, b.x);
     var probability : float;
@@ -106,13 +105,23 @@ func light_bvh_left_count<Words : ILightWords, let smooth_leaf : bool, let compa
     let fraction = scaled - float(integral);
     let odd_tie = (fraction == 0.5) & ((integral & 1u) != 0);
     let left = integral + uint((fraction > 0.5) | odd_tie);
-    return clamp(left, first.leaves, count - second.leaves);
+    return clamp(left, left_leaves, count - right_leaves);
 }
 
-struct SelectedInterval {
-    var index : uint;
-    var selector : uint;
-    var count : uint;
+func light_bvh_left_count<Words : ILightWords, let smooth_leaf : bool, let compact : bool>(
+    words: Words, leaf_base: uint, first: LightBvhNode, second: LightBvhNode, point_value: float3,
+    count: uint)
+    ->uint {
+    let a = light_bvh_metrics<Words, smooth_leaf, compact>(words, leaf_base, first, point_value);
+    let b = light_bvh_metrics<Words, smooth_leaf, compact>(words, leaf_base, second, point_value);
+    return split_selectors(a, b, first.leaves, second.leaves, count);
+}
+
+/// 叶索引、叶区间内的剩余格点以及该区间的实际格点数。
+public struct SelectedInterval {
+    public var index : uint;
+    public var selector : uint;
+    public var count : uint;
 };
 
 func select_pair<Words : ILightWords, let upper : bool>(words: Words, base: uint, packets: uint,
@@ -234,6 +243,30 @@ public struct LightWorldSample {
     public var pmf : float;
 };
 
+/// 在已选区块内继续划分格点。count 至少为区块灯数，selector 小于 count。
+public func select_light_region(entry: LightRegion, receiver: float3, viewer_anchor: int3,
+                                selector: uint, count: uint)
+    ->SelectedInterval {
+    let subtree : AddressWords = { entry.words };
+    let point_value = receiver + light_grid_offset(viewer_anchor, entry.grid.xyz);
+    return select_interval<AddressWords, false, true>(subtree, 1u, entry.count, entry.count,
+                                                      point_value, selector, count);
+}
+
+/// 反查区块内指定灯的格点数，使用与正向遍历相同的区间和接收点。
+public func light_region_interval_count(entry: LightRegion, local: uint, receiver: float3,
+                                        viewer_anchor: int3, count: uint)
+    ->uint {
+    if (entry.count == 1u)
+        return count;
+    let leaf_base = 1u + (((10u * (entry.count - 1u) + 7u) & ~7u) >> 2u);
+    let subtree : AddressWords = { entry.words };
+    let path = packed_pair(subtree, leaf_base, local).y;
+    let point_value = receiver + light_grid_offset(viewer_anchor, entry.grid.xyz);
+    return interval_count<AddressWords, false, true>(subtree, 1u, entry.count, entry.count,
+                                                     point_value, path, count);
+}
+
 /// 接收点使用 viewer_anchor 对应的局部坐标；空树返回 PMF 为零。
 public func sample_light_world(world: LightWorld, receiver: float3, viewer_anchor: int3,
                                sample_value: float)
@@ -245,11 +278,8 @@ public func sample_light_world(world: LightWorld, receiver: float3, viewer_ancho
     let region = select_interval<AddressWords, true, false>(
         top, 0u, world.counts.y, world.counts.x, origin,
         uint(sample_value * float(LIGHT_BVH_SELECTORS)), LIGHT_BVH_SELECTORS);
-    let entry = world.regions[region.index];
-    let point_value = receiver + light_grid_offset(viewer_anchor, entry.grid.xyz);
-    let subtree : AddressWords = { entry.words };
-    let light = select_interval<AddressWords, false, true>(
-        subtree, 1u, entry.count, entry.count, point_value, region.selector, region.count);
+    let light = select_light_region(world.regions[region.index], receiver, viewer_anchor,
+                                    region.selector, region.count);
     return { region.index, light.index, float(light.count) * LIGHT_BVH_INVERSE_SELECTORS };
 }
 
@@ -262,14 +292,7 @@ public func light_world_pmf(world: LightWorld, region: uint, local: uint, receiv
     let origin = receiver + light_grid_offset(viewer_anchor, world.anchor.xyz);
     let region_count = interval_count<AddressWords, true, false>(
         top, 0u, world.counts.y, world.counts.x, origin, asuint(entry.grid.w), LIGHT_BVH_SELECTORS);
-    if (entry.count == 1u)
-        return float(region_count) * LIGHT_BVH_INVERSE_SELECTORS;
-    let leaf_base = 1u + (((10u * (entry.count - 1u) + 7u) & ~7u) >> 2u);
-    let subtree : AddressWords = { entry.words };
-    let path = packed_pair(subtree, leaf_base, local).y;
-    let point_value = receiver + light_grid_offset(viewer_anchor, entry.grid.xyz);
-    let slots = interval_count<AddressWords, false, true>(subtree, 1u, entry.count, entry.count,
-                                                          point_value, path, region_count);
+    let slots = light_region_interval_count(entry, local, receiver, viewer_anchor, region_count);
     return float(slots) * LIGHT_BVH_INVERSE_SELECTORS;
 }
 
