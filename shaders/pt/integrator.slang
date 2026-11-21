@@ -130,7 +130,7 @@ func visible_flow<let flow : uint, Scene, let deferred : bool = false>(
     ->bool
     where Scene : IFlowScene {
     return light.pdf > 0 && light_side_supported<flow>(hit, material, view, light.direction) &&
-           openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
+           openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material, view), view,
                                             light.direction, medium, material.transmitted) &&
            (deferred || !scene.occluded(light.visibility));
 }
@@ -302,9 +302,9 @@ public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 
         : openpbr::Sample =
               openpbr::shade_flow_consume<flow, openpbr::Energy,
                                           FlowLighting<flow, Scene, deferred>, light_mask>(
-                  scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
-                  light.direction, evaluation_mask, bsdf_sample, continuation && !limited,
-                  path.medium, material.transmitted, lighting);
+                  scene.energy(), material.pbr, shading_normal(hit, material, view), view,
+                  sun.direction, light.direction, evaluation_mask, bsdf_sample,
+                  continuation && !limited, path.medium, material.transmitted, lighting);
     if (((flow & (openpbr::FLOW_DIFFUSE | openpbr::FLOW_SUBSURFACE |
                   openpbr::FLOW_CONTINUOUS_REFLECTION | openpbr::FLOW_CONTINUOUS_TRANSMISSION)) !=
          0u)) {
@@ -364,7 +364,7 @@ public func process_flow_vertex<let flow : uint, Scene, let light_mask : uint = 
         path.medium = scattered.medium;
     }
     path.previous_pdf = continuation_pdf(scattered, data.path.previous_pdf, material.pbr.control.x,
-                                         shading_normal(hit, material), view,
+                                         shading_normal(hit, material, view), view,
                                          data.path.medium.x / material.transmitted.x);
     path.previous = hit.surface.position;
     path.origin = geometry::offset_origin(hit.surface, path.direction);

@@ -215,7 +215,7 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
                                                  result.material.transmitted);
         let front = result.queries == 1;
         let glass = (result.material.pbr.control.x & 1u) != 0;
-        let normal = shading_normal(result.hit, result.material);
+        let optical_normal = shading_normal(result.hit, result.material, -result.direction);
         if (lobe != 0) {
             result.attenuation *=
                 transport::segment_transmittance(result.incident.yzw, result.hit.distance);
@@ -244,8 +244,8 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
             var position : float3;
             var normal : float3;
             if (psr_surface(result.psr, result.camera_origin, result.camera_direction,
-                            result.hit.surface.position, result.hit.surface.normal,
-                            shading_normal(result.hit, result.material), position, normal))
+                            result.hit.surface.position, result.hit.surface.normal, optical_normal,
+                            position, normal))
                 return result;
             candidate.flags |= GUIDE_SURFACE_PROXY;
             return candidate;
@@ -256,17 +256,15 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
         }
         var reflection : bool;
         var refracted : bool;
-        var next : float3 = guide_delta_direction(
-                       result.material, shading_normal(result.hit, result.material),
-                       result.direction, result.incident, reflection, refracted);
+        var next : float3 = guide_delta_direction(result.material, optical_normal, result.direction,
+                                                  result.incident, reflection, refracted);
         if (first_reflection && result.queries == 1) {
-            next = reflect(result.direction, shading_normal(result.hit, result.material));
+            next = reflect(result.direction, optical_normal);
             reflection = true;
             refracted = false;
         }
         if (lobe == 0 && result.queries == 1 && !reflection && !first_reflection) {
-            let interface_guides = denoise_surface(scene.energy(), result.material,
-                                                   shading_normal(result.hit, result.material),
+            let interface_guides = denoise_surface(scene.energy(), result.material, optical_normal,
                                                    -result.direction, result.incident);
             result.interface_specular = interface_guides.specular_albedo;
             result.use_interface_specular = true;
@@ -285,11 +283,11 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
                 let event =
                     (result.material.pbr.control.x & 2u) != 0
                         ? openpbr::sample_delta_specialized<openpbr::CAP_DELTA_THIN_DIELECTRIC>(
-                              result.material.pbr, normal, -result.direction, u, result.incident,
-                              result.material.transmitted)
+                              result.material.pbr, optical_normal, -result.direction, u,
+                              result.incident, result.material.transmitted)
                         : openpbr::sample_delta_specialized<openpbr::CAP_DELTA_SOLID_DIELECTRIC>(
-                              result.material.pbr, normal, -result.direction, u, result.incident,
-                              result.material.transmitted);
+                              result.material.pbr, optical_normal, -result.direction, u,
+                              result.incident, result.material.transmitted);
                 if (event.events == 0 || ((event.events & openpbr::REFLECTION) != 0) != reflection)
                     return candidate;
                 response = event.response;
@@ -297,23 +295,23 @@ func trace_guide_impl<Scene, let lobe : uint = 0, Key : IOpticalPathKey = NoOpti
                     response *= result.material.boundary_filter;
             } else {
                 response = openpbr::closure::opaque_delta_reflectance(
-                    result.material.pbr, abs(dot(normal, result.direction)), result.incident.x);
+                    result.material.pbr, abs(dot(optical_normal, result.direction)),
+                    result.incident.x);
             }
             if (!any(response > 0))
                 return candidate;
             result.attenuation *= response;
             if (glass && (result.material.pbr.control.x & 2u) == 0)
                 ++solid_events;
-            result.optical_motion.scatter(result.direction, next, normal,
+            result.optical_motion.scatter(result.direction, next, optical_normal,
                                           result.incident.x / result.material.transmitted.x,
                                           reflection, refracted);
         }
-        track_optical_boundary<Key>(result, normal, reflection, refracted,
+        track_optical_boundary<Key>(result, optical_normal, reflection, refracted,
                                     refracted ? result.incident.x / result.material.transmitted.x
                                               : 1.0);
-        result.psr = psr_append(result.psr, result.hit.surface.position,
-                                shading_normal(result.hit, result.material), reflection, refracted,
-                                result.pose.fixed);
+        result.psr = psr_append(result.psr, result.hit.surface.position, optical_normal, reflection,
+                                refracted, result.pose.fixed);
         if (refracted)
             result.flags |= GUIDE_REFRACTION_PROXY;
         let origin = geometry::offset_origin(result.hit.surface, next);
@@ -373,9 +371,11 @@ public func trace_reflection_guide<Scene, Key : IOpticalPathKey = NoOpticalPathK
 /// 仅用于非 SKY/INVALID 的表面；法线仍在实际终点空间，PSR 法线由 project_guide 返回。
 public func guide_albedos<Energy>(energy: Energy, endpoint: GuideEndpoint)->denoise::DenoiseGuides
     where Energy : openpbr::IEnergyLut {
-    var guides : denoise::DenoiseGuides = denoise_surface(
-                     energy, endpoint.material, shading_normal(endpoint.hit, endpoint.material),
-                     -endpoint.direction, endpoint.incident);
+    var guides
+        : denoise::DenoiseGuides =
+              denoise_surface(energy, endpoint.material,
+                              shading_normal(endpoint.hit, endpoint.material, -endpoint.direction),
+                              -endpoint.direction, endpoint.incident);
     if (endpoint.use_interface_specular)
         guides.specular_albedo = endpoint.interface_specular;
     return guides;
@@ -405,7 +405,8 @@ public func project_guide(endpoint: GuideEndpoint, current: camera::Camera,
         var normal : float3;
         if (!psr_surface(endpoint.psr, endpoint.camera_origin, endpoint.camera_direction,
                          endpoint.hit.surface.position, endpoint.hit.surface.normal,
-                         shading_normal(endpoint.hit, endpoint.material), position, normal)) {
+                         shading_normal(endpoint.hit, endpoint.material, -endpoint.direction),
+                         position, normal)) {
             result.flags |= GUIDE_INVALID;
             return result;
         }

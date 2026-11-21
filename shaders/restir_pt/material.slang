@@ -1,6 +1,7 @@
 /// ReSTIR各材质操作共享的数值契约；Flow为资源期已证明的编译期控制域。
 module material;
 import restir_pt.scene;
+import geometry.frame;
 import openpbr.flow;
 import transport.surface_material;
 import transport.weights;
@@ -8,7 +9,9 @@ import transport.weights;
 namespace restir_pt {
 /// 仅BSDF使用着色法线；介质跨界和路径偏移始终使用几何法线。
 public func material_normal(surface: Surface, material: transport::SurfaceMaterial)->float3 {
-    return select(any(material.normal != 0), material.normal, surface.point.normal);
+    if (any(material.normal != 0))
+        return geometry::mapped_normal_for_view(surface.point.normal, material.normal, surface.wo);
+    return surface.point.normal;
 }
 
 /// 采样结果不携带未被point算法消费的闭包；保留精确proposal、介质和delta过滤语义。

@@ -47,7 +47,7 @@ public func make_key_guide<let flow : uint>(hit: Hit, material: transport::Surfa
                                             energy: openpbr::Energy, pose: GuidePose,
                                             incoming: float3, incident: float4)
     ->KeyGuideVertex {
-    let normal = shading_normal(hit, material);
+    let normal = shading_normal(hit, material, -incoming);
     let albedos = denoise_surface_flow<flow>(energy, material, normal, -incoming, incident);
     var reflection = true;
     var refracted = false;

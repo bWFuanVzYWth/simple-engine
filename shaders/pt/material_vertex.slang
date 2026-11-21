@@ -97,7 +97,7 @@ func visible_light<let flow : uint, let solar : bool, Scene : IFlowScene>(
     ->VisibleLight {
     var visible : VisibleLight = {};
     if (light.pdf <= 0 || !light_side_supported<flow>(hit, material, view, light.direction) ||
-        !openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material), view,
+        !openpbr::may_evaluate_flow<flow>(material.pbr, shading_normal(hit, material, view), view,
                                           light.direction, incident, material.transmitted) ||
         (test_visibility && scene.occluded(light.visibility)))
         return visible;
@@ -209,7 +209,7 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
         next = openpbr::shade_primary_flow_consume<flow, openpbr::Energy,
                                                    DirectEvaluationConsumer<observe>,
                                                    continuous ? light_mask : 0u, observe>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
             2u, primary_lane, consumer);
@@ -217,7 +217,7 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
 #endif
         next = openpbr::shade_flow_consume<flow, openpbr::Energy, DirectEvaluationConsumer<observe>,
                                            continuous ? light_mask : 0u>(
-            scene.energy(), material.pbr, shading_normal(hit, material), view, sun.direction,
+            scene.energy(), material.pbr, shading_normal(hit, material, view), view, sun.direction,
             lamp.direction, uint(sun.pdf > 0) | (uint(lamp.pdf > 0) << 1u),
             scatter ? sampler.bsdf(depth) : float3(0), scatter, call.medium, material.transmitted,
             consumer);
@@ -241,7 +241,7 @@ public func shade_material_observed<let flow : uint, Scene : IFlowScene, let lig
         next.response *= material.boundary_filter;
     call.throughput = transport::product_over(call.throughput, next.response, next.pdf);
     call.previous_pdf = continuation_pdf(next, call.previous_pdf, material.pbr.control.x,
-                                         shading_normal(hit, material), view,
+                                         shading_normal(hit, material, view), view,
                                          call.medium.x / material.transmitted.x);
     if (solid) {
         call.eta_scale = transport::eta_scale_after_scatter(
