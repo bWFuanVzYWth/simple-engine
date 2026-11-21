@@ -9,6 +9,10 @@ namespace pt {
 /// 辅助输出只在首表面且显式开启时调用，不成为普通路径的共同解码前缀。
 public interface IHitScene : IScene {
     func acceleration()->RaytracingAccelerationStructure;
+    /// 应用定义相机直视与后续散射各自可命中的实例集合。
+    func path_mask(primary: bool)->uint {
+        return 0xffu;
+    }
     func program(object: HitObject, incident: float4)->uint;
     func guides_enabled()->bool;
 };
@@ -25,8 +29,9 @@ public func trace_hit_path<Scene : IHitScene, Guides : IHitGuides, let reorder :
         let ray : RayDesc = { data.path.origin, 0, data.path.direction, FAR };
         var unused : uint = 0;
         // 不将HitObject嵌入聚合状态（Slang 2026.20驱动互操作约束）。
-        var found : HitObject = HitObject::TraceRay(provider.acceleration(), RAY_FLAG_NONE, 0xff, 0,
-                                                    1, 0, ray, unused);
+        var found : HitObject = HitObject::TraceRay(provider.acceleration(), RAY_FLAG_NONE,
+                                                    provider.path_mask(data.path.depth == 0), 0, 1,
+                                                    0, ray, unused);
         if (!found.IsHit()) {
             if (secondary_distance)
                 lobe.escape_scene();
