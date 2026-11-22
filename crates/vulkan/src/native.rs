@@ -342,10 +342,21 @@ impl Context {
     /// 应在管线初始化前调用。重复调用保留首次成功配置。缺失、不兼容或损坏的快照
     /// 使用空缓存，缓存故障不阻止管线创建。独立进程以完整快照原子替换同一文件。
     pub fn enable_pipeline_cache(&mut self, directory: &std::path::Path) {
+        self.enable_pipeline_cache_with_seed(directory, |_| None);
+    }
+
+    /// 在目标缓存缺失、损坏或设备不匹配时，按需从旧目录引入同名驱动快照。
+    /// `seed_directory` 收到含设备、驱动和 UUID 的文件名，可返回一个应用私有旧目录。
+    /// 旧文件只读，新快照发布到 `directory`。其余行为见 [`Self::enable_pipeline_cache`]。
+    pub fn enable_pipeline_cache_with_seed(
+        &mut self,
+        directory: &std::path::Path,
+        seed_directory: impl FnOnce(&std::ffi::OsStr) -> Option<std::path::PathBuf>,
+    ) {
         if self.pipeline_cache.is_some() || self.device.ensure_active().is_err() {
             return;
         }
-        match crate::pipeline_cache::Native::new(&self.device, directory) {
+        match crate::pipeline_cache::Native::new(&self.device, directory, seed_directory) {
             Ok(cache) => self.pipeline_cache = Some(cache),
             Err(error) => log::warn!("创建 Vulkan 管线缓存失败：{error}"),
         }

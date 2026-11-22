@@ -1,5 +1,5 @@
 use crate::{Device, Error, vk};
-use std::io::Cursor;
+use std::{borrow::Cow, io::Cursor};
 
 pub(crate) struct ShaderModule<'a> {
     pub(crate) raw: vk::ShaderModule,
@@ -25,6 +25,12 @@ impl Drop for ShaderModule<'_> {
     }
 }
 
-pub(crate) fn decode_spirv(bytes: &[u8]) -> Result<Vec<u32>, Error> {
-    Ok(ash::util::read_spv(&mut Cursor::new(bytes))?)
+pub(crate) fn decode_spirv(bytes: &[u8]) -> Result<Cow<'_, [u32]>, Error> {
+    if let Ok(words) = bytemuck::try_cast_slice::<u8, u32>(bytes)
+        && words.first() == Some(&0x0723_0203)
+    {
+        return Ok(Cow::Borrowed(words));
+    }
+    // 未对齐的内嵌字节或相反字节序仍按 SPIR-V 规则解码。
+    Ok(Cow::Owned(ash::util::read_spv(&mut Cursor::new(bytes))?))
 }

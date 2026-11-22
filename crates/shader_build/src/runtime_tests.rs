@@ -96,6 +96,69 @@ fn explicit_compiler_fails_at_the_requested_path() {
 }
 
 #[test]
+#[ignore = "需要 Slang，在两个模拟提取目录中运行"]
+fn relocated_package_reuses_only_unchanged_modules() {
+    let fixture = Fixture::new();
+    let installed = Compiler::find(false).unwrap();
+    let bin = installed.path.parent().unwrap();
+    let tool_name = installed.path.file_name().unwrap();
+    let compile = |version: &str, value: u32, debug: &str| {
+        let root = fixture.root.join(version);
+        let tools = root.join("tool");
+        let shaders = root.join("shaders");
+        fs::create_dir_all(&tools).unwrap();
+        fs::create_dir_all(&shaders).unwrap();
+        for item in fs::read_dir(bin).unwrap() {
+            let entry = item.unwrap();
+            let name = entry.file_name();
+            let lower = name.to_string_lossy().to_ascii_lowercase();
+            if entry.path().is_file()
+                && (name == tool_name || lower.contains("slang") || lower.ends_with(".dll"))
+            {
+                let dest = tools.join(name);
+                if !dest.exists() && fs::hard_link(entry.path(), &dest).is_err() {
+                    fs::copy(entry.path(), dest).unwrap();
+                }
+            }
+        }
+        let source = shaders.join("main.slang");
+        fs::write(&source, r#"import constant; var output: RWStructuredBuffer<uint>; [shader("compute")] [numthreads(1,1,1)] func main() -> void { output[0] = value(); }"#).unwrap();
+        fs::write(
+            shaders.join("constant.slang"),
+            format!("module constant; public func value() -> uint {{ return {value}; }}"),
+        )
+        .unwrap();
+        let compiler = RuntimeCompiler::from_package(
+            &root,
+            &Path::new("tool").join(tool_name),
+            fixture.root.join("cache"),
+            &[&shaders],
+            &[],
+        )
+        .unwrap();
+        compiler
+            .compile(&Recipe {
+                source: source.to_str().unwrap(),
+                entry: "main",
+                stage: "compute",
+                output: "main.spv",
+                target: Target::Spirv("spirv_1_5"),
+                args: &[debug],
+            })
+            .unwrap()
+    };
+    let first = compile("one", 17, "-g0");
+    let moved = compile("two", 17, "-g0");
+    assert!(moved.cache_hit());
+    assert_eq!(first.bytes(), moved.bytes());
+    assert!(!compile("one", 17, "-g3").cache_hit());
+    assert!(!compile("two", 17, "-g3").cache_hit());
+    let changed = compile("two", 18, "-g0");
+    assert!(!changed.cache_hit());
+    assert_ne!(first.bytes(), changed.bytes());
+}
+
+#[test]
 #[ignore = "需要已安装的 Slang 编译器"]
 fn runtime_reuses_only_identical_compile_inputs() {
     let fixture = Fixture::new();

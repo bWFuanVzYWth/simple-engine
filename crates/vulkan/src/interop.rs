@@ -632,7 +632,7 @@ impl WgpuContext {
         {
             return;
         }
-        let disk = crate::pipeline_cache::Disk::new(
+        let mut disk = crate::pipeline_cache::Disk::new(
             directory,
             "wgpu",
             &self.native.device.physical.properties(),
@@ -835,7 +835,7 @@ impl WgpuContext {
                             workgroup_size: (workgroup[0], workgroup[1], workgroup[2]),
                         }]
                         .into(),
-                        spirv: Some(code.into()),
+                        spirv: Some(code),
                         ..Default::default()
                     },
                 )

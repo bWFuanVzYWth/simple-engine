@@ -34,7 +34,7 @@ var specular1 : RWTexture2D<float4>;
 [[vk::image_format("r32f")]]
 var penumbra : RWTexture2D<float>;
 [[vk::binding(12, 0)]]
-[[vk::image_format("r32f")]]
+[[vk::image_format("r8")]]
 var disocclusion : RWTexture2D<float>;
 [[vk::binding(13, 0)]]
 var shadow : Texture2D<float>;
@@ -51,7 +51,7 @@ var spec_motion : Texture2D<float4>;
 [[vk::image_format("rgb10_a2")]]
 var spec_packed_normal : RWTexture2D<float4>;
 [[vk::binding(19, 0)]]
-[[vk::image_format("r32f")]]
+[[vk::image_format("r8")]]
 var spec_disocclusion : RWTexture2D<float>;
 [[vk::binding(20, 0)]]
 var diff_motion : Texture2D<float4>;

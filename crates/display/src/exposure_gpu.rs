@@ -9,7 +9,7 @@ use vulkan::{
 pub struct Programs<'a> {
     /// buffer 输入使用 `histogram_main`，texture 输入使用 `histogram_texture_main`。
     pub histogram: RayShader<'a>,
-    /// `update_main`；单线程裁尾统计与时间适应。
+    /// `update_main`；一组归并并清零直方图，按 bin 顺序裁尾并更新曝光。
     pub update: RayShader<'a>,
 }
 
@@ -42,7 +42,7 @@ impl Exposure {
         extent: [u32; 2],
     ) -> Result<Self, vulkan::Error> {
         validate_extent(extent)?;
-        let histogram = Buffer::new(context, 257 * 4, false)?;
+        let histogram = Buffer::upload(context, &[0; 256 * 4])?;
         let state = Buffer::upload(context, &[0; 16])?;
         let bindings = Bindings::new(
             context,
@@ -133,7 +133,7 @@ impl Exposure {
         [self.measure.into(), self.update.into()]
     }
 
-    /// 清空直方图、测光、更新状态并使结果对显示可见；不提交或等待。
+    /// 测光并发布可供显示读取的曝光状态，回收直方图供下一帧使用。仅录制命令。
     /// # Errors
     /// 返回设备资源与录制错误；失败或取消不发布 CPU 历史标记。
     pub fn record(&self, context: &mut Context) -> Result<Recorded, vulkan::Error> {
@@ -142,12 +142,10 @@ impl Exposure {
         commands.finish(context)
     }
 
-    /// 追加同一设备的清零、测光与更新，可与前后的渲染阶段固化为单个录制。
+    /// 追加同一设备的测光与更新，可与前后的渲染阶段固化为单个录制。
     /// # Errors
     /// 命令构建器属于其他设备或工作组范围超限时返回错误；失败后应丢弃已追加前缀的构建器。
     pub fn record_into(&self, commands: &mut Commands) -> Result<(), vulkan::Error> {
-        commands.barrier();
-        commands.clear_buffer(self.histogram)?;
         commands.barrier();
         commands.dispatch(
             self.measure,

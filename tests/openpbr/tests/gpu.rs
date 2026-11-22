@@ -742,6 +742,33 @@ fn reflection_masking_preserves_the_grazing_limit() -> Result {
 }
 
 #[test]
+#[ignore = "需要 Vulkan compute 检查实际方向有效域"]
+fn direction_guard_respects_unit_tolerance_and_rejects_nonfinite_lengths() -> Result {
+    let material = Material::dielectric(0.3, None)?;
+    let vectors = [
+        ([0.6, -0.0, 0.8], true),
+        ([1.0004, 0.0, 0.0], true),
+        ([0.9994, 0.0, 0.0], false),
+        ([1.0006, 0.0, 0.0], false),
+        ([0.0, 0.0, 0.0], false),
+        ([f32::MAX, 0.0, 0.0], false),
+        ([0.0, f32::NEG_INFINITY, 1.0], false),
+        ([1.0, 0.0, f32::NAN], false),
+    ];
+    let cases = vectors.map(|([x, y, z], _)| Case {
+        material,
+        view: [x, y, z, 0.0],
+        u: [0.0, 0.0, 1.0, 0.0],
+        incident: Medium::VACUUM,
+        transmitted: Medium::VACUUM,
+    });
+    for ((vector, expected), row) in vectors.into_iter().zip(MATH.run(&cases)?) {
+        assert_eq!(row[0][3], f32::from(expected), "{vector:?}");
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "需要 Vulkan compute：RR方向能量组合与独立通用参考一致"]
 fn flow_guide_energy_preserves_supported_materials() -> Result {
     for (profile, shader) in FLOW_GUIDES.into_iter().enumerate() {

@@ -118,7 +118,32 @@ impl RuntimeCompiler {
             ));
         }
         Self::with_compiler(
-            Compiler::inspect(executable, |_| {})?,
+            Compiler::inspect(executable, None, |_| {})?,
+            cache.as_ref(),
+            includes,
+            source_roots,
+        )
+    }
+
+    /// 使用可搬移资源包中的编译器和源码；包内文件用相对名和实际内容标识。
+    /// `executable` 相对于 `package`，外部 include 仍由其绝对路径标识。调用方应使用
+    /// 与提取目录无关的发行源码和编译参数。保留源码调试信息时缓存键同时绑定提取目录。
+    /// # Errors
+    /// 包目录、指定工具、缓存或源码配置无效时返回对应的 [`Error`]。
+    pub fn from_package(
+        package: &Path,
+        executable: &Path,
+        cache: impl AsRef<Path>,
+        includes: &[&Path],
+        source_roots: &[&Path],
+    ) -> Result<Self, Error> {
+        let package = canonical_path(package)?;
+        let tool = canonical_path(&package.join(executable))?;
+        if !tool.starts_with(&package) {
+            return Err(Error::Configuration("发行编译器须位于资源包中".into()));
+        }
+        Self::with_compiler(
+            Compiler::inspect(&tool, Some(package), |_| {})?,
             cache.as_ref(),
             includes,
             source_roots,

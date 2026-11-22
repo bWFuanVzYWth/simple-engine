@@ -111,6 +111,17 @@ mod tests {
     fn spirv_decode_preserves_words() {
         let code: [u32; 5] = [0x0723_0203, 0x0001_0300, 0x0008_0001, 7, 0];
         let bytes: Vec<_> = code.iter().flat_map(|word| word.to_le_bytes()).collect();
-        assert_eq!(super::shader::decode_spirv(&bytes).unwrap(), code);
+        assert_eq!(super::shader::decode_spirv(&bytes).unwrap().as_ref(), code);
+    }
+
+    #[test]
+    fn spirv_decode_accepts_unaligned_swapped_words() {
+        let words = [0x0723_0203u32, 0x0001_0300, 7, 0];
+        let mut padded = [0u32; 5];
+        let bytes = &mut bytemuck::cast_slice_mut::<u32, u8>(&mut padded)[1..17];
+        for (word, chunk) in words.iter().zip(bytes.chunks_exact_mut(4)) {
+            chunk.copy_from_slice(&word.swap_bytes().to_ne_bytes());
+        }
+        assert_eq!(super::shader::decode_spirv(bytes).unwrap().as_ref(), words);
     }
 }

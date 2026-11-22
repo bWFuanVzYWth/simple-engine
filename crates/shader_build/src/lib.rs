@@ -458,6 +458,7 @@ fn build_inner(
 
 struct Compiler {
     path: PathBuf,
+    package: Option<PathBuf>,
     version: String,
     identity: String,
 }
@@ -523,10 +524,14 @@ impl Compiler {
                 .find(|path| path.is_file())
                 .ok_or_else(|| Error::Compiler(requested.clone()))?
         };
-        Self::inspect(&resolved, track_input)
+        Self::inspect(&resolved, None, track_input)
     }
 
-    fn inspect(resolved: &Path, track_input: impl Fn(&Path)) -> Result<Self, Error> {
+    fn inspect(
+        resolved: &Path,
+        package: Option<PathBuf>,
+        track_input: impl Fn(&Path),
+    ) -> Result<Self, Error> {
         let path = fs::canonicalize(resolved).map_err(|source| Error::Io {
             path: resolved.to_owned(),
             source,
@@ -586,19 +591,35 @@ impl Compiler {
             .collect::<Vec<_>>()
             .join(" ");
         let mut hash = blake3::Hasher::new();
-        hash_field(&mut hash, path.to_string_lossy().as_bytes());
+        hash_field(
+            &mut hash,
+            package_name(package.as_deref(), &path)
+                .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                .as_bytes(),
+        );
         hash_field(&mut hash, version.as_bytes());
         hash_field(&mut hash, b"SLANG_RUN_SPIRV_VALIDATION=1");
         for component in collect_input_files(components)? {
-            hash_field(&mut hash, component.to_string_lossy().as_bytes());
+            hash_field(
+                &mut hash,
+                package_name(package.as_deref(), &component)
+                    .unwrap_or_else(|| component.to_string_lossy().into_owned())
+                    .as_bytes(),
+            );
             hash_file(&mut hash, &component)?;
         }
         Ok(Self {
             path,
+            package,
             version,
             identity: hash.finalize().to_hex().to_string(),
         })
     }
+}
+
+fn package_name(package: Option<&Path>, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(package?).ok()?;
+    Some(format!("@package/{}", relative.display()).replace('\\', "/"))
 }
 
 // 不修改进程全局环境；每个编译子进程及编译器身份使用同一固定策略。

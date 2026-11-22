@@ -39,28 +39,13 @@ public func has_sample(sample_value: Proposal)->bool {
 }
 
 public func to_bsdf_continuous_event_flags(flags: uint)->uint {
-    var result = 0u;
-    if (is_reflective(flags)) {
-        result |= EVENT_REFLECTION;
-    }
-    if (is_transmissive(flags)) {
-        result |= EVENT_TRANSMISSION;
-    }
-    if (is_diffuse(flags)) {
-        result |= EVENT_DIFFUSE;
-    }
-    if (is_specular(flags)) {
-        result |= EVENT_GLOSSY;
-    }
-    return result;
+    return (is_reflective(flags) ? EVENT_REFLECTION : 0u) |
+           (is_transmissive(flags) ? EVENT_TRANSMISSION : 0u) |
+           (is_diffuse(flags) ? EVENT_DIFFUSE : 0u) | (is_specular(flags) ? EVENT_GLOSSY : 0u);
 }
 
 public func to_bsdf_event_flags(flags: uint)->uint {
-    var result : uint = to_bsdf_continuous_event_flags(flags);
-    if (is_delta(flags)) {
-        result |= EVENT_DISCRETE;
-    }
-    return result;
+    return to_bsdf_continuous_event_flags(flags) | (is_delta(flags) ? EVENT_DISCRETE : 0u);
 }
 }
 }

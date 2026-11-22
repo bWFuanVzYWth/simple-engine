@@ -25,15 +25,18 @@ public struct BaseClosure<Base : IBase> : IClosure {
         ->State {
         return Base.prepare(material.base_roughness.xyz, material.surface.z);
     }
+    static func has_energy(wi: float3, state: State)->bool {
+        let energy = Base.energy(wi, state);
+        return (energy.x > 0) | (energy.y > 0) | (energy.z > 0);
+    }
     public static func evaluate(wi: float3, wo: float3, state: State)->LocalEvaluation {
         var evaluated : LocalEvaluation = Base.evaluate(wi, wo, state);
-        if (!any(Base.energy(wi, state) > 0))
+        if (!has_energy(wi, state))
             evaluated.pdf = 0;
         return evaluated;
     }
     public static func sample(wi: float3, random: float3, state: State)->Proposal {
-        return any(Base.energy(wi, state) > 0) ? Base.sample(wi, random, state)
-                                               : kernel::empty_proposal();
+        return has_energy(wi, state) ? Base.sample(wi, random, state) : kernel::empty_proposal();
     }
     public static func delta_response(wi: float3, state: State)->float3 {
         return 0;

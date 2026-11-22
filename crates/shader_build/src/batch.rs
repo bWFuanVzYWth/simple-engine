@@ -167,7 +167,8 @@ fn absolute(path: &Path) -> Result<PathBuf, Error> {
 }
 struct InputSnapshot {
     output: PathBuf,
-    roots: BTreeMap<PathBuf, Vec<PathBuf>>,
+    package: Option<PathBuf>,
+    roots: BTreeMap<PathBuf, Vec<(String, String)>>,
     hashes: BTreeMap<PathBuf, String>,
     emit_cargo: bool,
 }
@@ -176,13 +177,19 @@ impl InputSnapshot {
     fn name(&self, path: &Path) -> String {
         match path.strip_prefix(&self.output) {
             Ok(path) => format!("@out/{}", path.display()),
-            Err(_) => path.to_string_lossy().into_owned(),
+            Err(_) => super::package_name(self.package.as_deref(), path)
+                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
         }
         .replace('\\', "/")
     }
     fn resolve(&self, name: &str) -> PathBuf {
-        name.strip_prefix("@out/")
-            .map_or_else(|| PathBuf::from(name), |name| self.output.join(name))
+        if let Some(relative) = name.strip_prefix("@out/") {
+            return self.output.join(relative);
+        }
+        if let (Some(package), Some(relative)) = (&self.package, name.strip_prefix("@package/")) {
+            return package.join(relative);
+        }
+        PathBuf::from(name)
     }
     fn digest(&self, path: &Path) -> Result<Option<String>, Error> {
         match fs::read(path) {
@@ -196,9 +203,9 @@ impl InputSnapshot {
         for root in roots {
             hash_field(&mut hash, self.name(root).as_bytes());
             if let Some(paths) = self.roots.get(root) {
-                for path in paths {
-                    if extensions.contains(&extension(path)) {
-                        hash_field(&mut hash, self.name(path).as_bytes());
+                for (ext, name) in paths {
+                    if extensions.contains(ext) {
+                        hash_field(&mut hash, name.as_bytes());
                     }
                 }
             }
@@ -369,7 +376,7 @@ fn prepare_requests<'a>(
                 .to_owned(),
         ];
         let mut args = task.arguments.clone();
-        args[0] = normalize(&source, output);
+        args[0] = normalize(&source, output, compiler.package.as_deref());
         let mut index = 1;
         while index < args.len() {
             if args[index] == "-I" {
@@ -379,11 +386,14 @@ fn prepare_requests<'a>(
                         .ok_or_else(|| Error::Configuration("-I 缺少路径".into()))?,
                 ))?;
                 roots.push(path.clone());
-                args[index] = normalize(&path, output);
+                args[index] = normalize(&path, output, compiler.package.as_deref());
             } else if args[index].starts_with("-I") && args[index].len() > 2 {
                 let path = canonical_path(Path::new(&args[index][2..]))?;
                 roots.push(path.clone());
-                args[index] = format!("-I{}", normalize(&path, output));
+                args[index] = format!(
+                    "-I{}",
+                    normalize(&path, output, compiler.package.as_deref())
+                );
             } else if args[index] == "-reflection-json" {
                 index += 1;
                 args[index] = "@reflection".into();
@@ -399,6 +409,16 @@ fn prepare_requests<'a>(
         }
         hash_field(&mut hash, CACHE_VERSION.as_bytes());
         hash_field(&mut hash, compiler.identity.as_bytes());
+        // 带源码位置的产物及审计副本须指向本次提取目录。
+        if let Some(package) = &compiler.package
+            && args
+                .iter()
+                .rev()
+                .find(|s| matches!(s.as_str(), "-g" | "-g0" | "-g1" | "-g2" | "-g3"))
+                .is_none_or(|s| s != "-g0")
+        {
+            hash_field(&mut hash, package.to_string_lossy().as_bytes());
+        }
         for argument in &args {
             hash_field(&mut hash, argument.as_bytes());
         }
@@ -418,6 +438,7 @@ fn prepare_requests<'a>(
 
 fn snapshot_inputs(
     output: PathBuf,
+    package: Option<PathBuf>,
     roots: BTreeSet<PathBuf>,
     outputs: &BTreeSet<PathBuf>,
     cache: &Path,
@@ -426,6 +447,7 @@ fn snapshot_inputs(
 ) -> Result<InputSnapshot, Error> {
     let mut inputs = InputSnapshot {
         output,
+        package,
         roots: BTreeMap::new(),
         hashes: BTreeMap::new(),
         emit_cargo,
@@ -449,7 +471,11 @@ fn snapshot_inputs(
             }
         }
         paths.sort();
-        inputs.roots.insert(root, paths);
+        let names = paths
+            .iter()
+            .map(|path| (extension(path), inputs.name(path)))
+            .collect();
+        inputs.roots.insert(root, names);
     }
     for path in tracked_files {
         let path = canonical_path(path)?;
@@ -483,7 +509,15 @@ fn compile_tracked(
         roots,
         outputs,
     } = prepare_requests(compiler, &output, tasks)?;
-    let inputs = snapshot_inputs(output, roots, &outputs, &cache, tracked_files, emit_cargo)?;
+    let inputs = snapshot_inputs(
+        output,
+        compiler.package.clone(),
+        roots,
+        &outputs,
+        &cache,
+        tracked_files,
+        emit_cargo,
+    )?;
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let active = AtomicUsize::new(0);
@@ -600,9 +634,12 @@ fn compile_tracked(
     })
 }
 
-fn normalize(path: &Path, output: &Path) -> String {
+fn normalize(path: &Path, output: &Path, package: Option<&Path>) -> String {
     path.strip_prefix(output)
-        .map_or_else(|_| command_path(path), |p| format!("@out/{}", p.display()))
+        .map_or_else(
+            |_| super::package_name(package, path).unwrap_or_else(|| command_path(path)),
+            |p| format!("@out/{}", p.display()),
+        )
         .replace('\\', "/")
 }
 
@@ -887,11 +924,11 @@ fn restore(
     }
     for dep in &manifest.dependencies {
         let path = inputs.resolve(&dep.path);
-        let digest = match inputs.hashes.get(&path) {
-            Some(digest) => Some(digest.clone()),
-            None => inputs.digest(&path)?,
+        let matches = match inputs.hashes.get(&path) {
+            Some(digest) => digest == &dep.digest,
+            None => inputs.digest(&path)?.as_ref() == Some(&dep.digest),
         };
-        if digest.as_ref() != Some(&dep.digest) {
+        if !matches {
             return Ok(None);
         }
     }

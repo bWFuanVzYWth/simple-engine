@@ -26,25 +26,29 @@ public func invalid_surface_sample()->SurfaceSample {
     return result;
 }
 
+// IEEE 754 binary32 的绝对值位序与数值同序；无穷和 NaN 均位于有限值之后。
+static const let infinity_bits = 0x7f800000u;
+
 public func is_finite(value: float)->bool {
-    return !isnan(value) && !isinf(value);
+    return asuint(abs(value)) < infinity_bits;
 }
 
 public func is_finite(value: float3)->bool {
-    return !any(isnan(value)) && !any(isinf(value));
+    let magnitude = asuint(abs(value));
+    return max(magnitude.x, max(magnitude.y, magnitude.z)) < infinity_bits;
 }
 
 public func is_direction(value: float3)->bool {
-    if (!is_finite(value))
-        return false;
-    let length_squared : float = dot(value, value);
-    return is_finite(length_squared) && length_squared > 1.0e-12 &&
-           abs(length_squared - 1.0) <= 1.0e-3;
+    // 非有限分量或平方溢出都会产生非有限误差；按绝对值位序同时检查单位长度与有限性。
+    let error = abs(dot(value, value) - 1.0);
+    return asuint(error) <= asuint(1.0e-3);
 }
 
-public func sanitize_surface_evaluation(evaluation: SurfaceEvaluation)->SurfaceEvaluation {
-    if (!is_finite(evaluation.response) || !is_finite(evaluation.pdf) ||
-        any(evaluation.response < float3(0.0)) || evaluation.pdf < 0.0) {
+public func sanitize_surface_evaluation(evaluation: SurfaceEvaluation, has_response: bool = true)
+    ->SurfaceEvaluation {
+    let invalid = !is_finite(evaluation.response) || !is_finite(evaluation.pdf) ||
+                  any(evaluation.response < float3(0.0)) || evaluation.pdf < 0.0;
+    if (!has_response | invalid) {
         return invalid_surface_evaluation();
     }
     return evaluation;

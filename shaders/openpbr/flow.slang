@@ -159,7 +159,7 @@ consume_transmission<EnergyLut, Consumer, let directions : uint, let primary : b
     if (continuation)
         result = specialized_result<transmission_capability, transmission_continuous>(
             closure::Transmission.sample<primary>(wi, random, state), frame, view, incident,
-            transmitted);
+            transmitted, (closure::selected_flow & FLOW_DELTA_REFLECTION) != 0);
     return result;
 }
 

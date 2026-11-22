@@ -8,13 +8,13 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-const LIMIT: usize = 64 * 1024 * 1024;
 const MAGIC: &[u8; 8] = b"SEPC0001";
 const PREFIX: usize = MAGIC.len() + 32;
 
 pub(crate) struct Disk {
     path: PathBuf,
     dirty: AtomicBool,
+    saved: Option<blake3::Hash>,
 }
 
 impl Disk {
@@ -31,37 +31,56 @@ impl Disk {
         Self {
             path,
             dirty: AtomicBool::new(false),
+            saved: None,
         }
     }
 
-    pub(crate) fn read(&self) -> Vec<u8> {
-        let result: io::Result<Vec<u8>> = (|| {
-            let file = File::open(&self.path)?;
-            let size = file.metadata()?.len();
-            if !(PREFIX as u64..=(LIMIT + PREFIX) as u64).contains(&size) {
-                return Ok(Vec::new());
+    pub(crate) fn read(&mut self) -> Vec<u8> {
+        self.saved = None;
+        let result: io::Result<_> = (|| {
+            let mut file = File::open(&self.path)?;
+            let mut header = [0; PREFIX];
+            file.read_exact(&mut header)?;
+            let size = file
+                .metadata()?
+                .len()
+                .checked_sub(PREFIX as u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|&n| n != 0)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "驱动缓存长度无效"))?;
+            if !header.starts_with(MAGIC) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "驱动缓存标识无效",
+                ));
             }
-            let mut file = file.take((LIMIT + PREFIX + 1) as u64);
             let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            if bytes.len() as u64 != size || !bytes.starts_with(MAGIC) {
-                return Ok(Vec::new());
+            bytes.try_reserve_exact(size).map_err(io::Error::other)?;
+            (&mut file).take(size as u64).read_to_end(&mut bytes)?;
+            let digest = blake3::hash(&bytes);
+            if bytes.len() != size
+                || file.read(&mut [0])? != 0
+                || digest.as_bytes() != &header[MAGIC.len()..]
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "驱动缓存完整性校验失败",
+                ));
             }
-            if blake3::hash(&bytes[PREFIX..]).as_bytes() != &bytes[MAGIC.len()..PREFIX] {
-                return Ok(Vec::new());
-            }
-            bytes.drain(..PREFIX);
+            self.saved = Some(digest);
+            log::debug!(
+                "加载管线缓存 {}（{} 字节）",
+                self.path.display(),
+                bytes.len()
+            );
             Ok(bytes)
         })();
-        match result {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                if error.kind() != io::ErrorKind::NotFound {
-                    log::warn!("读取管线缓存失败 {}：{error}", self.path.display());
-                }
-                Vec::new()
+        result.unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::NotFound {
+                log::warn!("读取管线缓存失败 {}：{error}", self.path.display());
             }
-        }
+            Vec::new()
+        })
     }
 
     pub(crate) fn used(&self) {
@@ -72,16 +91,26 @@ impl Disk {
         if !*self.dirty.get_mut() {
             return;
         }
-        if let Some(bytes) = snapshot().filter(|data| !data.is_empty() && data.len() <= LIMIT)
-            && let Err(error) = self.write(&bytes)
-        {
-            log::warn!("保存管线缓存失败 {}：{error}", self.path.display());
+        let Some(bytes) = snapshot().filter(|data| !data.is_empty()) else {
             return;
+        };
+        let digest = blake3::hash(&bytes);
+        if self.saved != Some(digest) {
+            if let Err(error) = self.write(&bytes, digest) {
+                log::warn!("保存管线缓存失败 {}：{error}", self.path.display());
+                return;
+            }
+            self.saved = Some(digest);
+            log::debug!(
+                "保存管线缓存 {}（{} 字节）",
+                self.path.display(),
+                bytes.len()
+            );
         }
         *self.dirty.get_mut() = false;
     }
 
-    fn write(&self, data: &[u8]) -> io::Result<()> {
+    fn write(&self, data: &[u8], digest: blake3::Hash) -> io::Result<()> {
         let parent = self.path.parent().expect("缓存路径由目录和文件名组成");
         fs::create_dir_all(parent)?;
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -96,7 +125,7 @@ impl Disk {
             .open(&temporary)?;
         let written = (|| {
             file.write_all(MAGIC)?;
-            file.write_all(blake3::hash(data).as_bytes())?;
+            file.write_all(digest.as_bytes())?;
             file.write_all(data)?;
             file.sync_all()
         })();
@@ -115,15 +144,26 @@ pub(crate) struct Native {
 }
 
 impl Native {
-    pub(crate) fn new(device: &Device, directory: &Path) -> Result<Self, vk::Result> {
+    pub(crate) fn new(
+        device: &Device,
+        directory: &Path,
+        seed_directory: impl FnOnce(&std::ffi::OsStr) -> Option<PathBuf>,
+    ) -> Result<Self, vk::Result> {
         let props = device.physical.properties();
-        let disk = Disk::new(directory, "native", &props);
-        let bytes = disk.read();
-        let initial = if compatible(&bytes, &props) {
-            bytes.as_slice()
-        } else {
-            &[]
-        };
+        let mut disk = Disk::new(directory, "native", &props);
+        let mut bytes = disk.read();
+        if !compatible(&bytes, &props) {
+            bytes = Vec::new();
+            if let Some(old) = seed_directory(disk.path.file_name().expect("设备缓存有文件名"))
+            {
+                let seed = Disk::new(&old, "native", &props).read();
+                if compatible(&seed, &props) {
+                    bytes = seed;
+                    disk.used();
+                }
+            }
+        }
+        let initial = bytes.as_slice();
         // SAFETY: 初始数据来自本应用的驱动快照，经完整性和设备身份校验。同步由 Vulkan 内部维护。
         let create = |data| unsafe {
             device.raw.create_pipeline_cache(
@@ -166,12 +206,12 @@ fn snapshot(device: &Device, cache: vk::PipelineCache) -> Result<Option<Vec<u8>>
     let mut size = 0;
     // SAFETY: 缓存归属同一有效设备。调用者独占 Context，空数据指针仅查询长度。
     unsafe { get(device.raw.handle(), cache, &mut size, std::ptr::null_mut()) }.result()?;
-    if size == 0 || size > LIMIT {
+    if size == 0 {
         return Ok(None);
     }
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::<u8>::new();
     bytes.try_reserve_exact(size)?;
-    bytes.resize(size, 0);
+    // 完整写入后才把驱动返回的字节计入 Vec 的已初始化长度。
     // SAFETY: 数据指针可写长度为 size。缓存和设备有效期同上。
     unsafe {
         get(
@@ -182,7 +222,8 @@ fn snapshot(device: &Device, cache: vk::PipelineCache) -> Result<Option<Vec<u8>>
         )
     }
     .result()?;
-    bytes.truncate(size);
+    // SAFETY: VK_SUCCESS 保证前 size 字节已写入，长度不超过传给驱动的容量。
+    unsafe { bytes.set_len(size) };
     Ok(Some(bytes))
 }
 
@@ -220,14 +261,46 @@ mod tests {
     fn replaces_complete_snapshot_and_rejects_modified_payload() -> io::Result<()> {
         let dir =
             std::env::temp_dir().join(format!("simple-engine-cache-test-{}", std::process::id()));
-        let disk = Disk::new(&dir, "round-trip", &vk::PhysicalDeviceProperties::default());
-        disk.write(b"first")?;
-        disk.write(b"replacement")?;
+        let mut disk = Disk::new(&dir, "round-trip", &vk::PhysicalDeviceProperties::default());
+        disk.write(b"first", blake3::hash(b"first"))?;
+        disk.write(b"replacement", blake3::hash(b"replacement"))?;
         assert_eq!(disk.read(), b"replacement");
         let mut raw = fs::read(&disk.path)?;
         raw[PREFIX] ^= 1;
         fs::write(&disk.path, raw)?;
         assert!(disk.read().is_empty());
+        fs::remove_file(disk.path)?;
+        fs::remove_dir(dir)
+    }
+
+    #[test]
+    fn persists_snapshot_larger_than_64_mib() -> io::Result<()> {
+        let dir =
+            std::env::temp_dir().join(format!("simple-engine-cache-large-{}", std::process::id()));
+        let mut disk = Disk::new(&dir, "large", &vk::PhysicalDeviceProperties::default());
+        let size = 64 * 1024 * 1024 + 1;
+        let bytes = vec![0x57; size];
+        let expected = blake3::hash(&bytes);
+        disk.used();
+        disk.flush(|| Some(bytes));
+        let restored = disk.read();
+        assert_eq!(restored.len(), size);
+        assert_eq!(blake3::hash(&restored), expected);
+        fs::remove_file(disk.path)?;
+        fs::remove_dir(dir)
+    }
+
+    #[test]
+    fn retries_failed_publication() -> io::Result<()> {
+        let dir =
+            std::env::temp_dir().join(format!("simple-engine-cache-retry-{}", std::process::id()));
+        let mut disk = Disk::new(&dir, "retry", &vk::PhysicalDeviceProperties::default());
+        fs::write(&dir, [])?;
+        disk.used();
+        disk.flush(|| Some(vec![17]));
+        fs::remove_file(&dir)?;
+        disk.flush(|| Some(vec![17]));
+        assert_eq!(disk.read(), [17]);
         fs::remove_file(disk.path)?;
         fs::remove_dir(dir)
     }
@@ -241,18 +314,25 @@ mod tests {
         context.enable_pipeline_caches(&directory);
         let device = &context.native_ref().device;
         let props = device.physical.properties();
-        let cache = Native::new(device, &directory)?;
+        let cache = Native::new(device, &directory, |_| None)?;
         assert_ne!(cache.used(), vk::PipelineCache::null());
         cache.destroy(device);
-        let native = Disk::new(&directory, "native", &props);
+        let mut native = Disk::new(&directory, "native", &props);
         assert!(compatible(&native.read(), &props));
-        let cache = Native::new(device, &directory)?;
+        let cache = Native::new(device, &directory, |_| None)?;
         assert_ne!(cache.used(), vk::PipelineCache::null());
         cache.destroy(device);
+        let shared = directory.join("shared");
+        Native::new(device, &shared, |_| Some(directory.clone()))?.destroy(device);
+        let mut migrated = Disk::new(&shared, "native", &props);
+        assert!(compatible(&migrated.read(), &props));
+        Native::new(device, &shared, |_| panic!("有效的共享缓存无需查找旧目录"))?.destroy(device);
+        fs::remove_file(migrated.path)?;
+        fs::remove_dir(shared)?;
         assert!(context.pipeline_cache().is_some());
         context.flush_pipeline_caches();
         drop(context);
-        let wgpu = Disk::new(&directory, "wgpu", &props);
+        let mut wgpu = Disk::new(&directory, "wgpu", &props);
         assert!(!wgpu.read().is_empty());
         let mut context = pollster::block_on(crate::interop::WgpuContext::compute())?;
         context.enable_pipeline_caches(&directory);

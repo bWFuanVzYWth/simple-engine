@@ -159,11 +159,12 @@ internal func specialized_delta<let capability : uint>(material: Material, wi: f
     return kernel::refractive_delta_sample(wi, u.z, fresnel, kernel::LOBE_ALL);
 }
 
-/// 转换窄核输出；UnitEta／KnownEvents 是调用方对成功 proposal 的额外证明，零旗标表示未知。
+/// 转换窄核输出。unit_eta 与 known_events 由调用方证明，零旗标表示未知。
+/// 仅在材质特化已排除离散反射时传入 delta_reflection=false。
 public func specialized_result<let capability : uint, let continuous : bool,
                                let unit_eta : bool = false, let known_events : uint = 0>(
     sampled: kernel::Proposal, frame: kernel::Frame, view: float3, incident: float4,
-    transmitted: float4)
+    transmitted: float4, delta_reflection: bool = true)
     ->Sample {
     var result : Sample = {};
     result.relative_eta = 1.0;
@@ -172,7 +173,8 @@ public func specialized_result<let capability : uint, let continuous : bool,
         return result;
     var checked : kernel::SurfaceSample = kernel::invalid_surface_sample();
     checked.direction = kernel::to_world(frame, sampled.wo);
-    if (!continuous && (sampled.response.flags & kernel::LOBE_DELTA_REFLECTION) != 0u)
+    if (!continuous && delta_reflection &&
+        (sampled.response.flags & kernel::LOBE_DELTA_REFLECTION) != 0u)
         checked.direction = normalize(reflect(-view, frame.normal));
     checked.response = sampled.response.value;
     checked.pdf = sampled.pdf;
@@ -214,15 +216,9 @@ public func specialized_result<let capability : uint, let continuous : bool,
 public func specialized_evaluation<let nonzero : bool = false>(response: kernel::Response,
                                                                pdf: float)
     ->Evaluation {
-    var checked : kernel::SurfaceEvaluation = kernel::invalid_surface_evaluation();
-    if (nonzero) {
-        checked.response = response.value;
-        checked.pdf = pdf;
-    } else if (response.flags != kernel::LOBE_NONE) {
-        checked.response = response.value;
-        checked.pdf = pdf;
-    }
-    checked = kernel::sanitize_surface_evaluation(checked);
+    let evaluation : kernel::SurfaceEvaluation = { response.value, pdf };
+    let checked = kernel::sanitize_surface_evaluation(evaluation, nonzero || response.flags !=
+                                                                                 kernel::LOBE_NONE);
     return { checked.response, checked.pdf };
 }
 

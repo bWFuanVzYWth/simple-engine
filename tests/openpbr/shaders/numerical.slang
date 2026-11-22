@@ -1,6 +1,7 @@
 /// 无适配器拒绝的数值核；解析极限由 CPU f64 独立核对。
 module numerical_test;
 import openpbr.api;
+import openpbr.service.sanitization;
 import "openpbr/math/microfacet_distribution.slang";
 import "openpbr/contract/material.slang";
 import "openpbr/contract/sample.slang";
@@ -50,9 +51,10 @@ func math_main(uint3 id: SV_DispatchThreadID)->void {
     let m = openpbr::kernel::Microfacet(
         float2(c.material.base_roughness.w * c.material.base_roughness.w));
     let distribution = openpbr::kernel::ggx_distribution<true>(m, c.u.xyz);
-    outputs[5 * id.x] = float4(
-        distribution, openpbr::kernel::ggx_reflection_pdf(m, c.view.xyz, true, distribution),
-        openpbr::kernel::dielectric_reflectance(c.incident.x / c.transmitted.x, c.view.z), 0);
+    outputs[5 * id.x] =
+        float4(distribution, openpbr::kernel::ggx_reflection_pdf(m, c.view.xyz, true, distribution),
+               openpbr::kernel::dielectric_reflectance(c.incident.x / c.transmitted.x, c.view.z),
+               float(openpbr::kernel::is_direction(c.view.xyz)));
     outputs[5 * id.x + 2] = asfloat(uint4(0, 0, id.x + 1, 0));
 }
 

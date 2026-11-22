@@ -49,12 +49,9 @@ func histogram_group<Input : IExposureInput>(input: Input, group: uint3, lane: u
     ->void {
     let p = parameters[0];
     bins[index] = 0;
-    if (index == 0)
-        valid_count = 0;
     GroupMemoryBarrierWithGroupSync();
     // 组内相邻线程在同一轮读取相邻像素，合计覆盖原来的 64×64 块。
     let origin = group.xy * 64 + lane.xy;
-    var count = 0u;
     for (var y = 0u; y < 64; y += 16)
         for (var x = 0u; x < 64; x += 16) {
             let pixel = origin + uint2(x, y);
@@ -67,15 +64,10 @@ func histogram_group<Input : IExposureInput>(input: Input, group: uint3, lane: u
             if (bin < 0)
                 continue;
             InterlockedAdd(bins[bin], 1u);
-            ++count;
         }
-    if (count != 0)
-        InterlockedAdd(valid_count, count);
     GroupMemoryBarrierWithGroupSync();
     if (bins[index] != 0)
         InterlockedAdd(histogram[index], bins[index]);
-    if (index == 0 && valid_count != 0)
-        InterlockedAdd(histogram[256], valid_count);
 }
 
 /// buffer 输入与 texture 输入使用同一测光内核；两种入口的输入均为 set0 binding1。
@@ -98,11 +90,25 @@ func histogram_texture_main([[vk::binding(1, 0)]] uniform linear_input: Texture2
 }
 
 [shader("compute")]
-[numthreads(1, 1, 1)]
-func update_main()->void {
+[numthreads(64, 1, 1)]
+func update_main(lane: uint: SV_GroupIndex)->void {
+    if (lane == 0)
+        valid_count = 0;
+    GroupMemoryBarrierWithGroupSync();
+    var count = 0u;
+    for (var bin = lane; bin < 256; bin += 64) {
+        let n = histogram[bin];
+        bins[bin] = n;
+        histogram[bin] = 0;
+        count += n;
+    }
+    InterlockedAdd(valid_count, count);
+    GroupMemoryBarrierWithGroupSync();
+    if (lane != 0)
+        return;
     let p = parameters[0];
     var state : display::ExposureState = exposure_state[0];
-    let valid = histogram[256];
+    let valid = valid_count;
     let instant : bool = p.reset != 0 || p.instant != 0 || state.initialized == 0;
     if (valid == 0) {
         if (instant) {
@@ -120,7 +126,7 @@ func update_main()->void {
     var minimum_bin : uint = 0;
     var maximum_bin : uint = 0;
     for (var bin: uint = 0; bin < 256; ++bin) {
-        let next : uint = cursor + histogram[bin];
+        let next : uint = cursor + bins[bin];
         let low = max(cursor, begin);
         let high = min(next, end);
         if (high > low) {

@@ -80,13 +80,12 @@ public func light_quad_vertices(p: float4, q: float4, r: float4)->LightQuadVerti
 
 /// 过程几何的无表面积fallback；不建立alias。静态sourcequad应复用资源期QuadArea。
 /// 无有效f32面积时返回零密度，调用方不得再重建退化片endpoint。
-public func dynamic_quad_area(vertices_value: LightQuadVertices)->uint4 {
-    let first =
-        length(cross(vertices_value.b - vertices_value.a, vertices_value.c - vertices_value.a)) *
-        0.5;
-    let second =
-        length(cross(vertices_value.c - vertices_value.a, vertices_value.d - vertices_value.a)) *
-        0.5;
+public func dynamic_quad_area(vertices_value: LightQuadVertices, out double_area: float2)->uint4 {
+    let ac = vertices_value.c - vertices_value.a;
+    double_area = float2(length(cross(vertices_value.b - vertices_value.a, ac)),
+                         length(cross(ac, vertices_value.d - vertices_value.a)));
+    let first = 0.5 * double_area.x;
+    let second = 0.5 * double_area.y;
     let total = first + second;
     if (!(total > 0) || !isfinite(total))
         return 0;
@@ -99,6 +98,12 @@ public func dynamic_quad_area(vertices_value: LightQuadVertices)->uint4 {
                            ? 0.0
                            : (float(LIGHT_SELECTORS - split) * LIGHT_INVERSE_SELECTORS) / second;
     return uint4(split, asuint(density0), asuint(density1), 0);
+}
+
+/// 仅需采样密度时使用。双面功率与质心计算可通过另一个重载复用两片的两倍面积。
+public func dynamic_quad_area(vertices_value: LightQuadVertices)->uint4 {
+    var double_area : float2;
+    return dynamic_quad_area(vertices_value, double_area);
 }
 
 public struct QuadAreaSample {

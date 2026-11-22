@@ -15,13 +15,13 @@ public func sort_tile(key: uint4, lane: uint)->uint4 {
     for (var width = 2u; width <= 128u; width <<= 1u) {
         [unroll]
         for (var step = width >> 1u; step > 0u; step >>= 1u) {
-            let peer = lane ^ step;
-            if (lane < peer) {
-                let a = keys[lane];
-                let b = keys[peer];
-                if ((lane & width) == 0u ? less_key(b, a) : less_key(a, b)) {
-                    keys[lane] = b;
-                    keys[peer] = a;
+            if (lane < 64u) {
+                let first = 2u * lane - (lane & (step - 1u));
+                let a = keys[first];
+                let b = keys[first + step];
+                if (less_key(a, b) != ((first & width) == 0u)) {
+                    keys[first] = b;
+                    keys[first + step] = a;
                 }
             }
             GroupMemoryBarrierWithGroupSync();
@@ -124,8 +124,7 @@ func interval_value(tree: RWStructuredBuffer<uint4>, begin: uint, end: uint, lea
     return interval;
 }
 // 共同前缀决定 radix 子树；空间码相同时补入唯一有序叶号。
-func prefix(tree: RWStructuredBuffer<uint4>, sorted: uint, a: uint, b: uint)->int {
-    let diff = tree[sorted + a].xy ^ tree[sorted + b].xy;
+func prefix(diff: uint2, a: uint, b: uint)->int {
     if (diff.x != 0u)
         return 31 - firstbithigh(diff.x);
     if (diff.y != 0u)
@@ -135,12 +134,13 @@ func prefix(tree: RWStructuredBuffer<uint4>, sorted: uint, a: uint, b: uint)->in
 func child(tree: RWStructuredBuffer<uint4>, sorted: uint, lo: uint, hi: uint)->uint {
     if (hi == lo + 1u)
         return radix_leaf | lo;
-    let depth = prefix(tree, sorted, lo, hi - 1u);
+    let first = tree[sorted + lo].xy;
+    let depth = prefix(first ^ tree[sorted + hi - 1u].xy, lo, hi - 1u);
     var a = lo + 1u;
     var b = hi - 1u;
     while (a < b) {
         let m = (a + b) >> 1u;
-        if (prefix(tree, sorted, lo, m) > depth)
+        if (prefix(first ^ tree[sorted + m].xy, lo, m) > depth)
             a = m + 1u;
         else
             b = m;
@@ -155,28 +155,32 @@ public func build_radix_branch(tree: RWStructuredBuffer<uint4>, mid: uint, n: ui
     ->void {
     if (mid == 0u || mid >= n)
         return;
-    let depth = prefix(tree, sorted, mid - 1u, mid);
+    let left_key = tree[sorted + mid - 1u].xy;
+    let right_key = tree[sorted + mid].xy;
+    let depth = prefix(left_key ^ right_key, mid - 1u, mid);
     var step = 2u;
-    while (step <= mid && prefix(tree, sorted, mid - step, mid) >= depth)
+    while (step <= mid &&
+           prefix(tree[sorted + mid - step].xy ^ right_key, mid - step, mid) >= depth)
         step *= 2u;
     var a = mid - min(mid, step - 1u);
     var b = mid - step / 2u;
     while (a < b) {
         let m = (a + b) >> 1u;
-        if (prefix(tree, sorted, m, mid) >= depth)
+        if (prefix(tree[sorted + m].xy ^ right_key, m, mid) >= depth)
             b = m;
         else
             a = m + 1u;
     }
     let lo = a;
     step = 2u;
-    while (step <= n - mid && prefix(tree, sorted, mid - 1u, mid + step - 1u) >= depth)
+    while (step <= n - mid &&
+           prefix(left_key ^ tree[sorted + mid + step - 1u].xy, mid - 1u, mid + step - 1u) >= depth)
         step *= 2u;
     a = mid + step / 2u;
     b = mid + min(n - mid, step - 1u);
     while (a < b) {
         let m = (a + b + 1u) >> 1u;
-        if (prefix(tree, sorted, mid - 1u, m - 1u) >= depth)
+        if (prefix(left_key ^ tree[sorted + m - 1u].xy, mid - 1u, m - 1u) >= depth)
             a = m;
         else
             b = m - 1u;
